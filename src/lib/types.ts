@@ -5,6 +5,7 @@ export type Priority = 'low' | 'normal' | 'high' | 'urgent' | 'not_set';
 
 export type TaskType = 
   | 'video' 
+  | 'ai_packet'
   | 'sales_material'
   | 'website_material'
   | 'campaign'
@@ -34,12 +35,21 @@ export interface User {
   jobTitle?: string;
 }
 
+export interface UploadedTaskFile {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  url: string;
+}
+
 export interface TaskVersion {
   id: string;
   versionNumber: number;
   submittedBy: string; // user id
   submissionNote?: string;
   fileUrl: string;
+  files?: UploadedTaskFile[];
   createdAt: string;
 }
 

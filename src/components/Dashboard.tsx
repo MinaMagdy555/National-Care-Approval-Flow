@@ -67,7 +67,7 @@ export function Dashboard({
     waitingForMina = envTasks.filter(t => t.createdBy === currentUser.id && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
     waitingForMarwa = envTasks.filter(t => t.createdBy === currentUser.id && ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
   } else if (currentUser.role === 'reviewer') {
-    needsAction = envTasks.filter(t => ['waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
+    needsAction = envTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
     waitingOthers = envTasks.filter(t => ['sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
     approved = envTasks.filter(t => t.status === 'approved_by_art_director');
     returned = envTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
@@ -84,7 +84,7 @@ export function Dashboard({
     waitingForMarwa = envTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
   }
 
-  const needsFullReviewCount = envTasks.filter(t => t.status === 'waiting_reviewer_full_review').length;
+  const needsFullReviewCount = envTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status)).length;
   const needsQuickLookCount = envTasks.filter(t => t.status === 'waiting_reviewer_quick_look').length;
   const waitingMarwaCount = envTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status)).length;
   const approvedCount = envTasks.filter(t => t.status === 'approved_by_art_director').length;

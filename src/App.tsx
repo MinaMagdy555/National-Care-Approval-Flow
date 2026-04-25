@@ -46,7 +46,7 @@ function AppContent() {
       case 'create_task':
         return <CreateTask />;
       case 'review_queue': {
-        const needsFullReview = envTasks.filter(t => t.status === 'waiting_reviewer_full_review');
+        const needsFullReview = envTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsFullReview} title="Needs Full Review" />;
       }
       case 'quick_look_queue': {

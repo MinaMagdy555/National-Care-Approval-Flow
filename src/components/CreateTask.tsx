@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useAppStore } from '../lib/store';
 import { Upload, X, File, Image as ImageIcon, FileVideo, CheckCircle2 } from 'lucide-react';
-import { Task, ReviewMode, Priority, TaskType } from '../lib/types';
+import { Task, ReviewMode, Priority, TaskType, UploadedTaskFile } from '../lib/types';
 import { initialUsers } from '../lib/mockData';
 import { CustomSelect } from './CustomSelect';
 
@@ -30,6 +30,7 @@ export function CreateTask() {
   ];
   const taskTypeOptions = [
     { value: 'video', label: 'Video' },
+    { value: 'ai_packet', label: 'AI Packets' },
     { value: 'sales_material', label: 'Sales Material' },
     { value: 'website_material', label: 'Website Material' },
     { value: 'campaign', label: 'Campaign' },
@@ -85,6 +86,14 @@ export function CreateTask() {
 
     const creator = initialUsers.find(u => u.id === selectedCreatorId);
     const newTaskId = Math.random().toString(36).substring(7);
+    const uploadedFiles: UploadedTaskFile[] = files.map(file => ({
+      id: Math.random().toString(36).substring(7),
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      url: URL.createObjectURL(file),
+    }));
+    const thumbnailFile = uploadedFiles.find(file => file.type.startsWith('image/'));
 
     const newTask: Task = {
       id: newTaskId,
@@ -95,7 +104,7 @@ export function CreateTask() {
       environment,
       createdBy: selectedCreatorId,
       handledBy: [selectedCreatorId],
-      status: 'submitted',
+      status: reviewMode === 'quick_look' ? 'waiting_reviewer_quick_look' : 'waiting_reviewer_full_review',
       currentOwnerRole: 'reviewer',
       currentOwnerUserId: null,
       priority: isReviewer ? priority : 'not_set',
@@ -105,12 +114,13 @@ export function CreateTask() {
           id: Math.random().toString(36).substring(7),
           versionNumber: 1,
           submittedBy: selectedCreatorId,
-          fileUrl: URL.createObjectURL(files[0]),
+          fileUrl: uploadedFiles[0].url,
+          files: uploadedFiles,
           createdAt: new Date().toISOString(),
           submissionNote: "Initial submission",
         }
       ],
-      thumbnailUrl: '', // Could be generated from image file
+      thumbnailUrl: thumbnailFile?.url || '',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

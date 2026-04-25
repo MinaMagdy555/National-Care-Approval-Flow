@@ -6,6 +6,7 @@ import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
 import { Search } from 'lucide-react';
 import { CustomSelect } from './CustomSelect';
+import { TaskThumbnail } from './FilePreview';
 
 export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: string) => void, tasks: Task[], title: string }) {
   const { currentUser } = useAppStore();
@@ -122,11 +123,7 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
                 <tr key={task.id} className="hover:bg-slate-50/50 transition-colors group cursor-pointer border-b border-slate-100 last:border-0" onClick={() => onOpenTask(task.id)}>
                   <td className="p-4 align-top">
                     <div className="w-24 h-16 bg-slate-100 rounded-lg overflow-hidden border border-slate-200 relative">
-                      {task.thumbnailUrl ? (
-                         <img src={task.thumbnailUrl} alt="thumbnail" className="w-full h-full object-cover" />
-                      ) : (
-                         <div className="w-full h-full flex items-center justify-center text-slate-400 font-mono text-[10px]">FILE</div>
-                      )}
+                      <TaskThumbnail task={task} />
                     </div>
                   </td>
                   <td className="p-4 align-top">

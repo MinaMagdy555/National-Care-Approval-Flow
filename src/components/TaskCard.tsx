@@ -4,6 +4,7 @@ import { useAppStore } from '../lib/store';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel, getPriorityLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
+import { TaskThumbnail } from './FilePreview';
 
 export function TaskCard({ task, onClick }: { task: Task; onClick: (id: string) => void; key?: string | number }) {
   const { currentUser } = useAppStore();
@@ -40,15 +41,9 @@ export function TaskCard({ task, onClick }: { task: Task; onClick: (id: string) 
       className="bg-white rounded-2xl border-2 border-slate-200 hover:border-indigo-400 transition-colors shadow-sm flex flex-col cursor-pointer overflow-hidden group h-full"
     >
       <div className="h-40 bg-slate-100 relative overflow-hidden text-slate-900">
-        {task.thumbnailUrl ? (
-          <img 
-            src={task.thumbnailUrl} 
-            alt={task.name}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-slate-300 font-mono italic text-sm">{task.code}.FILE</div>
-        )}
+        <div className="h-full w-full transition-transform duration-500 group-hover:scale-105">
+          <TaskThumbnail task={task} />
+        </div>
         
         <div className="absolute top-3 left-3 bg-white/90 backdrop-blur px-2 py-1 rounded text-[10px] font-bold shadow-sm text-slate-800">
           {task.code}

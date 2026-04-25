@@ -4,8 +4,9 @@ import { Priority } from '../lib/types';
 import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
-import { ArrowLeft, Check, X, AlertCircle, Clock } from 'lucide-react';
+import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus } from 'lucide-react';
 import { CustomSelect } from './CustomSelect';
+import { FilePreview, getFileKind, getTaskFiles } from './FilePreview';
 
 const reasonOptions = [
   { value: 'spelling', label: 'Spelling/content issue' },
@@ -16,6 +17,13 @@ const reasonOptions = [
   { value: 'other', label: 'Other' },
 ];
 
+type ReviewNoteSection = {
+  id: string;
+  note: string;
+  imageName?: string;
+  imageUrl?: string;
+};
+
 export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => void }) {
   const { tasks, currentUser, updateTaskStatus, updateTaskPriority } = useAppStore();
   const task = tasks.find(t => t.id === taskId);
@@ -23,6 +31,9 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [modal, setModal] = useState<'request_changes' | 'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
   const [changeReason, setChangeReason] = useState('');
   const [adRejectReason, setAdRejectReason] = useState('');
+  const [selectedFileIndex, setSelectedFileIndex] = useState(0);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [reviewNotes, setReviewNotes] = useState<ReviewNoteSection[]>([{ id: 'note_1', note: '' }]);
 
   if (!task) return <div>Task not found</div>;
 
@@ -32,6 +43,27 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const handledByNames = task.handledBy.map(id => initialUsers.find(u => u.id === id)?.name).filter(Boolean).join(' + ');
 
   const currentVersion = task.versions[0];
+  const files = getTaskFiles(currentVersion);
+  const selectedFile = files[selectedFileIndex] || files[0];
+  const isDetailedReviewType = task.taskType === 'ai_packet' || task.taskType === 'video';
+  const isReviewerActionable = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
+
+  const addReviewNoteSection = () => {
+    setReviewNotes(prev => [...prev, { id: Math.random().toString(36).substring(7), note: '' }]);
+  };
+
+  const updateReviewNote = (id: string, note: string) => {
+    setReviewNotes(prev => prev.map(section => section.id === id ? { ...section, note } : section));
+  };
+
+  const updateReviewNoteImage = (id: string, file?: File) => {
+    if (!file) return;
+    setReviewNotes(prev => prev.map(section => section.id === id ? {
+      ...section,
+      imageName: file.name,
+      imageUrl: URL.createObjectURL(file),
+    } : section));
+  };
 
   const handleSendToAD = (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,6 +97,43 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     updateTaskStatus(task.id, 'approved_by_art_director', null);
   };
 
+  const renderReviewNotes = () => (
+    <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-500">Notes and Screens</h4>
+        <button type="button" onClick={addReviewNoteSection} className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-indigo-600 shadow-sm ring-1 ring-slate-200 hover:bg-indigo-50">
+          <Plus className="h-3.5 w-3.5" /> Add
+        </button>
+      </div>
+
+      {reviewNotes.map((section, index) => (
+        <div key={section.id} className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-[96px,1fr]">
+          <label className="flex h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 text-slate-500 hover:border-indigo-400 hover:bg-indigo-50">
+            {section.imageUrl ? (
+              <button type="button" onClick={(event) => { event.preventDefault(); setLightboxUrl(section.imageUrl || null); }} className="h-full w-full overflow-hidden rounded-lg">
+                <img src={section.imageUrl} alt={section.imageName || `Screen ${index + 1}`} className="h-full w-full object-cover" />
+              </button>
+            ) : (
+              <>
+                <Upload className="h-5 w-5" />
+                <span className="text-[10px] font-black uppercase">Screen</span>
+              </>
+            )}
+            <input type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" className="hidden" onChange={event => updateReviewNoteImage(section.id, event.target.files?.[0])} />
+          </label>
+
+          <textarea
+            rows={3}
+            value={section.note}
+            onChange={event => updateReviewNote(section.id, event.target.value)}
+            placeholder={`Note ${index + 1}`}
+            className="min-h-24 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+      ))}
+    </div>
+  );
+
   const colorStyles = {
     amber: "bg-amber-50 border-amber-200 text-amber-800",
     blue: "bg-blue-50 border-blue-200 text-blue-800",
@@ -93,13 +162,33 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
           </div>
         )}
 
-        <div className="mt-0 flex flex-1 items-center justify-center overflow-auto p-4 pt-16 sm:p-6 sm:pt-16 md:mt-10 md:p-8">
-          {currentVersion?.fileUrl ? (
-            <div className="relative max-w-full max-h-full rounded-md overflow-hidden bg-white shadow-2xl ring-1 ring-gray-900/5">
-              <img src={currentVersion.fileUrl} alt="Preview" className="max-w-full max-h-[80vh] object-contain" />
+        <div className="mt-0 flex flex-1 flex-col gap-4 overflow-auto p-4 pt-16 sm:p-6 sm:pt-16 md:mt-10 md:p-8">
+          <div className="flex min-h-[48vh] flex-1 items-center justify-center overflow-hidden rounded-xl bg-white shadow-2xl ring-1 ring-gray-900/5">
+            <FilePreview file={selectedFile} onImageClick={setLightboxUrl} />
+          </div>
+
+          {files.length > 1 && (
+            <div className="flex gap-3 overflow-x-auto rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+              {files.map((file, index) => {
+                const kind = getFileKind(file);
+                return (
+                  <button
+                    key={file.id}
+                    type="button"
+                    onClick={() => setSelectedFileIndex(index)}
+                    className={cn(
+                      "flex min-w-32 max-w-40 items-center gap-2 rounded-lg border p-2 text-left transition-colors",
+                      selectedFileIndex === index ? "border-indigo-500 bg-indigo-50" : "border-slate-200 hover:bg-slate-50"
+                    )}
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100 text-slate-500">
+                      {kind === 'image' ? <img src={file.url} alt={file.name} className="h-full w-full object-cover" /> : <span className="text-[10px] font-black uppercase">{kind}</span>}
+                    </div>
+                    <span className="truncate text-xs font-bold text-slate-700">{file.name}</span>
+                  </button>
+                );
+              })}
             </div>
-          ) : (
-            <div className="text-gray-400 font-medium bg-gray-200 w-full h-full rounded-2xl flex items-center justify-center">No file uploaded</div>
           )}
         </div>
       </div>
@@ -160,7 +249,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
         {/* Actions Section */}
         <div className="flex flex-col gap-3 border-b border-slate-200 bg-white p-4 sm:p-6">
           
-          {currentUser.role === 'reviewer' && ['waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status) && (
+          {currentUser.role === 'reviewer' && isReviewerActionable && (
             <>
               <button 
                 onClick={() => setModal('send_to_ad')}
@@ -169,7 +258,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 {task.status === 'waiting_reviewer_full_review' ? 'Approve & Send to Marwa' : 
                  task.status === 'waiting_reviewer_quick_look' ? 'Quick Look Done & Send to Marwa' : 'Send to Marwa'}
               </button>
-              {task.status !== 'draft' && (
+              {isDetailedReviewType && task.status !== 'draft' && (
                 <button 
                   onClick={() => setModal('request_changes')}
                   className="w-full bg-white hover:bg-slate-50 text-slate-700 font-bold py-3 px-4 rounded-xl border border-slate-200 shadow-sm transition-all focus:ring-4 focus:ring-slate-100"
@@ -282,6 +371,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Reviewer Note (Optional)</label>
                 <textarea name="note" rows={2} className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"></textarea>
               </div>
+              {renderReviewNotes()}
               <div className="pt-2">
                 <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors">Send to Marwa</button>
               </div>
@@ -312,6 +402,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Comment *</label>
                 <textarea name="comment" required rows={3} placeholder="What needs to be fixed?" className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"></textarea>
               </div>
+              {renderReviewNotes()}
               <div className="pt-2">
                 <button type="submit" disabled={!changeReason} className="w-full bg-slate-900 hover:bg-black text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">Request Changes</button>
               </div>
@@ -347,6 +438,15 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {lightboxUrl && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 p-4" onClick={() => setLightboxUrl(null)}>
+          <button type="button" className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" onClick={() => setLightboxUrl(null)}>
+            <X className="h-6 w-6" />
+          </button>
+          <img src={lightboxUrl} alt="Full screen preview" className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" onClick={event => event.stopPropagation()} />
         </div>
       )}
     </div>
