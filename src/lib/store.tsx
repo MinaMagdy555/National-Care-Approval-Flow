@@ -2,6 +2,10 @@ import React, { createContext, useContext, useState, ReactNode } from 'react';
 import { User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification } from './types';
 import { initialUsers, initialTasks } from './mockData';
 
+const MINA_ID = 'user_1';
+const MARWA_ID = 'user_2';
+const DINA_ID = 'user_3';
+
 interface AppState {
   currentUser: User;
   environment: Environment;
@@ -42,6 +46,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, ...prev]);
   };
 
+  const addNotifications = (userIds: string[], taskId: string, message: string) => {
+    Array.from(new Set(userIds)).forEach(userId => {
+      addNotification({ userId, taskId, message });
+    });
+  };
+
   const markNotificationAsRead = (id: string) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
   };
@@ -51,15 +61,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (taskIndex !== -1) {
       const task = tasks[taskIndex];
       if (newStatus === 'approved_by_art_director' && task.status !== newStatus) {
-        addNotification({ userId: task.createdBy, taskId, message: `Your task "${task.name}" was approved by Marwa!` });
+        addNotifications([DINA_ID, MINA_ID, task.createdBy], taskId, `Marwa approved "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_reviewer' && task.status !== newStatus) {
-        addNotification({ userId: task.createdBy, taskId, message: `Reviewer requested changes on your task "${task.name}".` });
+        addNotifications([MARWA_ID, DINA_ID], taskId, `Mina requested changes on "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_art_director' && task.status !== newStatus) {
-        addNotification({ userId: task.createdBy, taskId, message: `Marwa requested changes on your task "${task.name}".` });
+        addNotifications([DINA_ID, MINA_ID, task.createdBy], taskId, `Marwa rejected "${task.name}" and requested changes.`);
       } else if ((newStatus === 'reviewer_approved' || newStatus === 'sent_to_art_director') && task.status !== newStatus) {
-        // notify Marwa
-        const ad = Object.values(usersObj).find(u => u.role === 'art_director');
-        if (ad) addNotification({ userId: ad.id, taskId, message: `Task "${task.name}" needs your approval.` });
+        addNotifications([MARWA_ID, DINA_ID], taskId, `Mina sent "${task.name}" to Marwa for approval.`);
       }
     }
 

@@ -84,7 +84,6 @@ export function CreateTask() {
     e.preventDefault();
     if (!taskName || !selectedCreatorId || files.length === 0) return;
 
-    const reviewer = initialUsers.find(u => u.role === 'reviewer');
     const creator = initialUsers.find(u => u.id === selectedCreatorId);
     const newTaskId = Math.random().toString(36).substring(7);
 
@@ -119,14 +118,17 @@ export function CreateTask() {
 
     addTask(newTask);
 
-    // Notify reviewer
-    if (reviewer) {
+    const notificationRecipients = selectedCreatorId === 'user_1'
+      ? ['user_3', 'user_2']
+      : ['user_1', 'user_3'];
+
+    Array.from(new Set(notificationRecipients)).forEach(userId => {
       addNotification({
-        userId: reviewer.id,
+        userId,
         taskId: newTaskId,
         message: `${creator?.name || 'Someone'} uploaded a new task: ${taskName}`,
       });
-    }
+    });
 
     setIsSuccess(true);
     setTimeout(() => {

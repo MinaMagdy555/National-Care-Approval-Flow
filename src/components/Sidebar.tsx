@@ -25,7 +25,7 @@ export function Sidebar({
   const { currentUser, notifications } = useAppStore();
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
 
-  const unreadCount = notifications ? notifications.filter(n => !n.read).length : 0;
+  const unreadCount = notifications ? notifications.filter(n => n.userId === currentUser.id && !n.read).length : 0;
 
   useEffect(() => {
     if (
