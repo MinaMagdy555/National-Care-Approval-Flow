@@ -4,6 +4,7 @@ import { Upload, X, File, Image as ImageIcon, FileVideo, CheckCircle2 } from 'lu
 import { Task, ReviewMode, Priority, TaskType, UploadedTaskFile } from '../lib/types';
 import { initialUsers } from '../lib/mockData';
 import { CustomSelect } from './CustomSelect';
+import { uploadTaskFiles } from '../lib/supabaseDb';
 
 const MAX_FILE_SIZE_MB = 200;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
@@ -80,13 +81,13 @@ export function CreateTask() {
     setFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!taskName || !selectedCreatorId || files.length === 0) return;
 
     const creator = initialUsers.find(u => u.id === selectedCreatorId);
     const newTaskId = Math.random().toString(36).substring(7);
-    const uploadedFiles: UploadedTaskFile[] = files.map(file => ({
+    const localFiles: UploadedTaskFile[] = files.map(file => ({
       id: Math.random().toString(36).substring(7),
       name: file.name,
       type: file.type,
@@ -94,6 +95,14 @@ export function CreateTask() {
       blob: file,
       url: URL.createObjectURL(file),
     }));
+    let uploadedFiles: UploadedTaskFile[];
+    try {
+      uploadedFiles = await uploadTaskFiles(newTaskId, localFiles);
+    } catch (error) {
+      console.error('Failed to upload task files', error);
+      setFileError('Could not upload files. Please try again.');
+      return;
+    }
     const thumbnailFile = uploadedFiles.find(file => file.type.startsWith('image/'));
 
     const newTask: Task = {

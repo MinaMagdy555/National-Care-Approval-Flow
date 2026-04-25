@@ -2,6 +2,13 @@ import React, { createContext, useContext, useEffect, useRef, useState, ReactNod
 import { User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification } from './types';
 import { initialUsers, initialTasks } from './mockData';
 import { loadAppState, saveAppState } from './localDb';
+import { isSupabaseConfigured } from './supabaseClient';
+import {
+  fetchSupabaseNotifications,
+  fetchSupabaseTasks,
+  upsertSupabaseNotifications,
+  upsertSupabaseTask,
+} from './supabaseDb';
 
 const MINA_ID = 'user_1';
 const MARWA_ID = 'user_2';
@@ -66,7 +73,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let isMounted = true;
 
-    loadAppState()
+    const loadState = isSupabaseConfigured
+      ? Promise.all([fetchSupabaseTasks(), fetchSupabaseNotifications()]).then(([loadedTasks, loadedNotifications]) => ({
+          tasks: loadedTasks,
+          notifications: loadedNotifications,
+        }))
+      : loadAppState();
+
+    loadState
       .then(state => {
         if (!isMounted) return;
         if (state) {
@@ -85,7 +99,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!hasLoadedPersistedState.current) return;
-    saveAppState({ tasks, notifications }).catch(error => {
+
+    const saveState = isSupabaseConfigured
+      ? Promise.all([
+          ...tasks.map(task => upsertSupabaseTask(task)),
+          upsertSupabaseNotifications(notifications),
+        ])
+      : saveAppState({ tasks, notifications });
+
+    saveState.catch(error => {
       console.error('Failed to save app state', error);
     });
   }, [tasks, notifications]);

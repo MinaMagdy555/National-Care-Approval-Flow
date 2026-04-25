@@ -42,3 +42,15 @@ After the workflow finishes, the app will be available at:
 4. Click **Deploy**.
 
 Vercel will deploy from `main` automatically after each push.
+
+## Supabase Setup
+
+1. In Supabase, open **SQL Editor**.
+2. Run the SQL from [supabase.sql](supabase.sql).
+3. Open **Project Settings > API**.
+4. Copy the Project URL and anon public key.
+5. Add these environment variables locally and in Vercel:
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_ANON_KEY`
+
+If these variables are missing, the app falls back to browser-only storage.
