@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { Priority, UploadedTaskFile } from '../lib/types';
+import { Priority, TaskCommentSection, UploadedTaskFile } from '../lib/types';
 import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
@@ -18,6 +18,10 @@ type ReviewNoteSection = {
 const MAX_FILE_SIZE_MB = 200;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 const ALLOWED_FILE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'mp4', 'pdf'];
+const MINA_ID = 'user_1';
+const MARWA_ID = 'user_2';
+const DINA_ID = 'user_3';
+const INTERNAL_REVIEW_VIEWERS = [MINA_ID, MARWA_ID, DINA_ID];
 
 export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => void }) {
   const { tasks, currentUser, updateTaskStatus, updateTaskPriority, addTaskComment, addTaskVersion } = useAppStore();
@@ -29,6 +33,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [fullscreenPdf, setFullscreenPdf] = useState<UploadedTaskFile | null>(null);
   const [reviewNotes, setReviewNotes] = useState<ReviewNoteSection[]>([{ id: 'note_1', note: '' }]);
   const [adRejectComment, setAdRejectComment] = useState('');
+  const [selectedMinaFeedbackIds, setSelectedMinaFeedbackIds] = useState<string[]>([]);
   const [resubmitFiles, setResubmitFiles] = useState<File[]>([]);
   const [resubmitNote, setResubmitNote] = useState('');
   const [resubmitError, setResubmitError] = useState('');
@@ -49,6 +54,46 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const isSelfCreatedTask = task.createdBy === currentUser.id;
   const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
   const canResubmitVersion = isSelfCreatedTask && ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(task.status);
+  const isInternalReviewTask = !isDetailedReviewType;
+  const canViewInternalReviewNotes = INTERNAL_REVIEW_VIEWERS.includes(currentUser.id);
+  const isInternalMinaComment = (comment: { authorId: string; action: string }) => (
+    isInternalReviewTask && comment.authorId === MINA_ID && comment.action === 'sent_to_marwa'
+  );
+  const visibleComments = (task.comments || []).filter(comment => !isInternalMinaComment(comment) || canViewInternalReviewNotes);
+  const minaForwardableComments = (task.comments || []).filter(comment => isInternalMinaComment(comment));
+  const minaForwardableFeedback = minaForwardableComments.flatMap(comment => {
+    const items: Array<{
+      id: string;
+      label: string;
+      note: string;
+      imageName?: string;
+      imageUrl?: string;
+    }> = [];
+
+    if (comment.message?.trim()) {
+      items.push({
+        id: `${comment.id}:message`,
+        label: 'Main note',
+        note: comment.message.trim(),
+      });
+    }
+
+    comment.sections.forEach((section, index) => {
+      if (section.note || section.imageUrl) {
+        items.push({
+          id: `${comment.id}:section:${section.id}`,
+          label: `Screen note ${index + 1}`,
+          note: section.note,
+          imageName: section.imageName,
+          imageUrl: section.imageUrl,
+        });
+      }
+    });
+
+    return items;
+  });
+  const selectedMinaFeedback = minaForwardableFeedback.filter(item => selectedMinaFeedbackIds.includes(item.id));
+  const canSubmitADReject = adRejectComment.trim() || selectedMinaFeedback.length > 0;
 
   const appendResubmitFiles = (incomingFiles: File[]) => {
     const validFiles = incomingFiles.filter(file => {
@@ -171,15 +216,24 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const handleADReject = (e: React.FormEvent) => {
     e.preventDefault();
     const message = adRejectComment.trim();
-    if (!message) return;
+    if (!message && selectedMinaFeedback.length === 0) return;
+
+    const forwardedSections: TaskCommentSection[] = selectedMinaFeedback.map(item => ({
+      id: Math.random().toString(36).substring(7),
+      note: item.note ? `Mina note: ${item.note}` : 'Mina attached this screen for edits.',
+      imageName: item.imageName,
+      imageUrl: item.imageUrl,
+    }));
+
     addTaskComment(task.id, {
       authorId: currentUser.id,
       action: 'marwa_rejection',
-      message,
-      sections: [],
+      message: message || 'Forwarded selected notes from Mina.',
+      sections: forwardedSections,
     });
     updateTaskStatus(task.id, 'changes_requested_by_art_director', 'team_member');
     setAdRejectComment('');
+    setSelectedMinaFeedbackIds([]);
     setModal(null);
   };
 
@@ -469,7 +523,10 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 <Check className="w-5 h-5" /> Approve
               </button>
               <button 
-                onClick={() => setModal('ad_reject')}
+                onClick={() => {
+                  setSelectedMinaFeedbackIds([]);
+                  setModal('ad_reject');
+                }}
                 className="w-full bg-white hover:bg-rose-50 text-rose-600 font-bold py-3 px-4 rounded-xl border border-rose-200 shadow-sm transition-all focus:ring-4 focus:ring-rose-100 flex items-center justify-center gap-2"
               >
                 <X className="w-5 h-5" /> Reject
@@ -487,7 +544,10 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 </div>
               </div>
               <button 
-                onClick={() => setModal('ad_reject')}
+                onClick={() => {
+                  setSelectedMinaFeedbackIds([]);
+                  setModal('ad_reject');
+                }}
                 className="w-full bg-white hover:bg-gray-50 text-gray-700 font-semibold py-2 px-4 rounded-lg border border-gray-200 shadow-sm transition-all text-sm"
               >
                 Reject / Reopen
@@ -514,11 +574,11 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             ))}
           </div>
 
-          {(task.comments || []).length > 0 && (
+          {visibleComments.length > 0 && (
             <div className="mt-6 border-t border-slate-200 pt-5">
               <h3 className="mb-4 text-[11px] font-black uppercase tracking-wider text-slate-400">Comments</h3>
               <div className="space-y-3">
-                {(task.comments || []).map(comment => {
+                {visibleComments.map(comment => {
                   const author = initialUsers.find(user => user.id === comment.authorId);
                   return (
                     <div key={comment.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -607,18 +667,71 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
       {modal === 'ad_reject' && (
         <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-rose-200">
+          <div className="max-h-[92vh] w-full max-w-lg overflow-hidden rounded-2xl border border-rose-200 bg-white shadow-xl">
             <div className="p-6 border-b border-rose-100 bg-rose-50 flex justify-between items-center">
               <h3 className="text-lg font-black text-rose-900 flex items-center gap-2"><AlertCircle className="w-5 h-5"/> Reject Task</h3>
-              <button onClick={() => setModal(null)} className="text-rose-400 hover:text-rose-600 transition-colors"><X className="w-5 h-5"/></button>
+              <button
+                onClick={() => {
+                  setSelectedMinaFeedbackIds([]);
+                  setModal(null);
+                }}
+                className="text-rose-400 hover:text-rose-600 transition-colors"
+              >
+                <X className="w-5 h-5"/>
+              </button>
             </div>
-            <form onSubmit={handleADReject} className="p-6 space-y-5">
+            <form onSubmit={handleADReject} className="max-h-[calc(92vh-81px)] space-y-5 overflow-y-auto p-6">
+              {minaForwardableFeedback.length > 0 && (
+                <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <div>
+                    <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-500">Mina's Internal Notes</h4>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">Select what should be sent to the task creator.</p>
+                  </div>
+                  <div className="space-y-2">
+                    {minaForwardableFeedback.map(item => {
+                      const checked = selectedMinaFeedbackIds.includes(item.id);
+                      return (
+                        <label key={item.id} className="flex cursor-pointer gap-3 rounded-lg border border-slate-200 bg-white p-3 transition-colors hover:border-indigo-300">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={event => {
+                              setSelectedMinaFeedbackIds(prev => (
+                                event.target.checked
+                                  ? [...prev, item.id]
+                                  : prev.filter(id => id !== item.id)
+                              ));
+                            }}
+                            className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">{item.label}</p>
+                            {item.note && <p className="mt-1 text-sm font-semibold text-slate-800">{item.note}</p>}
+                            {item.imageUrl && (
+                              <button
+                                type="button"
+                                onClick={event => {
+                                  event.preventDefault();
+                                  setLightboxUrl(item.imageUrl || null);
+                                }}
+                                className="mt-2 h-20 w-28 overflow-hidden rounded-lg border border-slate-200 bg-white"
+                              >
+                                <img src={item.imageUrl} alt={item.imageName || 'Mina note screen'} className="h-full w-full object-cover" />
+                              </button>
+                            )}
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <div>
-                <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Comment *</label>
-                <textarea value={adRejectComment} onChange={event => setAdRejectComment(event.target.value)} required rows={3} placeholder="Provide feedback for rejection..." className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-rose-500 outline-none"></textarea>
+                <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Marwa's Comment</label>
+                <textarea value={adRejectComment} onChange={event => setAdRejectComment(event.target.value)} rows={3} placeholder="Write new feedback, or select Mina's notes above, or do both..." className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-rose-500 outline-none"></textarea>
               </div>
               <div className="pt-2">
-                <button type="submit" disabled={!adRejectComment.trim()} className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">Reject and Return</button>
+                <button type="submit" disabled={!canSubmitADReject} className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">Reject and Return</button>
               </div>
             </form>
           </div>
