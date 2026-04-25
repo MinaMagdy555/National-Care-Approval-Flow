@@ -36,7 +36,6 @@ export function CreateTask() {
     { value: 'others', label: 'Others' },
   ];
   const priorityOptions = [
-    { value: 'not_set', label: 'Not Set' },
     { value: 'low', label: 'Low' },
     { value: 'normal', label: 'Normal' },
     { value: 'high', label: 'High' },
@@ -45,7 +44,7 @@ export function CreateTask() {
 
   // If reviewer, they can set priority directly on creation if they want (though mostly they handle others)
   const isReviewer = currentUser.role === 'reviewer' || currentUser.role === 'admin';
-  const [priority, setPriority] = useState<Priority>('not_set');
+  const [priority, setPriority] = useState<Priority | ''>('');
   const [deadline, setDeadline] = useState('');
 
   const appendValidFiles = (incomingFiles: File[]) => {
@@ -137,7 +136,7 @@ export function CreateTask() {
       setCreatedBy('');
       setFiles([]);
       setFileError('');
-      setPriority('not_set');
+      setPriority('');
       setDeadline('');
     }, 2000);
   };
@@ -199,14 +198,15 @@ export function CreateTask() {
             {isReviewer && (
               <div className="grid grid-cols-1 gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
                  <div className="col-span-2 mb-1">
-                   <h4 className="text-xs font-black text-slate-900 uppercase tracking-widest">Moderator Setup (Optional)</h4>
+                   <h4 className="text-xs font-black text-slate-900 uppercase tracking-widest">Moderator Setup</h4>
                  </div>
                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Priority</label>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Priority *</label>
                     <CustomSelect
                       value={priority}
                       onChange={value => setPriority(value as Priority)}
                       options={priorityOptions}
+                      placeholder="Select priority"
                       buttonClassName="rounded-lg border-slate-300 px-3 py-2 text-sm font-bold text-slate-900 shadow-none hover:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                     />
                  </div>
@@ -278,7 +278,7 @@ export function CreateTask() {
             <div className="flex justify-end border-t border-slate-100 pt-4">
               <button 
                 type="submit"
-                disabled={!taskName || !selectedCreatorId || files.length === 0}
+                disabled={!taskName || !selectedCreatorId || files.length === 0 || (isReviewer && !priority)}
                 className="w-full rounded-xl bg-indigo-600 px-8 py-3 font-black text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto"
               >
                 Submit Task
