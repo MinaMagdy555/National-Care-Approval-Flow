@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, Image as ImageIcon } from 'lucide-react';
+import { Image as ImageIcon } from 'lucide-react';
 import { Task, TaskVersion, UploadedTaskFile } from '../lib/types';
 
 export function getTaskFiles(version?: TaskVersion): UploadedTaskFile[] {
@@ -24,6 +24,10 @@ export function getFileKind(file?: Pick<UploadedTaskFile, 'type' | 'name' | 'url
   if (type.startsWith('video/') || /\.(mp4|webm|mov)$/i.test(name)) return 'video';
   if (type === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
   return 'file';
+}
+
+export function getPdfPreviewUrl(url: string) {
+  return `${url}#toolbar=0&navpanes=0&scrollbar=0&page=1&view=FitH`;
 }
 
 export function TaskThumbnail({ task }: { task: Task }) {
@@ -52,11 +56,22 @@ export function TaskThumbnail({ task }: { task: Task }) {
     );
   }
 
-  const Icon = kind === 'pdf' ? FileText : ImageIcon;
+  if (kind === 'pdf') {
+    return (
+      <div className="relative h-full w-full overflow-hidden bg-white">
+        <iframe
+          src={getPdfPreviewUrl(file.url)}
+          title={`${file.name} preview`}
+          className="pointer-events-none h-[240%] w-[240%] origin-top-left scale-[0.42] border-0 bg-white"
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-slate-100 text-slate-400">
-      <Icon className="h-5 w-5" />
-      <span className="max-w-[80px] truncate text-[10px] font-black uppercase">{kind === 'pdf' ? 'PDF' : 'FILE'}</span>
+      <ImageIcon className="h-5 w-5" />
+      <span className="max-w-[80px] truncate text-[10px] font-black uppercase">FILE</span>
     </div>
   );
 }
@@ -64,9 +79,11 @@ export function TaskThumbnail({ task }: { task: Task }) {
 export function FilePreview({
   file,
   onImageClick,
+  onPdfFullscreen,
 }: {
   file?: UploadedTaskFile;
   onImageClick?: (url: string) => void;
+  onPdfFullscreen?: (file: UploadedTaskFile) => void;
 }) {
   const kind = getFileKind(file);
 
@@ -87,7 +104,18 @@ export function FilePreview({
   }
 
   if (kind === 'pdf') {
-    return <iframe src={file.url} title={file.name} className="h-full min-h-[70vh] w-full rounded-lg bg-white" />;
+    return (
+      <div className="relative h-full w-full">
+        <button
+          type="button"
+          onClick={() => onPdfFullscreen?.(file)}
+          className="absolute right-3 top-3 z-10 rounded-lg bg-slate-900/90 px-3 py-2 text-xs font-black text-white shadow-sm transition-colors hover:bg-slate-950"
+        >
+          Full screen
+        </button>
+        <iframe src={file.url} title={file.name} className="h-full min-h-[70vh] w-full rounded-lg bg-white" />
+      </div>
+    );
   }
 
   return (

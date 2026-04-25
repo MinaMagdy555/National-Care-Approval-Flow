@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { Priority } from '../lib/types';
+import { Priority, UploadedTaskFile } from '../lib/types';
 import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus } from 'lucide-react';
-import { FilePreview, getFileKind, getTaskFiles } from './FilePreview';
+import { FilePreview, getFileKind, getPdfPreviewUrl, getTaskFiles } from './FilePreview';
 
 type ReviewNoteSection = {
   id: string;
@@ -21,6 +21,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [modal, setModal] = useState<'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [fullscreenPdf, setFullscreenPdf] = useState<UploadedTaskFile | null>(null);
   const [reviewNotes, setReviewNotes] = useState<ReviewNoteSection[]>([{ id: 'note_1', note: '' }]);
   const [adRejectComment, setAdRejectComment] = useState('');
 
@@ -188,7 +189,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
         <div className="mt-0 flex flex-1 flex-col gap-4 overflow-auto p-4 pt-16 sm:p-6 sm:pt-16 md:mt-10 md:p-8">
           <div className="flex min-h-[48vh] flex-1 items-center justify-center overflow-hidden rounded-xl bg-white shadow-2xl ring-1 ring-gray-900/5">
-            <FilePreview file={selectedFile} onImageClick={setLightboxUrl} />
+            <FilePreview file={selectedFile} onImageClick={setLightboxUrl} onPdfFullscreen={setFullscreenPdf} />
           </div>
 
           {files.length > 1 && (
@@ -206,7 +207,15 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                     )}
                   >
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100 text-slate-500">
-                      {kind === 'image' ? <img src={file.url} alt={file.name} className="h-full w-full object-cover" /> : <span className="text-[10px] font-black uppercase">{kind}</span>}
+                      {kind === 'image' && <img src={file.url} alt={file.name} className="h-full w-full object-cover" />}
+                      {kind === 'pdf' && (
+                        <iframe
+                          src={getPdfPreviewUrl(file.url)}
+                          title={`${file.name} preview`}
+                          className="pointer-events-none h-[240%] w-[240%] origin-top-left scale-[0.42] border-0 bg-white"
+                        />
+                      )}
+                      {!['image', 'pdf'].includes(kind) && <span className="text-[10px] font-black uppercase">{kind}</span>}
                     </div>
                     <span className="truncate text-xs font-bold text-slate-700">{file.name}</span>
                   </button>
@@ -478,6 +487,30 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             <X className="h-6 w-6" />
           </button>
           <img src={lightboxUrl} alt="Full screen preview" className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" onClick={event => event.stopPropagation()} />
+        </div>
+      )}
+
+      {fullscreenPdf && (
+        <div className="fixed inset-0 z-[70] flex flex-col bg-slate-950/90 p-4">
+          <div className="mb-3 flex items-center justify-between gap-4 text-white">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-black">{fullscreenPdf.name}</p>
+              <p className="text-xs font-semibold text-slate-300">PDF preview</p>
+            </div>
+            <button
+              type="button"
+              className="rounded-full bg-white/10 p-2 text-white transition-colors hover:bg-white/20"
+              onClick={() => setFullscreenPdf(null)}
+              aria-label="Close PDF preview"
+            >
+              <X className="h-6 w-6" />
+            </button>
+          </div>
+          <iframe
+            src={fullscreenPdf.url}
+            title={fullscreenPdf.name}
+            className="min-h-0 flex-1 rounded-xl border-0 bg-white shadow-2xl"
+          />
         </div>
       )}
     </div>
