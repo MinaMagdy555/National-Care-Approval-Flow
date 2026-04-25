@@ -18,3 +18,15 @@ View your app in AI Studio: https://ai.studio/apps/fdc3e636-b24a-47be-8852-c3677
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Host on GitHub Pages
+
+This repo includes a GitHub Actions workflow that builds and deploys the app from `main`.
+
+1. Push the repo to GitHub:
+   `git push origin main`
+2. In GitHub, open **Settings > Pages**.
+3. Set **Source** to **GitHub Actions**.
+
+After the workflow finishes, the app will be available at:
+`https://MinaMagdy555.github.io/National-Care-Approval-Flow/`

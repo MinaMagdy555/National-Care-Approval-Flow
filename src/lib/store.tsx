@@ -51,13 +51,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (taskIndex !== -1) {
       const task = tasks[taskIndex];
       if (newStatus === 'approved_by_art_director' && task.status !== newStatus) {
-        addNotification({ userId: task.createdBy, taskId, message: `Your task "${task.name}" was approved by the Art Director!` });
+        addNotification({ userId: task.createdBy, taskId, message: `Your task "${task.name}" was approved by Marwa!` });
       } else if (newStatus === 'changes_requested_by_reviewer' && task.status !== newStatus) {
         addNotification({ userId: task.createdBy, taskId, message: `Reviewer requested changes on your task "${task.name}".` });
       } else if (newStatus === 'changes_requested_by_art_director' && task.status !== newStatus) {
-        addNotification({ userId: task.createdBy, taskId, message: `Art Director requested changes on your task "${task.name}".` });
+        addNotification({ userId: task.createdBy, taskId, message: `Marwa requested changes on your task "${task.name}".` });
       } else if ((newStatus === 'reviewer_approved' || newStatus === 'sent_to_art_director') && task.status !== newStatus) {
-        // notify AD
+        // notify Marwa
         const ad = Object.values(usersObj).find(u => u.role === 'art_director');
         if (ad) addNotification({ userId: ad.id, taskId, message: `Task "${task.name}" needs your approval.` });
       }

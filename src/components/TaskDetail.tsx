@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { Task, Priority } from '../lib/types';
+import { Priority } from '../lib/types';
 import { initialUsers } from '../lib/mockData';
-import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel, getPriorityLabel } from '../lib/taskUtils';
+import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
-import { ArrowLeft, Check, X, MessageSquare, AlertCircle, Clock } from 'lucide-react';
+import { ArrowLeft, Check, X, AlertCircle, Clock } from 'lucide-react';
 
 export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => void }) {
   const { tasks, currentUser, updateTaskStatus, updateTaskPriority } = useAppStore();
@@ -59,9 +59,9 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   };
 
   return (
-    <div className="flex h-full bg-[#f8fafc] text-slate-900 border-l border-slate-200 relative">
+    <div className="relative flex min-h-full flex-col bg-[#f8fafc] text-slate-900 md:h-full md:flex-row md:border-l md:border-slate-200">
       {/* Left Side: Media Preview */}
-      <div className="flex-1 bg-slate-100 flex flex-col border-r border-slate-200 relative min-h-0">
+      <div className="relative flex min-h-[42dvh] flex-col bg-slate-100 md:min-h-0 md:flex-1 md:border-r md:border-slate-200">
         <div className="absolute top-4 left-4 z-10 hidden md:block">
           <button 
             onClick={onBack}
@@ -77,7 +77,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
           </div>
         )}
 
-        <div className="flex-1 p-8 flex items-center justify-center overflow-auto mt-10">
+        <div className="mt-0 flex flex-1 items-center justify-center overflow-auto p-4 pt-16 sm:p-6 sm:pt-16 md:mt-10 md:p-8">
           {currentVersion?.fileUrl ? (
             <div className="relative max-w-full max-h-full rounded-md overflow-hidden bg-white shadow-2xl ring-1 ring-gray-900/5">
               <img src={currentVersion.fileUrl} alt="Preview" className="max-w-full max-h-[80vh] object-contain" />
@@ -89,8 +89,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       </div>
 
       {/* Right Side: Info & Actions */}
-      <div className="w-[450px] flex flex-col bg-white overflow-y-auto shrink-0 border-l border-slate-200">
-        <div className="p-6 border-b border-slate-200">
+      <div className="w-full shrink-0 overflow-y-auto bg-white md:w-[420px] lg:w-[450px] md:border-l md:border-slate-200">
+        <div className="border-b border-slate-200 p-4 sm:p-6">
           <button onClick={onBack} className="flex items-center gap-1 text-slate-400 hover:text-indigo-600 mb-4 md:hidden text-sm font-bold">
             <ArrowLeft className="w-4 h-4" /> Back
           </button>
@@ -98,7 +98,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
           <h2 className="text-2xl font-black text-slate-900 leading-tight mb-2">{task.name}</h2>
           <p className="text-sm font-mono text-slate-500 mb-6 font-bold">{task.code} · Version {currentVersion?.versionNumber || 1}</p>
 
-          <div className="grid grid-cols-2 gap-y-4 text-sm mb-6">
+          <div className="mb-6 grid grid-cols-1 gap-y-4 text-sm sm:grid-cols-2">
             <div>
               <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Created by</span>
               <span className="font-semibold text-slate-900">{creator}</span>
@@ -142,7 +142,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
         </div>
 
         {/* Actions Section */}
-        <div className="p-6 flex flex-col gap-3 border-b border-slate-200 bg-white">
+        <div className="flex flex-col gap-3 border-b border-slate-200 bg-white p-4 sm:p-6">
           
           {currentUser.role === 'reviewer' && ['waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status) && (
             <>
@@ -150,8 +150,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 onClick={() => setModal('send_to_ad')}
                 className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-sm transition-all focus:ring-4 focus:ring-indigo-100"
               >
-                {task.status === 'waiting_reviewer_full_review' ? 'Approve & Send to Art Director' : 
-                 task.status === 'waiting_reviewer_quick_look' ? 'Quick Look Done & Send to AD' : 'Send to Art Director'}
+                {task.status === 'waiting_reviewer_full_review' ? 'Approve & Send to Marwa' : 
+                 task.status === 'waiting_reviewer_quick_look' ? 'Quick Look Done & Send to Marwa' : 'Send to Marwa'}
               </button>
               {task.status !== 'draft' && (
                 <button 
@@ -166,7 +166,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
           {currentUser.role === 'reviewer' && task.status === 'sent_to_art_director' && (
             <div className="text-sm font-medium text-gray-500 flex items-center gap-2 justify-center py-2">
-              <Check className="w-4 h-4" /> Sent to Art Director
+              <Check className="w-4 h-4" /> Sent to Marwa
             </div>
           )}
 
@@ -208,7 +208,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
         </div>
 
         {/* Versions & Comments (Stubbed for now) */}
-        <div className="p-6 flex-1 bg-slate-50">
+        <div className="flex-1 bg-slate-50 p-4 sm:p-6">
           <h3 className="text-[11px] font-black text-slate-400 mb-4 uppercase tracking-wider flex items-center gap-2"><Clock className="w-4 h-4 text-slate-400"/> VERSION HISTORY</h3>
           <div className="space-y-4 relative before:absolute before:inset-0 before:ml-2 md:before:mx-auto before:-translate-x-px md:before:translate-x-0 before:h-full before:w-[2px] before:bg-slate-200">
             {task.versions.map((v, i) => (
@@ -233,13 +233,13 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
         <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-slate-200">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h3 className="text-lg font-black text-slate-900">Approve & Send to Art Director</h3>
+              <h3 className="text-lg font-black text-slate-900">Approve & Send to Marwa</h3>
               <button onClick={() => setModal(null)} className="text-slate-400 hover:text-indigo-600 transition-colors"><X className="w-5 h-5"/></button>
             </div>
             <form onSubmit={handleSendToAD} className="p-6 space-y-5">
               <div>
                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Priority *</label>
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <label className="cursor-pointer">
                     <input type="radio" name="priority" value="low" className="peer sr-only" required />
                     <div className="text-center text-sm font-bold py-2 px-1 rounded-lg border border-slate-200 text-slate-500 peer-checked:bg-slate-900 peer-checked:text-white peer-checked:border-slate-900 transition-colors">Low</div>
@@ -267,7 +267,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 <textarea name="note" rows={2} className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"></textarea>
               </div>
               <div className="pt-2">
-                <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors">Send to Art Director</button>
+                <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors">Send to Marwa</button>
               </div>
             </form>
           </div>

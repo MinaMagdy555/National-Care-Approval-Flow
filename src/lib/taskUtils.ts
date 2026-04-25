@@ -1,4 +1,4 @@
-import { Task, Role, Priority, TaskType, ReviewMode, TaskStatus } from './types';
+import { Task, Role, Priority, TaskType, ReviewMode } from './types';
 
 export function getTaskTypeLabel(type: TaskType): string {
   switch (type) {
@@ -17,7 +17,7 @@ export function getReviewModeLabel(mode: ReviewMode): string {
   switch (mode) {
     case 'full_review': return 'Full Review';
     case 'quick_look': return 'Quick Look';
-    case 'direct_to_ad': return 'Direct to AD';
+    case 'direct_to_ad': return 'Direct to Marwa';
     default: return 'Review';
   }
 }
@@ -36,21 +36,16 @@ export function getPriorityLabel(priority: Priority): string {
 export function getStatusInfo(task: Task, viewerRole: Role): { label: string; color: 'amber' | 'blue' | 'green' | 'red' | 'gray' | 'purple' } {
   const { status } = task;
 
-  if (task.environment === 'demo') {
-    // Maybe we want to return purple for all demo, but let's just keep the color based on status and use badge for demo
-  }
-
-  // TEAM MEMBER
   if (viewerRole === 'team_member') {
     switch (status) {
-      case 'submitted': return { label: 'Submitted — waiting for reviewer', color: 'gray' };
+      case 'submitted': return { label: 'Submitted - waiting for reviewer', color: 'gray' };
       case 'waiting_reviewer_full_review': return { label: 'Waiting for reviewer', color: 'blue' };
       case 'waiting_reviewer_quick_look': return { label: 'Waiting for reviewer quick look', color: 'blue' };
       case 'changes_requested_by_reviewer': return { label: 'Changes requested by reviewer', color: 'red' };
-      case 'reviewer_approved': return { label: 'Passed reviewer — waiting for Art Director', color: 'blue' };
-      case 'sent_to_art_director': return { label: 'Waiting for Art Director', color: 'blue' };
-      case 'waiting_art_director_approval': return { label: 'Waiting for Art Director', color: 'blue' };
-      case 'changes_requested_by_art_director': return { label: 'Changes requested by Art Director', color: 'red' };
+      case 'reviewer_approved': return { label: 'Passed reviewer - waiting for Marwa', color: 'blue' };
+      case 'sent_to_art_director': return { label: 'Waiting for Marwa', color: 'blue' };
+      case 'waiting_art_director_approval': return { label: 'Waiting for Marwa', color: 'blue' };
+      case 'changes_requested_by_art_director': return { label: 'Changes requested by Marwa', color: 'red' };
       case 'approved_by_art_director': return { label: 'Approved', color: 'green' };
       case 'completed': return { label: 'Completed', color: 'green' };
       case 'archived': return { label: 'Archived', color: 'gray' };
@@ -58,24 +53,22 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
     }
   }
 
-  // REVIEWER
   if (viewerRole === 'reviewer') {
     switch (status) {
       case 'waiting_reviewer_full_review': return { label: 'Waiting for your full review', color: 'amber' };
       case 'waiting_reviewer_quick_look': return { label: 'Needs your quick look', color: 'amber' };
       case 'changes_requested_by_reviewer': return { label: 'Returned to creator for changes', color: 'red' };
-      case 'reviewer_approved': return { label: 'Sent to Art Director', color: 'blue' };
-      case 'sent_to_art_director': return { label: 'Sent to Art Director', color: 'blue' };
-      case 'waiting_art_director_approval': return { label: 'Waiting for Art Director', color: 'blue' };
-      case 'changes_requested_by_art_director': return { label: 'AD requested changes', color: 'red' };
-      case 'approved_by_art_director': return { label: 'Approved by AD', color: 'green' };
+      case 'reviewer_approved': return { label: 'Sent to Marwa', color: 'blue' };
+      case 'sent_to_art_director': return { label: 'Sent to Marwa', color: 'blue' };
+      case 'waiting_art_director_approval': return { label: 'Waiting for Marwa', color: 'blue' };
+      case 'changes_requested_by_art_director': return { label: 'Marwa requested changes', color: 'red' };
+      case 'approved_by_art_director': return { label: 'Approved by Marwa', color: 'green' };
       case 'completed': return { label: 'Completed', color: 'green' };
       case 'archived': return { label: 'Archived', color: 'gray' };
       default: return { label: status, color: 'gray' };
     }
   }
 
-  // ART DIRECTOR
   if (viewerRole === 'art_director') {
     switch (status) {
       case 'reviewer_approved': return { label: 'Ready for your approval', color: 'amber' };
@@ -92,14 +85,13 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
     }
   }
 
-  // TEAM LEADER / ADMIN fallbacks
   switch (status) {
     case 'waiting_reviewer_full_review':
     case 'waiting_reviewer_quick_look': return { label: 'In Review', color: 'blue' };
     case 'changes_requested_by_reviewer':
     case 'changes_requested_by_art_director': return { label: 'Changes Requested', color: 'red' };
     case 'sent_to_art_director':
-    case 'waiting_art_director_approval': return { label: 'With Art Director', color: 'blue' };
+    case 'waiting_art_director_approval': return { label: 'With Marwa', color: 'blue' };
     case 'approved_by_art_director': return { label: 'Approved', color: 'green' };
     case 'completed': return { label: 'Completed', color: 'green' };
     default: return { label: status, color: 'gray' };
@@ -123,11 +115,11 @@ export function getNextActionLabel(task: Task, viewerRole: Role): string {
     if (status === 'waiting_reviewer_quick_look') {
       return 'Quick look & send';
     }
-    if (task.createdBy === 'user_2' && status === 'draft') { // assuming reviewer id is user_2 for this example
-      return 'Add priority and send to AD';
+    if (task.createdBy === 'user_2' && status === 'draft') {
+      return 'Add priority and send to Marwa';
     }
     if (status === 'approved_by_art_director') {
-      return 'No action needed — approved';
+      return 'No action needed - approved';
     }
   }
 
@@ -136,7 +128,7 @@ export function getNextActionLabel(task: Task, viewerRole: Role): string {
       return 'Review & Decide';
     }
     if (status === 'approved_by_art_director') {
-      return 'No action needed — you approved';
+      return 'No action needed - you approved';
     }
     if (status === 'changes_requested_by_art_director') {
       return 'Waiting for creator to resubmit';

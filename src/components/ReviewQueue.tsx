@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useAppStore } from '../lib/store';
 import { Task } from '../lib/types';
-import { getStatusInfo, getNextActionLabel, getTaskTypeLabel } from '../lib/taskUtils';
+import { getStatusInfo, getTaskTypeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
 import { Search } from 'lucide-react';
@@ -51,14 +51,14 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
   } as Record<string, string>;
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
+    <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
       <div className="mb-4">
-        <h2 className="text-3xl font-black text-slate-900 tracking-tight">{title}</h2>
+        <h2 className="text-2xl font-black tracking-tight text-slate-900 sm:text-3xl">{title}</h2>
       </div>
 
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap gap-4 items-end">
+      <div className="flex flex-wrap items-end gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         
-        <div className="flex flex-col gap-1.5 flex-[2] min-w-[250px]">
+        <div className="flex min-w-full flex-col gap-1.5 lg:min-w-[250px] lg:flex-[2]">
           <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Search</label>
           <div className="relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -73,7 +73,7 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
         </div>
 
         {currentUser.role !== 'team_member' && (
-          <div className="flex flex-col gap-1.5 flex-1 min-w-[150px]">
+          <div className="flex min-w-full flex-col gap-1.5 sm:min-w-[180px] sm:flex-1">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Creator</label>
             <CustomSelect 
               value={creatorFilter} 
@@ -83,7 +83,7 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
           </div>
         )}
 
-        <div className="flex flex-col gap-1.5 flex-1 min-w-[150px]">
+        <div className="flex min-w-full flex-col gap-1.5 sm:min-w-[180px] sm:flex-1">
           <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Task Type</label>
           <CustomSelect 
             value={typeFilter} 
@@ -94,8 +94,9 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
 
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
-        <table className="w-full text-left border-collapse">
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-x-auto">
+        <table className="min-w-[760px] w-full text-left border-collapse">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200 text-[10px] uppercase tracking-wider font-black text-slate-400">
               <th className="p-4 w-32">Asset</th>
@@ -114,7 +115,6 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
             {filteredTasks.map(task => {
               const statusInfo = getStatusInfo(task, currentUser.role);
               const creator = initialUsers.find(u => u.id === task.createdBy);
-              const isUrgent = task.priority === 'urgent' || task.priority === 'high';
               const version = task.versions.length > 0 ? task.versions[0].versionNumber : 1;
               const isDemo = task.environment === 'demo';
 
@@ -183,6 +183,7 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
             })}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );

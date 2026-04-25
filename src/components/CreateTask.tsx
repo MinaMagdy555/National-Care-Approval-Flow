@@ -93,9 +93,9 @@ export function CreateTask() {
   };
 
   return (
-    <div className="p-8 max-w-4xl mx-auto space-y-8">
+    <div className="mx-auto max-w-4xl space-y-8 px-4 py-6 sm:px-6 lg:px-8">
       <div>
-        <h2 className="text-3xl font-black text-slate-900 tracking-tight mb-2">Create New Task</h2>
+        <h2 className="mb-2 text-2xl font-black tracking-tight text-slate-900 sm:text-3xl">Create New Task</h2>
         <p className="text-slate-500 font-medium">Upload files and submit task for review.</p>
       </div>
 
@@ -107,7 +107,7 @@ export function CreateTask() {
         </div>
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm">
-          <form onSubmit={handleSubmit} className="p-8 space-y-6">
+          <form onSubmit={handleSubmit} className="space-y-6 p-4 sm:p-6 lg:p-8">
             <div className="space-y-4">
               <div>
                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Task Name *</label>
@@ -121,7 +121,7 @@ export function CreateTask() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="col-span-2">
                   <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Task Type *</label>
                   <select 
@@ -135,14 +135,14 @@ export function CreateTask() {
                      <option value="product_hero">Product Hero</option>
                      <option value="sales_card">Sales Card</option>
                      <option value="description_card">Description Card</option>
-                     <option value="quick_look_type">Quick Look (No AD)</option>
+                     <option value="quick_look_type">Quick Look (No Marwa)</option>
                   </select>
                 </div>
               </div>
             </div>
 
             {isReviewer && (
-              <div className="grid grid-cols-2 gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl">
+              <div className="grid grid-cols-1 gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
                  <div className="col-span-2 mb-1">
                    <h4 className="text-xs font-black text-slate-900 uppercase tracking-widest">Moderator Setup (Optional)</h4>
                  </div>
@@ -177,7 +177,7 @@ export function CreateTask() {
               <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Upload Files *</label>
               
               <div 
-                className="border-2 border-dashed border-slate-300 hover:border-indigo-500 bg-slate-50 hover:bg-indigo-50/50 rounded-2xl p-12 transition-colors cursor-pointer text-center group"
+                className="cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-6 text-center transition-colors group hover:border-indigo-500 hover:bg-indigo-50/50 sm:p-10 lg:p-12"
                 onClick={() => fileInputRef.current?.click()}
                 onDragOver={e => e.preventDefault()}
                 onDrop={handleFileDrop}
@@ -199,19 +199,19 @@ export function CreateTask() {
               {files.length > 0 && (
                 <div className="mt-4 space-y-2">
                   {files.map((file, i) => (
-                    <div key={i} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                      <div className="flex items-center gap-3">
+                    <div key={i} className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex min-w-0 items-center gap-3">
                         <div className="w-10 h-10 rounded-lg bg-white border border-slate-200 flex items-center justify-center">
                           {file.type.includes('image') ? <ImageIcon className="w-5 h-5 text-indigo-500"/> : 
                            file.type.includes('video') ? <FileVideo className="w-5 h-5 text-purple-500"/> :
                            <File className="w-5 h-5 text-slate-500"/>}
                         </div>
-                        <div className="flex flex-col">
-                          <span className="text-sm font-bold text-slate-900 truncate max-w-[200px]">{file.name}</span>
+                        <div className="flex min-w-0 flex-col">
+                          <span className="max-w-full truncate text-sm font-bold text-slate-900 sm:max-w-[220px]">{file.name}</span>
                           <span className="text-xs font-semibold text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
                         </div>
                       </div>
-                      <button type="button" onClick={() => removeFile(i)} className="p-2 text-slate-400 hover:text-rose-500 transition-colors">
+                      <button type="button" onClick={() => removeFile(i)} className="self-end p-2 text-slate-400 transition-colors hover:text-rose-500 sm:self-auto">
                         <X className="w-4 h-4" />
                       </button>
                     </div>
@@ -220,11 +220,11 @@ export function CreateTask() {
               )}
             </div>
 
-            <div className="pt-4 border-t border-slate-100 flex justify-end">
+            <div className="flex justify-end border-t border-slate-100 pt-4">
               <button 
                 type="submit"
                 disabled={!taskName || files.length === 0}
-                className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-black px-8 py-3 rounded-xl shadow-sm transition-colors"
+                className="w-full rounded-xl bg-indigo-600 px-8 py-3 font-black text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto"
               >
                 Submit Task
               </button>

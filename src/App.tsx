@@ -11,16 +11,24 @@ import { CreateTask } from './components/CreateTask';
 function AppContent() {
   const [currentView, setView] = useState('dashboard');
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const { tasks, currentUser, environment } = useAppStore();
 
   const handleOpenTask = (id: string) => {
     setActiveTaskId(id);
+    setIsSidebarOpen(false);
     setView('task_detail');
   };
 
   const handleBack = () => {
     setActiveTaskId(null);
     setView('dashboard');
+  };
+
+  const handleNavigate = (view: string) => {
+    setActiveTaskId(null);
+    setView(view);
+    setIsSidebarOpen(false);
   };
 
   const envTasks = tasks.filter(t => t.environment === environment);
@@ -32,18 +40,34 @@ function AppContent() {
 
     switch (currentView) {
       case 'dashboard':
-        return <Dashboard onOpenTask={handleOpenTask} />;
+        return <Dashboard onOpenTask={handleOpenTask} onNavigate={handleNavigate} />;
       case 'notifications':
         return <NotificationsList onOpenTask={handleOpenTask} />;
       case 'create_task':
         return <CreateTask />;
       case 'review_queue': {
-        const needsMod = envTasks.filter(t => ['waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsMod} title="Needs Moderator Action" />;
+        const needsFullReview = envTasks.filter(t => t.status === 'waiting_reviewer_full_review');
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsFullReview} title="Needs Full Review" />;
+      }
+      case 'quick_look_queue': {
+        const needsQuickLook = envTasks.filter(t => t.status === 'waiting_reviewer_quick_look');
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsQuickLook} title="Needs Quick Look" />;
       }
       case 'ad_queue': {
         const needsAd = envTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director'));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsAd} title="Needs AD Action" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsAd} title="Needs Marwa Action" />;
+      }
+      case 'waiting_for_mina': {
+        const waitingForMina = currentUser.role === 'team_member'
+          ? envTasks.filter(t => t.createdBy === currentUser.id && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status))
+          : envTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMina} title="Waiting for Mina" />;
+      }
+      case 'waiting_for_marwa': {
+        const waitingForMarwa = currentUser.role === 'team_member'
+          ? envTasks.filter(t => t.createdBy === currentUser.id && ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status))
+          : envTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMarwa} title="Waiting for Marwa" />;
       }
       case 'approved_by_me': {
         const approved = envTasks.filter(t => t.status === 'approved_by_art_director');
@@ -78,11 +102,16 @@ function AppContent() {
   };
 
   return (
-    <div className="flex h-[100dvh] w-full bg-[#f8fafc] text-slate-900 font-sans overflow-hidden">
-      <Sidebar currentView={activeTaskId ? 'task_detail' : currentView} setView={(v) => { setActiveTaskId(null); setView(v); }} />
-      <div className="flex-1 flex flex-col min-w-0 pl-64">
-        <TopBar />
-        <main className="flex-1 overflow-y-auto relative">
+    <div className="flex min-h-[100dvh] w-full bg-[#f8fafc] text-slate-900 font-sans md:overflow-hidden">
+      <Sidebar
+        currentView={activeTaskId ? 'task_detail' : currentView}
+        setView={handleNavigate}
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
+      />
+      <div className="flex min-h-[100dvh] flex-1 flex-col min-w-0 md:pl-64">
+        <TopBar onOpenSidebar={() => setIsSidebarOpen(true)} />
+        <main className="flex-1 overflow-y-auto relative min-w-0">
           {renderContent()}
         </main>
       </div>
