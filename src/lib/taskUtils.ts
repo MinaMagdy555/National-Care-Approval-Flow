@@ -3,12 +3,9 @@ import { Task, Role, Priority, TaskType, ReviewMode } from './types';
 export function getTaskTypeLabel(type: TaskType): string {
   switch (type) {
     case 'video': return 'Video';
-    case 'ai_packet': return 'AI Packet';
-    case 'packaging': return 'Packaging';
-    case 'product_hero': return 'Product Hero';
-    case 'sales_card': return 'Sales Card';
-    case 'description_card': return 'Description Card';
-    case 'quick_look_type': return 'Quick Look Asset';
+    case 'sales_material': return 'Sales Material';
+    case 'website_material': return 'Website Material';
+    case 'campaign': return 'Campaign';
     default: return 'Asset';
   }
 }

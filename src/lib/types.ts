@@ -5,12 +5,9 @@ export type Priority = 'low' | 'normal' | 'high' | 'urgent' | 'not_set';
 
 export type TaskType = 
   | 'video' 
-  | 'ai_packet' 
-  | 'packaging' 
-  | 'product_hero' 
-  | 'sales_card' 
-  | 'description_card' 
-  | 'quick_look_type';
+  | 'sales_material'
+  | 'website_material'
+  | 'campaign';
 
 export type TaskStatus = 
   | 'draft'

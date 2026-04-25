@@ -3,6 +3,12 @@ import { useAppStore } from '../lib/store';
 import { Upload, X, File, Image as ImageIcon, FileVideo, CheckCircle2 } from 'lucide-react';
 import { Task, ReviewMode, Priority, TaskType } from '../lib/types';
 import { initialUsers } from '../lib/mockData';
+import { CustomSelect } from './CustomSelect';
+
+const MAX_FILE_SIZE_MB = 200;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+const ALLOWED_FILE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'mp4', 'pdf'];
+const FORM_SELECT_BUTTON_CLASS = 'rounded-xl border-slate-300 px-4 py-3 text-sm font-bold text-slate-900 shadow-none hover:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500';
 
 export function CreateTask() {
   const { currentUser, environment, addTask, addNotification } = useAppStore();
@@ -11,26 +17,60 @@ export function CreateTask() {
   const [taskType, setTaskType] = useState<TaskType>('video');
   const [reviewMode, setReviewMode] = useState<ReviewMode>('full_review');
   const [files, setFiles] = useState<File[]>([]);
+  const [fileError, setFileError] = useState('');
   const [isSuccess, setIsSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const creatorOptions = initialUsers.filter(user => ['Mariam', 'Noreen', 'Yomna', 'Mina M. Bashir'].includes(user.name));
+  const creatorOptions = [
+    { value: 'user_1', label: 'Mina' },
+    { value: 'user_4', label: 'Mariam' },
+    { value: 'user_5', label: 'Noreen' },
+    { value: 'user_6', label: 'Yomna' },
+  ];
+  const taskTypeOptions = [
+    { value: 'video', label: 'Video' },
+    { value: 'sales_material', label: 'Sales Material' },
+    { value: 'website_material', label: 'Website Material' },
+    { value: 'campaign', label: 'Campaign' },
+  ];
+  const priorityOptions = [
+    { value: 'not_set', label: 'Not Set' },
+    { value: 'low', label: 'Low' },
+    { value: 'normal', label: 'Normal' },
+    { value: 'high', label: 'High' },
+    { value: 'urgent', label: 'Urgent' },
+  ];
 
   // If reviewer, they can set priority directly on creation if they want (though mostly they handle others)
   const isReviewer = currentUser.role === 'reviewer' || currentUser.role === 'admin';
   const [priority, setPriority] = useState<Priority>('not_set');
   const [deadline, setDeadline] = useState('');
 
+  const appendValidFiles = (incomingFiles: File[]) => {
+    const validFiles = incomingFiles.filter(file => {
+      const extension = file.name.split('.').pop()?.toLowerCase() || '';
+      return ALLOWED_FILE_EXTENSIONS.includes(extension) && file.size <= MAX_FILE_SIZE_BYTES;
+    });
+
+    const rejectedCount = incomingFiles.length - validFiles.length;
+    setFileError(rejectedCount > 0 ? `Only PNG, JPG, MP4, or PDF files up to ${MAX_FILE_SIZE_MB}MB are allowed.` : '');
+
+    if (validFiles.length > 0) {
+      setFiles(prev => [...prev, ...validFiles]);
+    }
+  };
+
   const handleFileDrop = (e: React.DragEvent) => {
     e.preventDefault();
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      setFiles(prev => [...prev, ...Array.from(e.dataTransfer.files)]);
+      appendValidFiles(Array.from(e.dataTransfer.files));
     }
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      setFiles(prev => [...prev, ...Array.from(e.target.files!)]);
+      appendValidFiles(Array.from(e.target.files));
     }
+    e.target.value = '';
   };
 
   const removeFile = (index: number) => {
@@ -91,6 +131,7 @@ export function CreateTask() {
       setTaskName('');
       setCreatedBy('');
       setFiles([]);
+      setFileError('');
       setPriority('not_set');
       setDeadline('');
     }, 2000);
@@ -128,35 +169,22 @@ export function CreateTask() {
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="col-span-2">
                   <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Task Creator *</label>
-                  <select
-                    required
+                  <CustomSelect
                     value={createdBy}
-                    onChange={e => setCreatedBy(e.target.value)}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white cursor-pointer appearance-none"
-                  >
-                    <option value="" disabled>Select who made the task</option>
-                    {creatorOptions.map(user => (
-                      <option key={user.id} value={user.id}>
-                        {user.name === 'Mina M. Bashir' ? 'Mina' : user.name}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setCreatedBy}
+                    options={creatorOptions}
+                    placeholder="Select who made the task"
+                    buttonClassName={FORM_SELECT_BUTTON_CLASS}
+                  />
                 </div>
                 <div className="col-span-2">
                   <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Task Type *</label>
-                  <select 
+                  <CustomSelect
                     value={taskType}
-                    onChange={e => setTaskType(e.target.value as TaskType)}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white cursor-pointer appearance-none"
-                  >
-                     <option value="video">Video</option>
-                     <option value="ai_packet">AI Packet</option>
-                     <option value="packaging">Packaging</option>
-                     <option value="product_hero">Product Hero</option>
-                     <option value="sales_card">Sales Card</option>
-                     <option value="description_card">Description Card</option>
-                     <option value="quick_look_type">Quick Look (No Marwa)</option>
-                  </select>
+                    onChange={value => setTaskType(value as TaskType)}
+                    options={taskTypeOptions}
+                    buttonClassName={FORM_SELECT_BUTTON_CLASS}
+                  />
                 </div>
               </div>
             </div>
@@ -168,17 +196,12 @@ export function CreateTask() {
                  </div>
                  <div>
                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Priority</label>
-                    <select 
+                    <CustomSelect
                       value={priority}
-                      onChange={e => setPriority(e.target.value as Priority)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white cursor-pointer"
-                    >
-                       <option value="not_set">Not Set</option>
-                       <option value="low">Low</option>
-                       <option value="normal">Normal</option>
-                       <option value="high">High</option>
-                       <option value="urgent">Urgent</option>
-                    </select>
+                      onChange={value => setPriority(value as Priority)}
+                      options={priorityOptions}
+                      buttonClassName="rounded-lg border-slate-300 px-3 py-2 text-sm font-bold text-slate-900 shadow-none hover:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    />
                  </div>
                  <div>
                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Deadline</label>
@@ -206,15 +229,20 @@ export function CreateTask() {
                   <Upload className="w-6 h-6 text-indigo-500" />
                 </div>
                 <p className="text-sm font-bold text-slate-900 mb-1">Click to upload or drag and drop</p>
-                <p className="text-xs font-semibold text-slate-500">SVG, PNG, JPG, MP4 or PDF (max. 50MB)</p>
+                <p className="text-xs font-semibold text-slate-500">PNG, JPG, MP4 or PDF (max. 200MB)</p>
                 <input 
                   type="file" 
                   ref={fileInputRef} 
                   className="hidden" 
                   multiple 
+                  accept=".png,.jpg,.jpeg,.mp4,.pdf,image/png,image/jpeg,video/mp4,application/pdf"
                   onChange={handleFileSelect}
                 />
               </div>
+
+              {fileError && (
+                <p className="mt-3 text-sm font-bold text-rose-600">{fileError}</p>
+              )}
 
               {files.length > 0 && (
                 <div className="mt-4 space-y-2">

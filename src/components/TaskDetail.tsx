@@ -5,12 +5,24 @@ import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { ArrowLeft, Check, X, AlertCircle, Clock } from 'lucide-react';
+import { CustomSelect } from './CustomSelect';
+
+const reasonOptions = [
+  { value: 'spelling', label: 'Spelling/content issue' },
+  { value: 'visual', label: 'Visual quality issue' },
+  { value: 'brand', label: 'Brand mismatch' },
+  { value: 'export', label: 'Technical export issue' },
+  { value: 'info', label: 'Wrong info / price' },
+  { value: 'other', label: 'Other' },
+];
 
 export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => void }) {
   const { tasks, currentUser, updateTaskStatus, updateTaskPriority } = useAppStore();
   const task = tasks.find(t => t.id === taskId);
   
   const [modal, setModal] = useState<'request_changes' | 'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
+  const [changeReason, setChangeReason] = useState('');
+  const [adRejectReason, setAdRejectReason] = useState('');
 
   if (!task) return <div>Task not found</div>;
 
@@ -34,14 +46,18 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
   const handleRequestChanges = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!changeReason) return;
     // In real app, save the comment
     updateTaskStatus(task.id, 'changes_requested_by_reviewer', 'team_member');
+    setChangeReason('');
     setModal(null);
   };
 
   const handleADReject = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!adRejectReason) return;
     updateTaskStatus(task.id, 'changes_requested_by_art_director', 'team_member');
+    setAdRejectReason('');
     setModal(null);
   };
 
@@ -284,22 +300,20 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             <form onSubmit={handleRequestChanges} className="p-6 space-y-5">
               <div>
                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Reason category *</label>
-                <select required className="w-full border border-slate-300 rounded-lg px-4 py-2.5 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
-                  <option value="">Select a reason</option>
-                  <option value="spelling">Spelling/content issue</option>
-                  <option value="visual">Visual quality issue</option>
-                  <option value="brand">Brand mismatch</option>
-                  <option value="export">Technical export issue</option>
-                  <option value="info">Wrong info / price</option>
-                  <option value="other">Other</option>
-                </select>
+                <CustomSelect
+                  value={changeReason}
+                  onChange={setChangeReason}
+                  options={reasonOptions}
+                  placeholder="Select a reason"
+                  buttonClassName="rounded-lg border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-900 shadow-none hover:bg-white focus:ring-2 focus:ring-indigo-500"
+                />
               </div>
               <div>
                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Comment *</label>
                 <textarea name="comment" required rows={3} placeholder="What needs to be fixed?" className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"></textarea>
               </div>
               <div className="pt-2">
-                <button type="submit" className="w-full bg-slate-900 hover:bg-black text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors">Request Changes</button>
+                <button type="submit" disabled={!changeReason} className="w-full bg-slate-900 hover:bg-black text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">Request Changes</button>
               </div>
             </form>
           </div>
@@ -316,21 +330,20 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             <form onSubmit={handleADReject} className="p-6 space-y-5">
               <div>
                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Reason category *</label>
-                <select required className="w-full border border-slate-300 rounded-lg px-4 py-2.5 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-rose-500 outline-none bg-white">
-                  <option value="">Select a reason</option>
-                  <option value="spelling">Spelling/content issue</option>
-                  <option value="visual">Visual quality issue</option>
-                  <option value="brand">Brand mismatch</option>
-                  <option value="export">Technical export issue</option>
-                  <option value="other">Other</option>
-                </select>
+                <CustomSelect
+                  value={adRejectReason}
+                  onChange={setAdRejectReason}
+                  options={reasonOptions.filter(option => option.value !== 'info')}
+                  placeholder="Select a reason"
+                  buttonClassName="rounded-lg border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-900 shadow-none hover:bg-white focus:ring-2 focus:ring-rose-500"
+                />
               </div>
               <div>
                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Comment *</label>
                 <textarea name="comment" required rows={3} placeholder="Provide feedback for rejection..." className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-rose-500 outline-none"></textarea>
               </div>
               <div className="pt-2">
-                <button type="submit" className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors">Reject and Return</button>
+                <button type="submit" disabled={!adRejectReason} className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">Reject and Return</button>
               </div>
             </form>
           </div>

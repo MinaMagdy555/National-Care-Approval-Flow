@@ -12,10 +12,13 @@ interface CustomSelectProps {
   options: Option[];
   value: string;
   onChange: (value: string) => void;
+  placeholder?: string;
   className?: string;
+  buttonClassName?: string;
+  menuClassName?: string;
 }
 
-export function CustomSelect({ options, value, onChange, className }: CustomSelectProps) {
+export function CustomSelect({ options, value, onChange, placeholder, className, buttonClassName, menuClassName }: CustomSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -80,9 +83,14 @@ export function CustomSelect({ options, value, onChange, className }: CustomSele
         ref={buttonRef}
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between gap-2 border border-slate-200 bg-white hover:bg-slate-50 text-sm font-bold rounded-lg px-3 py-1.5 outline-none text-slate-800 transition-colors shadow-sm"
+        className={cn(
+          "w-full flex items-center justify-between gap-2 border border-slate-200 bg-white hover:bg-slate-50 text-sm font-bold rounded-lg px-3 py-1.5 outline-none text-slate-800 transition-colors shadow-sm",
+          buttonClassName
+        )}
       >
-        <span className="truncate">{selectedOption?.label || value}</span>
+        <span className={cn("truncate", !selectedOption && placeholder && "text-slate-400")}>
+          {selectedOption?.label || placeholder || value}
+        </span>
         <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
       </button>
 
@@ -91,7 +99,10 @@ export function CustomSelect({ options, value, onChange, className }: CustomSele
           <div
             ref={menuRef}
             style={menuStyle}
-            className="z-[9999] bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden py-1 animate-in fade-in slide-in-from-top-2 duration-100"
+            className={cn(
+              "z-[9999] bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden py-1 animate-in fade-in slide-in-from-top-2 duration-100",
+              menuClassName
+            )}
           >
             {options.map((option) => (
                <button
