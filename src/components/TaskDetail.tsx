@@ -41,7 +41,9 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [isResubmitting, setIsResubmitting] = useState(false);
   const resubmitInputRef = useRef<HTMLInputElement>(null);
 
-  if (!task) return <div>Task not found</div>;
+  const canViewFullWorkspace = INTERNAL_REVIEW_VIEWERS.includes(currentUser.id);
+
+  if (!task || (!canViewFullWorkspace && task.createdBy !== currentUser.id)) return <div>Task not found</div>;
 
   const statusInfo = getStatusInfo(task, currentUser.role);
   const nextAction = getNextActionLabel(task, currentUser.role);

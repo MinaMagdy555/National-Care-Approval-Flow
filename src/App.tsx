@@ -8,6 +8,8 @@ import { ReviewQueue } from './components/ReviewQueue';
 import { NotificationsList } from './components/Notifications';
 import { CreateTask } from './components/CreateTask';
 
+const FULL_WORKSPACE_VIEWERS = ['user_1', 'user_2', 'user_3'];
+
 function AppContent() {
   const [currentView, setView] = useState('dashboard');
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -31,7 +33,9 @@ function AppContent() {
     setIsSidebarOpen(false);
   };
 
+  const canViewFullWorkspace = FULL_WORKSPACE_VIEWERS.includes(currentUser.id);
   const envTasks = tasks.filter(t => t.environment === environment);
+  const visibleEnvTasks = canViewFullWorkspace ? envTasks : envTasks.filter(t => t.createdBy === currentUser.id);
 
   const renderContent = () => {
     if (activeTaskId) {
@@ -46,49 +50,45 @@ function AppContent() {
       case 'create_task':
         return <CreateTask />;
       case 'review_queue': {
-        const needsFullReview = envTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status));
+        const needsFullReview = visibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsFullReview} title="Needs Full Review" />;
       }
       case 'quick_look_queue': {
-        const needsQuickLook = envTasks.filter(t => t.status === 'waiting_reviewer_quick_look');
+        const needsQuickLook = visibleEnvTasks.filter(t => t.status === 'waiting_reviewer_quick_look');
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsQuickLook} title="Needs Quick Look" />;
       }
       case 'ad_queue': {
-        const needsAd = envTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director'));
+        const needsAd = visibleEnvTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director'));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsAd} title="Needs Marwa Action" />;
       }
       case 'waiting_for_mina': {
-        const waitingForMina = currentUser.role === 'team_member'
-          ? envTasks.filter(t => t.createdBy === currentUser.id && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status))
-          : envTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
+        const waitingForMina = visibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMina} title="Waiting for Mina" />;
       }
       case 'waiting_for_marwa': {
-        const waitingForMarwa = currentUser.role === 'team_member'
-          ? envTasks.filter(t => t.createdBy === currentUser.id && ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status))
-          : envTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
+        const waitingForMarwa = visibleEnvTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMarwa} title="Waiting for Marwa" />;
       }
       case 'approved_by_me': {
-        const approved = envTasks.filter(t => t.status === 'approved_by_art_director');
+        const approved = visibleEnvTasks.filter(t => t.status === 'approved_by_art_director');
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={approved} title="Approved Tasks" />;
       }
       case 'rejected_reopened': {
         const rejected = currentUser.role === 'art_director'
-          ? envTasks.filter(t => t.status === 'changes_requested_by_art_director')
-          : envTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
+          ? visibleEnvTasks.filter(t => t.status === 'changes_requested_by_art_director')
+          : visibleEnvTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={rejected} title="Rejected / Returned" />;
       }
       case 'all_tasks': {
-        let visibleTasks = envTasks;
+        let visibleTasks = visibleEnvTasks;
         if (currentUser.role === 'art_director') {
           // exclude tasks that haven't reached AD yet
-          visibleTasks = envTasks.filter(t => !['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'changes_requested_by_reviewer', 'reviewer_approved'].includes(t.status) || t.reviewMode === 'direct_to_ad');
+          visibleTasks = visibleEnvTasks.filter(t => !['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'changes_requested_by_reviewer', 'reviewer_approved'].includes(t.status) || t.reviewMode === 'direct_to_ad');
         }
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={visibleTasks} title="All Tasks" />;
       }
       case 'my_tasks': {
-        const myTasks = envTasks.filter(t => t.createdBy === currentUser.id);
+        const myTasks = visibleEnvTasks.filter(t => t.createdBy === currentUser.id);
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={myTasks} title="My Tasks" />;
       }
       default:
