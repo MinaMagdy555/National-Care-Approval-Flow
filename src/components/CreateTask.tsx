@@ -20,6 +20,8 @@ export function CreateTask() {
   const [fileError, setFileError] = useState('');
   const [isSuccess, setIsSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const canChooseCreator = currentUser.id === 'user_1';
+  const selectedCreatorId = canChooseCreator ? createdBy : currentUser.id;
   const creatorOptions = [
     { value: 'user_1', label: 'Mina' },
     { value: 'user_4', label: 'Mariam' },
@@ -79,10 +81,10 @@ export function CreateTask() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!taskName || !createdBy || files.length === 0) return;
+    if (!taskName || !selectedCreatorId || files.length === 0) return;
 
     const reviewer = initialUsers.find(u => u.role === 'reviewer');
-    const creator = initialUsers.find(u => u.id === createdBy);
+    const creator = initialUsers.find(u => u.id === selectedCreatorId);
     const newTaskId = Math.random().toString(36).substring(7);
 
     const newTask: Task = {
@@ -92,8 +94,8 @@ export function CreateTask() {
       taskType,
       reviewMode,
       environment,
-      createdBy,
-      handledBy: [createdBy],
+      createdBy: selectedCreatorId,
+      handledBy: [selectedCreatorId],
       status: 'submitted',
       currentOwnerRole: 'reviewer',
       currentOwnerUserId: null,
@@ -103,7 +105,7 @@ export function CreateTask() {
         {
           id: Math.random().toString(36).substring(7),
           versionNumber: 1,
-          submittedBy: createdBy,
+          submittedBy: selectedCreatorId,
           fileUrl: URL.createObjectURL(files[0]),
           createdAt: new Date().toISOString(),
           submissionNote: "Initial submission",
@@ -167,16 +169,18 @@ export function CreateTask() {
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="col-span-2">
-                  <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Task Creator *</label>
-                  <CustomSelect
-                    value={createdBy}
-                    onChange={setCreatedBy}
-                    options={creatorOptions}
-                    placeholder="Select who made the task"
-                    buttonClassName={FORM_SELECT_BUTTON_CLASS}
-                  />
-                </div>
+                {canChooseCreator && (
+                  <div className="col-span-2">
+                    <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Task Creator *</label>
+                    <CustomSelect
+                      value={createdBy}
+                      onChange={setCreatedBy}
+                      options={creatorOptions}
+                      placeholder="Select who made the task"
+                      buttonClassName={FORM_SELECT_BUTTON_CLASS}
+                    />
+                  </div>
+                )}
                 <div className="col-span-2">
                   <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Task Type *</label>
                   <CustomSelect
@@ -271,7 +275,7 @@ export function CreateTask() {
             <div className="flex justify-end border-t border-slate-100 pt-4">
               <button 
                 type="submit"
-                disabled={!taskName || !createdBy || files.length === 0}
+                disabled={!taskName || !selectedCreatorId || files.length === 0}
                 className="w-full rounded-xl bg-indigo-600 px-8 py-3 font-black text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto"
               >
                 Submit Task
