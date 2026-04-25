@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
-import { User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment } from './types';
+import { User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion } from './types';
 import { initialUsers, initialTasks } from './mockData';
 import { loadAppState, saveAppState } from './localDb';
 import { isSupabaseConfigured } from './supabaseClient';
@@ -68,6 +68,7 @@ interface AppContextType extends AppState {
   updateTaskStatus: (taskId: string, newStatus: TaskStatus, newOwnerRole: Role | null) => void;
   updateTaskPriority: (taskId: string, priority: Priority, deadline: string | null) => void;
   addTaskComment: (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => void;
+  addTaskVersion: (taskId: string, version: TaskVersion) => void;
   addTask: (task: Task) => void;
   addNotification: (notification: Omit<Notification, 'id' | 'createdAt' | 'read'>) => void;
   markNotificationAsRead: (id: string) => void;
@@ -187,6 +188,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTasks(prev => [normalizeMinaCreatedTask(task), ...prev]);
   };
 
+  const addTaskVersion = (taskId: string, version: TaskVersion) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    const sendToMarwa = task.createdBy === MINA_ID || task.status === 'changes_requested_by_art_director' || task.reviewMode === 'direct_to_ad';
+    const nextStatus: TaskStatus = sendToMarwa
+      ? 'sent_to_art_director'
+      : task.reviewMode === 'quick_look'
+        ? 'waiting_reviewer_quick_look'
+        : 'waiting_reviewer_full_review';
+    const nextOwnerRole: Role = sendToMarwa ? 'art_director' : 'reviewer';
+    const nextHandlerId = sendToMarwa ? MARWA_ID : MINA_ID;
+    const creatorName = usersObj[task.createdBy]?.name || 'Someone';
+    const recipients = (sendToMarwa ? [MARWA_ID, DINA_ID, MINA_ID] : [MINA_ID, DINA_ID]).filter(userId => userId !== task.createdBy);
+
+    addNotifications(recipients, taskId, `${creatorName} uploaded V${version.versionNumber} for "${task.name}".`);
+
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+
+      const thumbnailFile = version.files?.find(file => file.type.startsWith('image/'));
+
+      return {
+        ...t,
+        versions: [version, ...t.versions],
+        handledBy: Array.from(new Set([...t.handledBy, version.submittedBy, nextHandlerId])),
+        status: nextStatus,
+        currentOwnerRole: nextOwnerRole,
+        currentOwnerUserId: null,
+        thumbnailUrl: thumbnailFile?.url || '',
+        updatedAt: new Date().toISOString(),
+      };
+    }));
+  };
+
   const addTaskComment = (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => {
     setTasks(prev => prev.map(task => {
       if (task.id !== taskId) return task;
@@ -217,6 +253,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTaskStatus,
       updateTaskPriority,
       addTaskComment,
+      addTaskVersion,
       addTask,
       addNotification,
       markNotificationAsRead,

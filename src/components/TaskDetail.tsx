@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useAppStore } from '../lib/store';
 import { Priority, UploadedTaskFile } from '../lib/types';
 import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
-import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus } from 'lucide-react';
+import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, File as FileIcon } from 'lucide-react';
 import { FilePreview, getFileKind, getPdfPreviewUrl, getTaskFiles } from './FilePreview';
+import { uploadTaskFiles } from '../lib/supabaseDb';
 
 type ReviewNoteSection = {
   id: string;
@@ -14,8 +15,12 @@ type ReviewNoteSection = {
   imageUrl?: string;
 };
 
+const MAX_FILE_SIZE_MB = 200;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+const ALLOWED_FILE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'mp4', 'pdf'];
+
 export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => void }) {
-  const { tasks, currentUser, updateTaskStatus, updateTaskPriority, addTaskComment } = useAppStore();
+  const { tasks, currentUser, updateTaskStatus, updateTaskPriority, addTaskComment, addTaskVersion } = useAppStore();
   const task = tasks.find(t => t.id === taskId);
   
   const [modal, setModal] = useState<'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
@@ -24,6 +29,11 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [fullscreenPdf, setFullscreenPdf] = useState<UploadedTaskFile | null>(null);
   const [reviewNotes, setReviewNotes] = useState<ReviewNoteSection[]>([{ id: 'note_1', note: '' }]);
   const [adRejectComment, setAdRejectComment] = useState('');
+  const [resubmitFiles, setResubmitFiles] = useState<File[]>([]);
+  const [resubmitNote, setResubmitNote] = useState('');
+  const [resubmitError, setResubmitError] = useState('');
+  const [isResubmitting, setIsResubmitting] = useState(false);
+  const resubmitInputRef = useRef<HTMLInputElement>(null);
 
   if (!task) return <div>Task not found</div>;
 
@@ -38,6 +48,60 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const isDetailedReviewType = task.taskType === 'ai_packet' || task.taskType === 'video';
   const isSelfCreatedTask = task.createdBy === currentUser.id;
   const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
+  const canResubmitVersion = isSelfCreatedTask && ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(task.status);
+
+  const appendResubmitFiles = (incomingFiles: File[]) => {
+    const validFiles = incomingFiles.filter(file => {
+      const extension = file.name.split('.').pop()?.toLowerCase() || '';
+      return ALLOWED_FILE_EXTENSIONS.includes(extension) && file.size <= MAX_FILE_SIZE_BYTES;
+    });
+
+    const rejectedCount = incomingFiles.length - validFiles.length;
+    setResubmitError(rejectedCount > 0 ? `Only PNG, JPG, MP4, or PDF files up to ${MAX_FILE_SIZE_MB}MB are allowed.` : '');
+
+    if (validFiles.length > 0) {
+      setResubmitFiles(prev => [...prev, ...validFiles]);
+    }
+  };
+
+  const handleResubmitVersion = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (resubmitFiles.length === 0 || isResubmitting) return;
+
+    setIsResubmitting(true);
+    setResubmitError('');
+
+    const nextVersionNumber = Math.max(0, ...task.versions.map(version => version.versionNumber)) + 1;
+    const localFiles: UploadedTaskFile[] = resubmitFiles.map(file => ({
+      id: Math.random().toString(36).substring(7),
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      blob: file,
+      url: URL.createObjectURL(file),
+    }));
+
+    try {
+      const uploadedFiles = await uploadTaskFiles(task.id, localFiles);
+      addTaskVersion(task.id, {
+        id: Math.random().toString(36).substring(7),
+        versionNumber: nextVersionNumber,
+        submittedBy: currentUser.id,
+        submissionNote: resubmitNote.trim() || `Resubmitted as V${nextVersionNumber}`,
+        fileUrl: uploadedFiles[0].url,
+        files: uploadedFiles,
+        createdAt: new Date().toISOString(),
+      });
+      setSelectedFileIndex(0);
+      setResubmitFiles([]);
+      setResubmitNote('');
+    } catch (error) {
+      console.error('Failed to upload revised task files', error);
+      setResubmitError('Could not upload the revised files. Please try again.');
+    } finally {
+      setIsResubmitting(false);
+    }
+  };
 
   const addReviewNoteSection = () => {
     setReviewNotes(prev => [...prev, { id: Math.random().toString(36).substring(7), note: '' }]);
@@ -282,6 +346,85 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
         {/* Actions Section */}
         <div className="flex flex-col gap-3 border-b border-slate-200 bg-white p-4 sm:p-6">
+          {canResubmitVersion && (
+            <form onSubmit={handleResubmitVersion} className="space-y-4 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4">
+              <div>
+                <h3 className="text-sm font-black text-indigo-950">Upload New Version</h3>
+                <p className="mt-1 text-xs font-semibold text-indigo-800/70">
+                  Add the edited files here. This keeps the same task and creates V{Math.max(0, ...task.versions.map(version => version.versionNumber)) + 1}.
+                </p>
+              </div>
+
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => resubmitInputRef.current?.click()}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' || event.key === ' ') resubmitInputRef.current?.click();
+                }}
+                onDragOver={event => event.preventDefault()}
+                onDrop={event => {
+                  event.preventDefault();
+                  appendResubmitFiles(Array.from(event.dataTransfer.files || []));
+                }}
+                className="cursor-pointer rounded-xl border-2 border-dashed border-indigo-200 bg-white p-5 text-center transition-colors hover:border-indigo-500 hover:bg-indigo-50"
+              >
+                <Upload className="mx-auto mb-2 h-6 w-6 text-indigo-500" />
+                <p className="text-sm font-black text-slate-900">Upload revised files</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">PNG, JPG, MP4 or PDF (max. 200MB)</p>
+                <input
+                  ref={resubmitInputRef}
+                  type="file"
+                  multiple
+                  accept=".png,.jpg,.jpeg,.mp4,.pdf,image/png,image/jpeg,video/mp4,application/pdf"
+                  className="hidden"
+                  onChange={event => {
+                    appendResubmitFiles(Array.from(event.target.files || []));
+                    event.target.value = '';
+                  }}
+                />
+              </div>
+
+              {resubmitFiles.length > 0 && (
+                <div className="space-y-2">
+                  {resubmitFiles.map((file, index) => (
+                    <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <FileIcon className="h-4 w-4 shrink-0 text-indigo-500" />
+                        <span className="truncate text-xs font-bold text-slate-800">{file.name}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setResubmitFiles(prev => prev.filter((_, fileIndex) => fileIndex !== index))}
+                        className="rounded-md p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                        aria-label={`Remove ${file.name}`}
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <textarea
+                rows={3}
+                value={resubmitNote}
+                onChange={event => setResubmitNote(event.target.value)}
+                placeholder="Optional note for this version"
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+              />
+
+              {resubmitError && <p className="text-sm font-bold text-rose-600">{resubmitError}</p>}
+
+              <button
+                type="submit"
+                disabled={resubmitFiles.length === 0 || isResubmitting}
+                className="w-full rounded-xl bg-indigo-600 px-4 py-3 font-black text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                {isResubmitting ? 'Uploading...' : `Submit V${Math.max(0, ...task.versions.map(version => version.versionNumber)) + 1}`}
+              </button>
+            </form>
+          )}
           
           {currentUser.role === 'reviewer' && isReviewerActionable && (
             <>
