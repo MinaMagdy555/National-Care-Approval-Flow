@@ -74,7 +74,9 @@ function AppContent() {
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={approved} title="Approved Tasks" />;
       }
       case 'rejected_reopened': {
-        const rejected = envTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
+        const rejected = currentUser.role === 'art_director'
+          ? envTasks.filter(t => t.status === 'changes_requested_by_art_director')
+          : envTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={rejected} title="Rejected / Returned" />;
       }
       case 'all_tasks': {

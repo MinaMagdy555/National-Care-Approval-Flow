@@ -64,6 +64,22 @@ export interface Notification {
   createdAt: string;
 }
 
+export interface TaskCommentSection {
+  id: string;
+  note: string;
+  imageName?: string;
+  imageUrl?: string;
+}
+
+export interface TaskComment {
+  id: string;
+  authorId: string;
+  action: 'review_note' | 'request_edits' | 'sent_to_marwa' | 'marwa_rejection';
+  message?: string;
+  sections: TaskCommentSection[];
+  createdAt: string;
+}
+
 export interface Task {
   id: string;
   code: string;
@@ -79,6 +95,7 @@ export interface Task {
   priority: Priority;
   deadlineText: string | null;
   versions: TaskVersion[];
+  comments?: TaskComment[];
   thumbnailUrl: string;
   createdAt: string;
   updatedAt: string;

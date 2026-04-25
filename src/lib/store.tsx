@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
-import { User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification } from './types';
+import { User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment } from './types';
 import { initialUsers, initialTasks } from './mockData';
 import { loadAppState, saveAppState } from './localDb';
 import { isSupabaseConfigured } from './supabaseClient';
@@ -51,6 +51,7 @@ interface AppContextType extends AppState {
   setEnvironment: (env: Environment) => void;
   updateTaskStatus: (taskId: string, newStatus: TaskStatus, newOwnerRole: Role | null) => void;
   updateTaskPriority: (taskId: string, priority: Priority, deadline: string | null) => void;
+  addTaskComment: (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => void;
   addTask: (task: Task) => void;
   addNotification: (notification: Omit<Notification, 'id' | 'createdAt' | 'read'>) => void;
   markNotificationAsRead: (id: string) => void;
@@ -141,7 +142,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (newStatus === 'approved_by_art_director' && task.status !== newStatus) {
         addNotifications([DINA_ID, MINA_ID, task.createdBy], taskId, `Marwa approved "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_reviewer' && task.status !== newStatus) {
-        addNotifications([MARWA_ID, DINA_ID], taskId, `Mina requested changes on "${task.name}".`);
+        addNotifications([MARWA_ID, DINA_ID, task.createdBy], taskId, `Mina requested changes on "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_art_director' && task.status !== newStatus) {
         addNotifications([DINA_ID, MINA_ID, task.createdBy], taskId, `Marwa rejected "${task.name}" and requested changes.`);
       } else if ((newStatus === 'reviewer_approved' || newStatus === 'sent_to_art_director') && task.status !== newStatus) {
@@ -170,6 +171,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTasks(prev => [task, ...prev]);
   };
 
+  const addTaskComment = (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => {
+    setTasks(prev => prev.map(task => {
+      if (task.id !== taskId) return task;
+
+      const newComment: TaskComment = {
+        ...comment,
+        id: Math.random().toString(36).substring(7),
+        createdAt: new Date().toISOString(),
+      };
+
+      return {
+        ...task,
+        comments: [...(task.comments || []), newComment],
+        updatedAt: new Date().toISOString(),
+      };
+    }));
+  };
+
   return (
     <AppContext.Provider value={{
       currentUser,
@@ -181,6 +200,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setEnvironment,
       updateTaskStatus,
       updateTaskPriority,
+      addTaskComment,
       addTask,
       addNotification,
       markNotificationAsRead,

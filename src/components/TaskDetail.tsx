@@ -5,17 +5,7 @@ import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus } from 'lucide-react';
-import { CustomSelect } from './CustomSelect';
 import { FilePreview, getFileKind, getTaskFiles } from './FilePreview';
-
-const reasonOptions = [
-  { value: 'spelling', label: 'Spelling/content issue' },
-  { value: 'visual', label: 'Visual quality issue' },
-  { value: 'brand', label: 'Brand mismatch' },
-  { value: 'export', label: 'Technical export issue' },
-  { value: 'info', label: 'Wrong info / price' },
-  { value: 'other', label: 'Other' },
-];
 
 type ReviewNoteSection = {
   id: string;
@@ -25,15 +15,14 @@ type ReviewNoteSection = {
 };
 
 export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => void }) {
-  const { tasks, currentUser, updateTaskStatus, updateTaskPriority } = useAppStore();
+  const { tasks, currentUser, updateTaskStatus, updateTaskPriority, addTaskComment } = useAppStore();
   const task = tasks.find(t => t.id === taskId);
   
-  const [modal, setModal] = useState<'request_changes' | 'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
-  const [changeReason, setChangeReason] = useState('');
-  const [adRejectReason, setAdRejectReason] = useState('');
+  const [modal, setModal] = useState<'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [reviewNotes, setReviewNotes] = useState<ReviewNoteSection[]>([{ id: 'note_1', note: '' }]);
+  const [adRejectComment, setAdRejectComment] = useState('');
 
   if (!task) return <div>Task not found</div>;
 
@@ -58,11 +47,23 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
   const updateReviewNoteImage = (id: string, file?: File) => {
     if (!file) return;
-    setReviewNotes(prev => prev.map(section => section.id === id ? {
-      ...section,
-      imageName: file.name,
-      imageUrl: URL.createObjectURL(file),
-    } : section));
+    const reader = new FileReader();
+    reader.onload = () => {
+      setReviewNotes(prev => prev.map(section => section.id === id ? {
+        ...section,
+        imageName: file.name,
+        imageUrl: typeof reader.result === 'string' ? reader.result : undefined,
+      } : section));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const getFilledReviewSections = () => reviewNotes
+    .filter(section => section.note.trim() || section.imageUrl)
+    .map(section => ({ ...section, note: section.note.trim() }));
+
+  const resetReviewNotes = () => {
+    setReviewNotes([{ id: Math.random().toString(36).substring(7), note: '' }]);
   };
 
   const handleSendToAD = (e: React.FormEvent) => {
@@ -70,26 +71,49 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     const formData = new FormData(e.target as HTMLFormElement);
     const priority = formData.get('priority') as Priority;
     const deadline = formData.get('deadline') as string;
+    const note = (formData.get('note') as string)?.trim();
+    const sections = getFilledReviewSections();
+
+    if (note || sections.length > 0) {
+      addTaskComment(task.id, {
+        authorId: currentUser.id,
+        action: 'sent_to_marwa',
+        message: note,
+        sections,
+      });
+    }
     
     updateTaskPriority(task.id, priority, deadline);
     updateTaskStatus(task.id, 'sent_to_art_director', 'art_director');
+    resetReviewNotes();
     setModal(null);
   };
 
   const handleRequestChanges = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!changeReason) return;
-    // In real app, save the comment
+    const sections = getFilledReviewSections();
+    if (sections.length === 0) return;
+    addTaskComment(task.id, {
+      authorId: currentUser.id,
+      action: 'request_edits',
+      sections,
+    });
     updateTaskStatus(task.id, 'changes_requested_by_reviewer', 'team_member');
-    setChangeReason('');
-    setModal(null);
+    resetReviewNotes();
   };
 
   const handleADReject = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!adRejectReason) return;
+    const message = adRejectComment.trim();
+    if (!message) return;
+    addTaskComment(task.id, {
+      authorId: currentUser.id,
+      action: 'marwa_rejection',
+      message,
+      sections: [],
+    });
     updateTaskStatus(task.id, 'changes_requested_by_art_director', 'team_member');
-    setAdRejectReason('');
+    setAdRejectComment('');
     setModal(null);
   };
 
@@ -259,12 +283,20 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                  task.status === 'waiting_reviewer_quick_look' ? 'Quick Look Done & Send to Marwa' : 'Send to Marwa'}
               </button>
               {isDetailedReviewType && task.status !== 'draft' && (
-                <button 
-                  onClick={() => setModal('request_changes')}
-                  className="w-full bg-white hover:bg-slate-50 text-slate-700 font-bold py-3 px-4 rounded-xl border border-slate-200 shadow-sm transition-all focus:ring-4 focus:ring-slate-100"
-                >
-                  Request Changes
-                </button>
+                <form onSubmit={handleRequestChanges} className="space-y-3 rounded-2xl border border-rose-100 bg-rose-50/40 p-3">
+                  <div>
+                    <h3 className="text-sm font-black text-rose-900">Request Edits</h3>
+                    <p className="mt-1 text-xs font-semibold text-rose-700/70">Add notes and optional screens for what needs editing.</p>
+                  </div>
+                  {renderReviewNotes()}
+                  <button 
+                    type="submit"
+                    disabled={getFilledReviewSections().length === 0}
+                    className="w-full rounded-xl bg-slate-900 px-4 py-3 font-black text-white shadow-sm transition-colors hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    Request Edits
+                  </button>
+                </form>
               )}
             </>
           )}
@@ -312,7 +344,6 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
         </div>
 
-        {/* Versions & Comments (Stubbed for now) */}
         <div className="flex-1 bg-slate-50 p-4 sm:p-6">
           <h3 className="text-[11px] font-black text-slate-400 mb-4 uppercase tracking-wider flex items-center gap-2"><Clock className="w-4 h-4 text-slate-400"/> VERSION HISTORY</h3>
           <div className="space-y-4 relative before:absolute before:inset-0 before:ml-2 md:before:mx-auto before:-translate-x-px md:before:translate-x-0 before:h-full before:w-[2px] before:bg-slate-200">
@@ -329,6 +360,47 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               </div>
             ))}
           </div>
+
+          {(task.comments || []).length > 0 && (
+            <div className="mt-6 border-t border-slate-200 pt-5">
+              <h3 className="mb-4 text-[11px] font-black uppercase tracking-wider text-slate-400">Comments</h3>
+              <div className="space-y-3">
+                {(task.comments || []).map(comment => {
+                  const author = initialUsers.find(user => user.id === comment.authorId);
+                  return (
+                    <div key={comment.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                      <div className="mb-3 flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-black text-slate-900">{author?.name || 'Unknown'}</p>
+                          <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                            {comment.action.replaceAll('_', ' ')}
+                          </p>
+                        </div>
+                        <span className="text-[10px] font-bold text-slate-400">{new Date(comment.createdAt).toLocaleString()}</span>
+                      </div>
+
+                      {comment.message && <p className="mb-3 text-sm font-medium text-slate-700">{comment.message}</p>}
+
+                      {comment.sections.length > 0 && (
+                        <div className="space-y-3">
+                          {comment.sections.map(section => (
+                            <div key={section.id} className="grid gap-3 rounded-lg bg-slate-50 p-3 sm:grid-cols-[88px,1fr]">
+                              {section.imageUrl && (
+                                <button type="button" onClick={() => setLightboxUrl(section.imageUrl || null)} className="h-20 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                                  <img src={section.imageUrl} alt={section.imageName || 'Comment screen'} className="h-full w-full object-cover" />
+                                </button>
+                              )}
+                              {section.note && <p className="text-sm font-medium text-slate-700">{section.note}</p>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
       </div>
@@ -380,37 +452,6 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
         </div>
       )}
 
-      {modal === 'request_changes' && (
-        <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-slate-200">
-            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h3 className="text-lg font-black text-slate-900">Request Changes</h3>
-              <button onClick={() => setModal(null)} className="text-slate-400 hover:text-indigo-600 transition-colors"><X className="w-5 h-5"/></button>
-            </div>
-            <form onSubmit={handleRequestChanges} className="p-6 space-y-5">
-              <div>
-                <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Reason category *</label>
-                <CustomSelect
-                  value={changeReason}
-                  onChange={setChangeReason}
-                  options={reasonOptions}
-                  placeholder="Select a reason"
-                  buttonClassName="rounded-lg border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-900 shadow-none hover:bg-white focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Comment *</label>
-                <textarea name="comment" required rows={3} placeholder="What needs to be fixed?" className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"></textarea>
-              </div>
-              {renderReviewNotes()}
-              <div className="pt-2">
-                <button type="submit" disabled={!changeReason} className="w-full bg-slate-900 hover:bg-black text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">Request Changes</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
       {modal === 'ad_reject' && (
         <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-rose-200">
@@ -420,21 +461,11 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             </div>
             <form onSubmit={handleADReject} className="p-6 space-y-5">
               <div>
-                <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Reason category *</label>
-                <CustomSelect
-                  value={adRejectReason}
-                  onChange={setAdRejectReason}
-                  options={reasonOptions.filter(option => option.value !== 'info')}
-                  placeholder="Select a reason"
-                  buttonClassName="rounded-lg border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-900 shadow-none hover:bg-white focus:ring-2 focus:ring-rose-500"
-                />
-              </div>
-              <div>
                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Comment *</label>
-                <textarea name="comment" required rows={3} placeholder="Provide feedback for rejection..." className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-rose-500 outline-none"></textarea>
+                <textarea value={adRejectComment} onChange={event => setAdRejectComment(event.target.value)} required rows={3} placeholder="Provide feedback for rejection..." className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-rose-500 outline-none"></textarea>
               </div>
               <div className="pt-2">
-                <button type="submit" disabled={!adRejectReason} className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">Reject and Return</button>
+                <button type="submit" disabled={!adRejectComment.trim()} className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">Reject and Return</button>
               </div>
             </form>
           </div>
