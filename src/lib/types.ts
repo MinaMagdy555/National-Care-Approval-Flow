@@ -7,7 +7,8 @@ export type TaskType =
   | 'video' 
   | 'sales_material'
   | 'website_material'
-  | 'campaign';
+  | 'campaign'
+  | 'others';
 
 export type TaskStatus = 
   | 'draft'

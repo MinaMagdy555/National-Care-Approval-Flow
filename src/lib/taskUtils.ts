@@ -6,6 +6,7 @@ export function getTaskTypeLabel(type: TaskType): string {
     case 'sales_material': return 'Sales Material';
     case 'website_material': return 'Website Material';
     case 'campaign': return 'Campaign';
+    case 'others': return 'Others';
     default: return 'Asset';
   }
 }

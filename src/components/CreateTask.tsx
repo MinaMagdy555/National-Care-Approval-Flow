@@ -33,6 +33,7 @@ export function CreateTask() {
     { value: 'sales_material', label: 'Sales Material' },
     { value: 'website_material', label: 'Website Material' },
     { value: 'campaign', label: 'Campaign' },
+    { value: 'others', label: 'Others' },
   ];
   const priorityOptions = [
     { value: 'not_set', label: 'Not Set' },
