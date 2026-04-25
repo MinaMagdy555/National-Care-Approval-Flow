@@ -33,6 +33,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [fullscreenPdf, setFullscreenPdf] = useState<UploadedTaskFile | null>(null);
   const [reviewNotes, setReviewNotes] = useState<ReviewNoteSection[]>([{ id: 'note_1', note: '' }]);
   const [adRejectComment, setAdRejectComment] = useState('');
+  const [adRejectNotes, setAdRejectNotes] = useState<ReviewNoteSection[]>([{ id: 'ad_note_1', note: '' }]);
   const [selectedMinaFeedbackIds, setSelectedMinaFeedbackIds] = useState<string[]>([]);
   const [resubmitFiles, setResubmitFiles] = useState<File[]>([]);
   const [resubmitNote, setResubmitNote] = useState('');
@@ -93,7 +94,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     return items;
   });
   const selectedMinaFeedback = minaForwardableFeedback.filter(item => selectedMinaFeedbackIds.includes(item.id));
-  const canSubmitADReject = adRejectComment.trim() || selectedMinaFeedback.length > 0;
+  const canSubmitADReject = adRejectComment.trim() || selectedMinaFeedback.length > 0 || adRejectNotes.some(section => section.note.trim() || section.imageUrl);
 
   const appendResubmitFiles = (incomingFiles: File[]) => {
     const validFiles = incomingFiles.filter(file => {
@@ -169,12 +170,41 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     reader.readAsDataURL(file);
   };
 
+  const addADRejectNoteSection = () => {
+    setAdRejectNotes(prev => [...prev, { id: Math.random().toString(36).substring(7), note: '' }]);
+  };
+
+  const updateADRejectNote = (id: string, note: string) => {
+    setAdRejectNotes(prev => prev.map(section => section.id === id ? { ...section, note } : section));
+  };
+
+  const updateADRejectNoteImage = (id: string, file?: File) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setAdRejectNotes(prev => prev.map(section => section.id === id ? {
+        ...section,
+        imageName: file.name,
+        imageUrl: typeof reader.result === 'string' ? reader.result : undefined,
+      } : section));
+    };
+    reader.readAsDataURL(file);
+  };
+
   const getFilledReviewSections = () => reviewNotes
+    .filter(section => section.note.trim() || section.imageUrl)
+    .map(section => ({ ...section, note: section.note.trim() }));
+
+  const getFilledADRejectSections = () => adRejectNotes
     .filter(section => section.note.trim() || section.imageUrl)
     .map(section => ({ ...section, note: section.note.trim() }));
 
   const resetReviewNotes = () => {
     setReviewNotes([{ id: Math.random().toString(36).substring(7), note: '' }]);
+  };
+
+  const resetADRejectNotes = () => {
+    setAdRejectNotes([{ id: Math.random().toString(36).substring(7), note: '' }]);
   };
 
   const handleSendToAD = (e: React.FormEvent) => {
@@ -216,7 +246,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const handleADReject = (e: React.FormEvent) => {
     e.preventDefault();
     const message = adRejectComment.trim();
-    if (!message && selectedMinaFeedback.length === 0) return;
+    const marwaSections = getFilledADRejectSections();
+    if (!message && selectedMinaFeedback.length === 0 && marwaSections.length === 0) return;
 
     const forwardedSections: TaskCommentSection[] = selectedMinaFeedback.map(item => ({
       id: Math.random().toString(36).substring(7),
@@ -229,10 +260,11 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       authorId: currentUser.id,
       action: 'marwa_rejection',
       message: message || 'Forwarded selected notes from Mina.',
-      sections: forwardedSections,
+      sections: [...forwardedSections, ...marwaSections],
     });
     updateTaskStatus(task.id, 'changes_requested_by_art_director', 'team_member');
     setAdRejectComment('');
+    resetADRejectNotes();
     setSelectedMinaFeedbackIds([]);
     setModal(null);
   };
@@ -270,6 +302,43 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             rows={3}
             value={section.note}
             onChange={event => updateReviewNote(section.id, event.target.value)}
+            placeholder={`Note ${index + 1}`}
+            className="min-h-24 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+      ))}
+    </div>
+  );
+
+  const renderADRejectNotes = () => (
+    <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-500">Notes and Screens</h4>
+        <button type="button" onClick={addADRejectNoteSection} className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-indigo-600 shadow-sm ring-1 ring-slate-200 hover:bg-indigo-50">
+          <Plus className="h-3.5 w-3.5" /> Add
+        </button>
+      </div>
+
+      {adRejectNotes.map((section, index) => (
+        <div key={section.id} className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-[96px,1fr]">
+          <label className="flex h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 text-slate-500 hover:border-indigo-400 hover:bg-indigo-50">
+            {section.imageUrl ? (
+              <button type="button" onClick={(event) => { event.preventDefault(); setLightboxUrl(section.imageUrl || null); }} className="h-full w-full overflow-hidden rounded-lg">
+                <img src={section.imageUrl} alt={section.imageName || `Screen ${index + 1}`} className="h-full w-full object-cover" />
+              </button>
+            ) : (
+              <>
+                <Upload className="h-5 w-5" />
+                <span className="text-[10px] font-black uppercase">Screen</span>
+              </>
+            )}
+            <input type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" className="hidden" onChange={event => updateADRejectNoteImage(section.id, event.target.files?.[0])} />
+          </label>
+
+          <textarea
+            rows={3}
+            value={section.note}
+            onChange={event => updateADRejectNote(section.id, event.target.value)}
             placeholder={`Note ${index + 1}`}
             className="min-h-24 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
           />
@@ -525,6 +594,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               <button 
                 onClick={() => {
                   setSelectedMinaFeedbackIds([]);
+                  resetADRejectNotes();
                   setModal('ad_reject');
                 }}
                 className="w-full bg-white hover:bg-rose-50 text-rose-600 font-bold py-3 px-4 rounded-xl border border-rose-200 shadow-sm transition-all focus:ring-4 focus:ring-rose-100 flex items-center justify-center gap-2"
@@ -546,6 +616,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               <button 
                 onClick={() => {
                   setSelectedMinaFeedbackIds([]);
+                  resetADRejectNotes();
                   setModal('ad_reject');
                 }}
                 className="w-full bg-white hover:bg-gray-50 text-gray-700 font-semibold py-2 px-4 rounded-lg border border-gray-200 shadow-sm transition-all text-sm"
@@ -673,6 +744,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               <button
                 onClick={() => {
                   setSelectedMinaFeedbackIds([]);
+                  resetADRejectNotes();
                   setModal(null);
                 }}
                 className="text-rose-400 hover:text-rose-600 transition-colors"
@@ -730,6 +802,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Marwa's Comment</label>
                 <textarea value={adRejectComment} onChange={event => setAdRejectComment(event.target.value)} rows={3} placeholder="Write new feedback, or select Mina's notes above, or do both..." className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-rose-500 outline-none"></textarea>
               </div>
+              {renderADRejectNotes()}
               <div className="pt-2">
                 <button type="submit" disabled={!canSubmitADReject} className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">Reject and Return</button>
               </div>
