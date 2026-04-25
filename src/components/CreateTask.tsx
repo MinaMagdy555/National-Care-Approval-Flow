@@ -7,11 +7,13 @@ import { initialUsers } from '../lib/mockData';
 export function CreateTask() {
   const { currentUser, environment, addTask, addNotification } = useAppStore();
   const [taskName, setTaskName] = useState('');
+  const [createdBy, setCreatedBy] = useState('');
   const [taskType, setTaskType] = useState<TaskType>('video');
   const [reviewMode, setReviewMode] = useState<ReviewMode>('full_review');
   const [files, setFiles] = useState<File[]>([]);
   const [isSuccess, setIsSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const creatorOptions = initialUsers.filter(user => ['Mariam', 'Noreen', 'Yomna', 'Mina M. Bashir'].includes(user.name));
 
   // If reviewer, they can set priority directly on creation if they want (though mostly they handle others)
   const isReviewer = currentUser.role === 'reviewer' || currentUser.role === 'admin';
@@ -37,9 +39,10 @@ export function CreateTask() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!taskName || files.length === 0) return;
+    if (!taskName || !createdBy || files.length === 0) return;
 
     const reviewer = initialUsers.find(u => u.role === 'reviewer');
+    const creator = initialUsers.find(u => u.id === createdBy);
     const newTaskId = Math.random().toString(36).substring(7);
 
     const newTask: Task = {
@@ -49,8 +52,8 @@ export function CreateTask() {
       taskType,
       reviewMode,
       environment,
-      createdBy: currentUser.id,
-      handledBy: [],
+      createdBy,
+      handledBy: [createdBy],
       status: 'submitted',
       currentOwnerRole: 'reviewer',
       currentOwnerUserId: null,
@@ -60,7 +63,7 @@ export function CreateTask() {
         {
           id: Math.random().toString(36).substring(7),
           versionNumber: 1,
-          submittedBy: currentUser.id,
+          submittedBy: createdBy,
           fileUrl: URL.createObjectURL(files[0]),
           createdAt: new Date().toISOString(),
           submissionNote: "Initial submission",
@@ -78,7 +81,7 @@ export function CreateTask() {
       addNotification({
         userId: reviewer.id,
         taskId: newTaskId,
-        message: `${currentUser.name} uploaded a new task: ${taskName}`,
+        message: `${creator?.name || 'Someone'} uploaded a new task: ${taskName}`,
       });
     }
 
@@ -86,6 +89,7 @@ export function CreateTask() {
     setTimeout(() => {
       setIsSuccess(false);
       setTaskName('');
+      setCreatedBy('');
       setFiles([]);
       setPriority('not_set');
       setDeadline('');
@@ -122,6 +126,22 @@ export function CreateTask() {
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="col-span-2">
+                  <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Task Creator *</label>
+                  <select
+                    required
+                    value={createdBy}
+                    onChange={e => setCreatedBy(e.target.value)}
+                    className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white cursor-pointer appearance-none"
+                  >
+                    <option value="" disabled>Select who made the task</option>
+                    {creatorOptions.map(user => (
+                      <option key={user.id} value={user.id}>
+                        {user.name === 'Mina M. Bashir' ? 'Mina' : user.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <div className="col-span-2">
                   <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Task Type *</label>
                   <select 
@@ -223,7 +243,7 @@ export function CreateTask() {
             <div className="flex justify-end border-t border-slate-100 pt-4">
               <button 
                 type="submit"
-                disabled={!taskName || files.length === 0}
+                disabled={!taskName || !createdBy || files.length === 0}
                 className="w-full rounded-xl bg-indigo-600 px-8 py-3 font-black text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto"
               >
                 Submit Task
