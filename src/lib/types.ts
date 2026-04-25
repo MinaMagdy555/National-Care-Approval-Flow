@@ -41,6 +41,7 @@ export interface UploadedTaskFile {
   type: string;
   size: number;
   url: string;
+  blob?: Blob;
 }
 
 export interface TaskVersion {

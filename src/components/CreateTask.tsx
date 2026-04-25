@@ -91,6 +91,7 @@ export function CreateTask() {
       name: file.name,
       type: file.type,
       size: file.size,
+      blob: file,
       url: URL.createObjectURL(file),
     }));
     const thumbnailFile = uploadedFiles.find(file => file.type.startsWith('image/'));

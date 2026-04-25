@@ -1,10 +1,35 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification } from './types';
 import { initialUsers, initialTasks } from './mockData';
+import { loadAppState, saveAppState } from './localDb';
 
 const MINA_ID = 'user_1';
 const MARWA_ID = 'user_2';
 const DINA_ID = 'user_3';
+
+function reviveTaskFiles(tasks: Task[]): Task[] {
+  return tasks.map(task => {
+    const versions = task.versions.map(version => {
+      const files = version.files?.map(file => ({
+        ...file,
+        url: file.blob ? URL.createObjectURL(file.blob) : file.url,
+      }));
+
+      return {
+        ...version,
+        files,
+        fileUrl: files?.[0]?.url || version.fileUrl,
+      };
+    });
+    const thumbnailFile = versions[0]?.files?.find(file => file.type.startsWith('image/'));
+
+    return {
+      ...task,
+      versions,
+      thumbnailUrl: thumbnailFile?.url || task.thumbnailUrl,
+    };
+  });
+}
 
 interface AppState {
   currentUser: User;
@@ -27,6 +52,7 @@ interface AppContextType extends AppState {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: ReactNode }) {
+  const hasLoadedPersistedState = useRef(false);
   const usersObj = initialUsers.reduce((acc, user) => {
     acc[user.id] = user;
     return acc;
@@ -36,6 +62,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [environment, setEnvironment] = useState<Environment>('production');
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    loadAppState()
+      .then(state => {
+        if (!isMounted) return;
+        if (state) {
+          setTasks(reviveTaskFiles(state.tasks));
+          setNotifications(state.notifications);
+        }
+      })
+      .finally(() => {
+        if (isMounted) hasLoadedPersistedState.current = true;
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState.current) return;
+    saveAppState({ tasks, notifications }).catch(error => {
+      console.error('Failed to save app state', error);
+    });
+  }, [tasks, notifications]);
 
   const addNotification = (notif: Omit<Notification, 'id' | 'createdAt' | 'read'>) => {
     setNotifications(prev => [{
