@@ -13,6 +13,22 @@ import {
 const MINA_ID = 'user_1';
 const MARWA_ID = 'user_2';
 const DINA_ID = 'user_3';
+const REVIEWER_WAITING_STATUSES: TaskStatus[] = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'];
+
+function normalizeMinaCreatedTask(task: Task): Task {
+  if (task.createdBy !== MINA_ID || !REVIEWER_WAITING_STATUSES.includes(task.status)) {
+    return task;
+  }
+
+  return {
+    ...task,
+    handledBy: Array.from(new Set([...task.handledBy, MARWA_ID])),
+    reviewMode: 'direct_to_ad',
+    status: 'sent_to_art_director',
+    currentOwnerRole: 'art_director',
+    currentOwnerUserId: null,
+  };
+}
 
 function reviveTaskFiles(tasks: Task[]): Task[] {
   return tasks.map(task => {
@@ -30,11 +46,11 @@ function reviveTaskFiles(tasks: Task[]): Task[] {
     });
     const thumbnailFile = versions[0]?.files?.find(file => file.type.startsWith('image/'));
 
-    return {
+    return normalizeMinaCreatedTask({
       ...task,
       versions,
       thumbnailUrl: thumbnailFile?.url || task.thumbnailUrl,
-    };
+    });
   });
 }
 
@@ -168,7 +184,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const addTask = (task: Task) => {
-    setTasks(prev => [task, ...prev]);
+    setTasks(prev => [normalizeMinaCreatedTask(task), ...prev]);
   };
 
   const addTaskComment = (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => {

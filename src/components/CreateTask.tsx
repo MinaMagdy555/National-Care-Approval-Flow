@@ -23,6 +23,7 @@ export function CreateTask() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canChooseCreator = currentUser.id === 'user_1';
   const selectedCreatorId = canChooseCreator ? createdBy : currentUser.id;
+  const isMinaCreatedTask = selectedCreatorId === 'user_1';
   const creatorOptions = [
     { value: 'user_1', label: 'Mina' },
     { value: 'user_4', label: 'Mariam' },
@@ -105,17 +106,23 @@ export function CreateTask() {
     }
     const thumbnailFile = uploadedFiles.find(file => file.type.startsWith('image/'));
 
+    const newTaskStatus = isMinaCreatedTask
+      ? 'sent_to_art_director'
+      : reviewMode === 'quick_look'
+        ? 'waiting_reviewer_quick_look'
+        : 'waiting_reviewer_full_review';
+
     const newTask: Task = {
       id: newTaskId,
       code: `TSK-2026-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`,
       name: taskName,
       taskType,
-      reviewMode,
+      reviewMode: isMinaCreatedTask ? 'direct_to_ad' : reviewMode,
       environment,
       createdBy: selectedCreatorId,
-      handledBy: [selectedCreatorId],
-      status: reviewMode === 'quick_look' ? 'waiting_reviewer_quick_look' : 'waiting_reviewer_full_review',
-      currentOwnerRole: 'reviewer',
+      handledBy: isMinaCreatedTask ? [selectedCreatorId, 'user_2'] : [selectedCreatorId],
+      status: newTaskStatus,
+      currentOwnerRole: isMinaCreatedTask ? 'art_director' : 'reviewer',
       currentOwnerUserId: null,
       priority: isReviewer ? priority : 'not_set',
       deadlineText: isReviewer ? deadline : null,

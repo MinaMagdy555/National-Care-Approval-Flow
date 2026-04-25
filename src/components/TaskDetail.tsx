@@ -36,7 +36,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const files = getTaskFiles(currentVersion);
   const selectedFile = files[selectedFileIndex] || files[0];
   const isDetailedReviewType = task.taskType === 'ai_packet' || task.taskType === 'video';
-  const isReviewerActionable = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
+  const isSelfCreatedTask = task.createdBy === currentUser.id;
+  const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
 
   const addReviewNoteSection = () => {
     setReviewNotes(prev => [...prev, { id: Math.random().toString(36).substring(7), note: '' }]);
