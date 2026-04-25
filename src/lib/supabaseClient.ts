@@ -1,10 +1,31 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+function cleanEnvValue(value: string | undefined) {
+  return value?.trim().replace(/^['"]|['"]$/g, '');
+}
 
-export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
+const supabaseUrl = cleanEnvValue(import.meta.env.VITE_SUPABASE_URL);
+const supabaseAnonKey = cleanEnvValue(import.meta.env.VITE_SUPABASE_ANON_KEY);
 
-export const supabase = isSupabaseConfigured
-  ? createClient(supabaseUrl!, supabaseAnonKey!)
-  : null;
+function isValidUrl(value: string | undefined) {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+export const isSupabaseConfigured = Boolean(isValidUrl(supabaseUrl) && supabaseAnonKey);
+
+export const supabase = (() => {
+  if (!isSupabaseConfigured) return null;
+
+  try {
+    return createClient(supabaseUrl!, supabaseAnonKey!);
+  } catch (error) {
+    console.error('Invalid Supabase configuration', error);
+    return null;
+  }
+})();

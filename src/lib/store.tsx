@@ -88,6 +88,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setNotifications(state.notifications);
         }
       })
+      .catch(error => {
+        console.error('Failed to load persisted app state', error);
+      })
       .finally(() => {
         if (isMounted) hasLoadedPersistedState.current = true;
       });
