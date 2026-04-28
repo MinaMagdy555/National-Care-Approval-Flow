@@ -5,6 +5,7 @@ import { Task, ReviewMode, Priority, TaskType, UploadedTaskFile } from '../lib/t
 import { initialUsers } from '../lib/mockData';
 import { CustomSelect } from './CustomSelect';
 import { uploadTaskFiles } from '../lib/supabaseDb';
+import { sanitizeHandledBy } from '../lib/handlerUtils';
 
 const MAX_FILE_SIZE_MB = 200;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
@@ -17,6 +18,7 @@ export function CreateTask() {
   const [createdBy, setCreatedBy] = useState('');
   const [taskType, setTaskType] = useState<TaskType>('video');
   const [reviewMode, setReviewMode] = useState<ReviewMode>('full_review');
+  const [additionalHandlerId, setAdditionalHandlerId] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [fileError, setFileError] = useState('');
   const [isSuccess, setIsSuccess] = useState(false);
@@ -29,6 +31,10 @@ export function CreateTask() {
     { value: 'user_4', label: 'Mariam' },
     { value: 'user_5', label: 'Noreen' },
     { value: 'user_6', label: 'Yomna' },
+  ];
+  const handlerOptions = [
+    { value: '', label: 'No second handler' },
+    ...creatorOptions.filter(option => option.value !== selectedCreatorId),
   ];
   const taskTypeOptions = [
     { value: 'video', label: 'Video' },
@@ -101,7 +107,7 @@ export function CreateTask() {
       uploadedFiles = await uploadTaskFiles(newTaskId, localFiles);
     } catch (error) {
       console.error('Failed to upload task files', error);
-      setFileError('Could not upload files. Please try again.');
+      setFileError(error instanceof Error ? error.message : 'Could not upload files. Please try again.');
       return;
     }
     const thumbnailFile = uploadedFiles.find(file => file.type.startsWith('image/'));
@@ -120,7 +126,7 @@ export function CreateTask() {
       reviewMode: isMinaCreatedTask ? 'direct_to_ad' : reviewMode,
       environment,
       createdBy: selectedCreatorId,
-      handledBy: isMinaCreatedTask ? [selectedCreatorId, 'user_2'] : [selectedCreatorId],
+      handledBy: sanitizeHandledBy([selectedCreatorId, canChooseCreator ? additionalHandlerId : '']),
       status: newTaskStatus,
       currentOwnerRole: isMinaCreatedTask ? 'art_director' : 'reviewer',
       currentOwnerUserId: null,
@@ -161,6 +167,7 @@ export function CreateTask() {
       setIsSuccess(false);
       setTaskName('');
       setCreatedBy('');
+      setAdditionalHandlerId('');
       setFiles([]);
       setFileError('');
       setPriority('');
@@ -203,9 +210,24 @@ export function CreateTask() {
                     <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Task Creator *</label>
                     <CustomSelect
                       value={createdBy}
-                      onChange={setCreatedBy}
+                      onChange={value => {
+                        setCreatedBy(value);
+                        if (value === additionalHandlerId) setAdditionalHandlerId('');
+                      }}
                       options={creatorOptions}
                       placeholder="Select who made the task"
+                      buttonClassName={FORM_SELECT_BUTTON_CLASS}
+                    />
+                  </div>
+                )}
+                {canChooseCreator && (
+                  <div className="col-span-2">
+                    <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Second Handler</label>
+                    <CustomSelect
+                      value={additionalHandlerId}
+                      onChange={setAdditionalHandlerId}
+                      options={handlerOptions}
+                      placeholder="Optional second handler"
                       buttonClassName={FORM_SELECT_BUTTON_CLASS}
                     />
                   </div>

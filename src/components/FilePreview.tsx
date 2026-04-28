@@ -1,5 +1,5 @@
 import React from 'react';
-import { ExternalLink, FileWarning, Image as ImageIcon } from 'lucide-react';
+import { ExternalLink, FileText, FileVideo, FileWarning, Image as ImageIcon } from 'lucide-react';
 import { Task, TaskVersion, UploadedTaskFile } from '../lib/types';
 
 export function getTaskFiles(version?: TaskVersion): UploadedTaskFile[] {
@@ -63,6 +63,8 @@ export function TaskThumbnail({ task }: { task: Task }) {
       <img
         src={task.thumbnailUrl || file?.url}
         alt={task.name}
+        loading="lazy"
+        decoding="async"
         className="h-full w-full object-cover"
       />
     );
@@ -70,24 +72,18 @@ export function TaskThumbnail({ task }: { task: Task }) {
 
   if (kind === 'video') {
     return (
-      <video
-        src={file.url}
-        className="h-full w-full object-cover"
-        muted
-        playsInline
-        preload="metadata"
-      />
+      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-slate-100 text-slate-400">
+        <FileVideo className="h-7 w-7" />
+        <span className="text-[10px] font-black uppercase tracking-wide">Video</span>
+      </div>
     );
   }
 
   if (kind === 'pdf') {
     return (
-      <div className="relative h-full w-full overflow-hidden bg-white">
-        <iframe
-          src={getPdfPreviewUrl(file.url)}
-          title={`${file.name} preview`}
-          className="pointer-events-none h-[240%] w-[240%] origin-top-left scale-[0.42] border-0 bg-white"
-        />
+      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-slate-100 text-slate-400">
+        <FileText className="h-7 w-7" />
+        <span className="text-[10px] font-black uppercase tracking-wide">PDF</span>
       </div>
     );
   }

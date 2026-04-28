@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { LayoutDashboard, CheckSquare, Clock, FileText, Bell, ChevronDown, ChevronRight, X, LogIn, UserPlus, Archive } from 'lucide-react';
+import { LayoutDashboard, CheckSquare, Clock, FileText, Bell, ChevronDown, ChevronRight, X, LogOut, UserPlus, Archive } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { userRoleLabels } from '../lib/mockData';
 import { CustomSelect } from './CustomSelect';
@@ -303,7 +303,7 @@ export function Sidebar({
               }}
               className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-white transition-colors hover:bg-white/10"
             >
-              <LogIn className="h-3.5 w-3.5" /> Logout
+              <LogOut className="h-3.5 w-3.5" /> Logout
             </button>
             <button
               type="button"
@@ -328,7 +328,7 @@ export function Sidebar({
           <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
               <div>
-                <h2 className="text-lg font-black text-slate-900">{authMode === 'login' ? 'Login or Logout' : 'Register'}</h2>
+                <h2 className="text-lg font-black text-slate-900">{authMode === 'login' ? 'Account' : 'Register'}</h2>
                 <p className="text-xs font-semibold text-slate-500">
                   {authMode === 'login' ? 'Switch profile or log out from this device.' : 'Create a temporary local profile.'}
                 </p>

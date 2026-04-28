@@ -3,6 +3,7 @@ import { User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notifica
 import { initialUsers, initialTasks } from './mockData';
 import { clearAppState, loadAppState, saveAppState } from './localDb';
 import { shouldAutoArchiveTask } from './archiveUtils';
+import { DINA_ID, MARWA_ID, MINA_ID, sanitizeHandledBy } from './handlerUtils';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 import {
   fetchSupabaseNotifications,
@@ -12,9 +13,6 @@ import {
   upsertSupabaseTask,
 } from './supabaseDb';
 
-const MINA_ID = 'user_1';
-const MARWA_ID = 'user_2';
-const DINA_ID = 'user_3';
 const REVIEWER_WAITING_STATUSES: TaskStatus[] = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'];
 const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
 const REGISTERED_USERS_STORAGE_KEY = 'national-care-registered-users';
@@ -74,7 +72,7 @@ function normalizeMinaCreatedTask(task: Task): Task {
 
   return {
     ...task,
-    handledBy: Array.from(new Set([...task.handledBy, MARWA_ID])),
+    handledBy: sanitizeHandledBy(task.handledBy),
     reviewMode: 'direct_to_ad',
     status: 'sent_to_art_director',
     currentOwnerRole: 'art_director',
@@ -96,7 +94,7 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
     reviewMode: task.reviewMode || 'full_review',
     environment: task.environment || 'production',
     createdBy: task.createdBy || MINA_ID,
-    handledBy: Array.isArray(task.handledBy) ? task.handledBy : [task.createdBy || MINA_ID],
+    handledBy: sanitizeHandledBy(Array.isArray(task.handledBy) ? task.handledBy : [task.createdBy || MINA_ID]),
     status: task.status || 'submitted',
     currentOwnerRole: task.currentOwnerRole ?? null,
     currentOwnerUserId: task.currentOwnerUserId ?? null,
@@ -507,7 +505,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ? 'waiting_reviewer_quick_look'
         : 'waiting_reviewer_full_review';
     const nextOwnerRole: Role = sendToMarwa ? 'art_director' : 'reviewer';
-    const nextHandlerId = sendToMarwa ? MARWA_ID : MINA_ID;
     const creatorName = usersObj[task.createdBy]?.name || 'Someone';
     const recipients = (sendToMarwa ? [MARWA_ID, DINA_ID, MINA_ID] : [MINA_ID, DINA_ID]).filter(userId => userId !== task.createdBy);
 
@@ -521,7 +518,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return {
         ...t,
         versions: [version, ...t.versions],
-        handledBy: Array.from(new Set([...t.handledBy, version.submittedBy, nextHandlerId])),
+        handledBy: sanitizeHandledBy([...t.handledBy, version.submittedBy]),
         status: nextStatus,
         currentOwnerRole: nextOwnerRole,
         currentOwnerUserId: null,

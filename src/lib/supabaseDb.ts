@@ -55,7 +55,10 @@ export async function uploadTaskFiles(taskId: string, files: UploadedTaskFile[])
 
     if (error) {
       const message = 'message' in error ? error.message : 'Upload failed.';
-      throw new Error(`${file.name}: ${message}`);
+      const help = message.toLowerCase().includes('maximum allowed size')
+        ? ' The Supabase task-files bucket still needs its 200MB file_size_limit setting applied.'
+        : '';
+      throw new Error(`${file.name}: ${message}${help}`);
     }
 
     const { data } = supabase.storage.from(TASK_FILES_BUCKET).getPublicUrl(storagePath);

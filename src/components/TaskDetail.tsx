@@ -5,9 +5,10 @@ import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, File as FileIcon } from 'lucide-react';
-import { FilePreview, getFileKind, getPdfPreviewUrl, getTaskFiles, isLocalOnlyFileUrl } from './FilePreview';
+import { FilePreview, getFileKind, getTaskFiles, isLocalOnlyFileUrl } from './FilePreview';
 import { uploadTaskFiles } from '../lib/supabaseDb';
 import { isTaskArchived } from '../lib/archiveUtils';
+import { isAssignableHandler } from '../lib/handlerUtils';
 
 type ReviewNoteSection = {
   id: string;
@@ -25,7 +26,7 @@ const DINA_ID = 'user_3';
 const INTERNAL_REVIEW_VIEWERS = [MINA_ID, MARWA_ID, DINA_ID];
 
 export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => void }) {
-  const { tasks, currentUser, updateTaskStatus, updateTaskPriority, addTaskComment, addTaskVersion, replaceTaskVersionFiles, archiveTask, unarchiveTask } = useAppStore();
+  const { tasks, currentUser, users, updateTaskStatus, updateTaskPriority, addTaskComment, addTaskVersion, replaceTaskVersionFiles, archiveTask, unarchiveTask } = useAppStore();
   const task = tasks.find(t => t.id === taskId);
   
   const [modal, setModal] = useState<'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
@@ -51,7 +52,11 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const statusInfo = getStatusInfo(task, currentUser.role);
   const nextAction = getNextActionLabel(task, currentUser.role);
   const creator = initialUsers.find(u => u.id === task.createdBy)?.name || 'Unknown';
-  const handledByNames = task.handledBy.map(id => initialUsers.find(u => u.id === id)?.name).filter(Boolean).join(' + ');
+  const handledByNames = task.handledBy
+    .filter(isAssignableHandler)
+    .map(id => users[id]?.name || initialUsers.find(u => u.id === id)?.name)
+    .filter(Boolean)
+    .join(' + ');
 
   const currentVersion = task.versions[0];
   const files = getTaskFiles(currentVersion);
@@ -472,15 +477,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                     )}
                   >
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100 text-slate-500">
-                      {kind === 'image' && <img src={file.url} alt={file.name} className="h-full w-full object-cover" />}
-                      {kind === 'pdf' && (
-                        <iframe
-                          src={getPdfPreviewUrl(file.url)}
-                          title={`${file.name} preview`}
-                          className="pointer-events-none h-[240%] w-[240%] origin-top-left scale-[0.42] border-0 bg-white"
-                        />
-                      )}
-                      {!['image', 'pdf'].includes(kind) && <span className="text-[10px] font-black uppercase">{kind}</span>}
+                      {kind === 'image' && <img src={file.url} alt={file.name} loading="lazy" decoding="async" className="h-full w-full object-cover" />}
+                      {kind !== 'image' && <span className="text-[10px] font-black uppercase">{kind}</span>}
                     </div>
                     <span className="truncate text-xs font-bold text-slate-700">{file.name}</span>
                   </button>
@@ -517,10 +515,6 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             <div>
               <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Review mode</span>
               <span className="font-semibold text-slate-900">{getReviewModeLabel(task.reviewMode)}</span>
-            </div>
-            <div>
-              <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Environment</span>
-              <span className="font-semibold text-slate-900 capitalize">{task.environment}</span>
             </div>
           </div>
           
