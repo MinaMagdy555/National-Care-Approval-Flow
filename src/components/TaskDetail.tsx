@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../lib/store';
 import { Priority, TaskCommentSection, UploadedTaskFile } from '../lib/types';
 import { initialUsers } from '../lib/mockData';
@@ -30,6 +30,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const task = tasks.find(t => t.id === taskId);
   
   const [modal, setModal] = useState<'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
+  const [selectedVersionIndex, setSelectedVersionIndex] = useState(0);
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [reviewNotes, setReviewNotes] = useState<ReviewNoteSection[]>([{ id: 'note_1', note: '' }]);
@@ -47,6 +48,18 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
   const canViewFullWorkspace = INTERNAL_REVIEW_VIEWERS.includes(currentUser.id);
 
+  useEffect(() => {
+    setSelectedVersionIndex(0);
+    setSelectedFileIndex(0);
+  }, [taskId]);
+
+  useEffect(() => {
+    if (task && selectedVersionIndex > task.versions.length - 1) {
+      setSelectedVersionIndex(0);
+      setSelectedFileIndex(0);
+    }
+  }, [selectedVersionIndex, task?.versions.length]);
+
   if (!task || (!canViewFullWorkspace && task.createdBy !== currentUser.id)) return <div>Task not found</div>;
 
   const statusInfo = getStatusInfo(task, currentUser.role);
@@ -58,7 +71,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     .filter(Boolean)
     .join(' + ');
 
-  const currentVersion = task.versions[0];
+  const currentVersion = task.versions[selectedVersionIndex] || task.versions[0];
   const files = getTaskFiles(currentVersion);
   const selectedFile = files[selectedFileIndex] || files[0];
   const currentVersionHasLocalOnlyFiles = files.some(file => isLocalOnlyFileUrl(file.url));
@@ -702,18 +715,38 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
         <div className="flex-1 bg-slate-50 p-4 sm:p-6">
           <h3 className="text-[11px] font-black text-slate-400 mb-4 uppercase tracking-wider flex items-center gap-2"><Clock className="w-4 h-4 text-slate-400"/> VERSION HISTORY</h3>
           <div className="space-y-4 relative before:absolute before:inset-0 before:ml-2 md:before:mx-auto before:-translate-x-px md:before:translate-x-0 before:h-full before:w-[2px] before:bg-slate-200">
-            {task.versions.map((v, i) => (
+            {task.versions.map((v, i) => {
+              const isSelectedVersion = selectedVersionIndex === i;
+              return (
               <div key={v.id} className="relative flex items-start gap-4">
-                <div className="flex-shrink-0 w-4 h-4 rounded-full bg-white border-4 border-indigo-500 z-10 mt-1"></div>
-                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex-1">
+                <div className={cn(
+                  "flex-shrink-0 w-4 h-4 rounded-full bg-white border-4 z-10 mt-1",
+                  isSelectedVersion ? "border-indigo-600" : "border-slate-300"
+                )}></div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedVersionIndex(i);
+                    setSelectedFileIndex(0);
+                  }}
+                  className={cn(
+                    "flex-1 rounded-xl border bg-white p-4 text-left shadow-sm transition-colors hover:border-indigo-300 hover:bg-indigo-50/40",
+                    isSelectedVersion ? "border-indigo-500 ring-2 ring-indigo-100" : "border-slate-200"
+                  )}
+                >
                   <div className="flex justify-between items-center mb-1">
                     <span className="font-bold text-sm text-slate-900">Version {v.versionNumber}</span>
-                    <span className="text-xs font-bold text-slate-400">{new Date(v.createdAt).toLocaleDateString()}</span>
+                    <div className="flex items-center gap-2">
+                      {i === 0 && <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-black uppercase text-indigo-600">Latest</span>}
+                      {isSelectedVersion && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-black uppercase text-emerald-600">Viewing</span>}
+                      <span className="text-xs font-bold text-slate-400">{new Date(v.createdAt).toLocaleDateString()}</span>
+                    </div>
                   </div>
                   {v.submissionNote && <p className="text-sm text-slate-600 mt-2 font-medium">"{v.submissionNote}"</p>}
-                </div>
+                </button>
               </div>
-            ))}
+            );
+            })}
           </div>
 
           {visibleComments.length > 0 && (
