@@ -119,14 +119,14 @@ export function FilePreview({
 
   if (kind === 'image') {
     return (
-      <button type="button" onClick={() => onImageClick?.(file.url)} className="flex h-full w-full items-center justify-center">
-        <img src={file.url} alt={file.name} className="h-full max-h-full w-full max-w-full object-contain" />
+      <button type="button" onClick={() => onImageClick?.(file.url)} className="flex h-full w-full items-center justify-center bg-slate-100">
+        <img src={file.url} alt={file.name} className="block max-h-full max-w-full object-contain" />
       </button>
     );
   }
 
   if (kind === 'video') {
-    return <video src={file.url} controls className="h-full max-h-full w-full max-w-full rounded-lg bg-black object-contain" />;
+    return <video src={file.url} controls className="block max-h-full max-w-full rounded-lg bg-black object-contain" />;
   }
 
   if (kind === 'pdf') {

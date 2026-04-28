@@ -185,7 +185,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       setSelectedFileIndex(0);
     } catch (error) {
       console.error('Failed to repair task files', error);
-      setRepairError('Could not upload replacement files. Please try again.');
+      setRepairError(error instanceof Error ? error.message : 'Could not upload replacement files. Please try again.');
     } finally {
       setIsRepairingFiles(false);
     }
@@ -418,7 +418,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
         )}
 
         <div className="mt-0 flex flex-1 flex-col gap-4 overflow-auto p-4 pt-16 sm:p-6 sm:pt-16 md:mt-10 md:min-h-0 md:p-8">
-          <div className="flex h-[calc(100dvh-9rem)] min-h-[48vh] flex-none items-center justify-center overflow-hidden rounded-xl bg-white shadow-2xl ring-1 ring-gray-900/5 md:min-h-0">
+          <div className="flex h-[calc(100dvh-9rem)] min-h-[48vh] flex-none items-center justify-center overflow-hidden rounded-xl bg-slate-100 md:min-h-0">
             <FilePreview file={selectedFile} onImageClick={setLightboxUrl} />
           </div>
 

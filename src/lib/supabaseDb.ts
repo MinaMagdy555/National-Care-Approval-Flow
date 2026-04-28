@@ -37,8 +37,13 @@ function safeFileName(name: string) {
 export async function uploadTaskFiles(taskId: string, files: UploadedTaskFile[]): Promise<UploadedTaskFile[]> {
   if (!isSupabaseConfigured || !supabase) return files;
 
-  return Promise.all(files.map(async file => {
-    if (!file.blob) return file;
+  const uploadedFiles: UploadedTaskFile[] = [];
+
+  for (const file of files) {
+    if (!file.blob) {
+      uploadedFiles.push(file);
+      continue;
+    }
 
     const storagePath = `${taskId}/${file.id}-${safeFileName(file.name)}`;
     const { error } = await supabase.storage
@@ -48,17 +53,22 @@ export async function uploadTaskFiles(taskId: string, files: UploadedTaskFile[])
         upsert: true,
       });
 
-    if (error) throw error;
+    if (error) {
+      const message = 'message' in error ? error.message : 'Upload failed.';
+      throw new Error(`${file.name}: ${message}`);
+    }
 
     const { data } = supabase.storage.from(TASK_FILES_BUCKET).getPublicUrl(storagePath);
 
-    return {
+    uploadedFiles.push({
       ...file,
       storagePath,
       url: data.publicUrl,
       blob: undefined,
-    };
-  }));
+    });
+  }
+
+  return uploadedFiles;
 }
 
 export async function fetchSupabaseTasks(): Promise<Task[]> {

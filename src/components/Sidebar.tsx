@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { LayoutDashboard, CheckSquare, Clock, FileText, Bell, ChevronDown, ChevronRight, X, LogIn, LogOut } from 'lucide-react';
+import { LayoutDashboard, CheckSquare, Clock, FileText, Bell, ChevronDown, ChevronRight, X, LogIn, UserPlus } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { initialUsers, userRoleLabels } from '../lib/mockData';
+import { CustomSelect } from './CustomSelect';
 
 type MenuItem = {
   id: string;
@@ -22,7 +23,7 @@ export function Sidebar({
   isOpen: boolean;
   onClose: () => void;
 }) {
-  const { currentUser, notifications, loginWithPassword, logout } = useAppStore();
+  const { currentUser, notifications, loginWithPassword } = useAppStore();
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [loginUserId, setLoginUserId] = useState(currentUser.id);
@@ -275,10 +276,15 @@ export function Sidebar({
             </button>
             <button
               type="button"
-              onClick={logout}
+              onClick={() => {
+                setLoginUserId(currentUser.id);
+                setPassword('');
+                setLoginError('Registration is not connected yet. Use an existing profile for now.');
+                setIsLoginOpen(true);
+              }}
               className="inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-black text-slate-400 transition-colors hover:bg-white/5 hover:text-white"
             >
-              <LogOut className="h-3.5 w-3.5" /> Reset
+              <UserPlus className="h-3.5 w-3.5" /> Sign Up
             </button>
           </div>
         </div>
@@ -299,15 +305,12 @@ export function Sidebar({
             <form onSubmit={handleLogin} className="space-y-4 p-5">
               <div>
                 <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Profile</label>
-                <select
+                <CustomSelect
                   value={loginUserId}
-                  onChange={event => setLoginUserId(event.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-                >
-                  {initialUsers.map(user => (
-                    <option key={user.id} value={user.id}>{user.name}</option>
-                  ))}
-                </select>
+                  onChange={setLoginUserId}
+                  options={initialUsers.map(user => ({ value: user.id, label: user.name }))}
+                  buttonClassName="rounded-xl border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 shadow-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                />
               </div>
               <div>
                 <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Password</label>
