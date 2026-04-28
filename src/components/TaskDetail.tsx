@@ -5,7 +5,7 @@ import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, File as FileIcon } from 'lucide-react';
-import { FilePreview, getFileKind, getTaskFiles, isLocalOnlyFileUrl } from './FilePreview';
+import { FileContentThumbnail, FilePreview, getTaskFiles, isLocalOnlyFileUrl } from './FilePreview';
 import { uploadTaskFiles } from '../lib/supabaseDb';
 import { isTaskArchived } from '../lib/archiveUtils';
 import { isAssignableHandler } from '../lib/handlerUtils';
@@ -478,7 +478,6 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
           {files.length > 1 && (
             <div className="flex gap-3 overflow-x-auto rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
               {files.map((file, index) => {
-                const kind = getFileKind(file);
                 return (
                   <button
                     key={file.id}
@@ -490,8 +489,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                     )}
                   >
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100 text-slate-500">
-                      {kind === 'image' && <img src={file.url} alt={file.name} loading="lazy" decoding="async" className="h-full w-full object-cover" />}
-                      {kind !== 'image' && <span className="text-[10px] font-black uppercase">{kind}</span>}
+                      <FileContentThumbnail file={file} alt={file.name} />
                     </div>
                     <span className="truncate text-xs font-bold text-slate-700">{file.name}</span>
                   </button>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ExternalLink, FileText, FileVideo, FileWarning, Image as ImageIcon } from 'lucide-react';
+import { ExternalLink, FileWarning, Image as ImageIcon } from 'lucide-react';
 import { Task, TaskVersion, UploadedTaskFile } from '../lib/types';
 
 export function getTaskFiles(version?: TaskVersion): UploadedTaskFile[] {
@@ -50,40 +50,54 @@ function MissingSharedFile({ compact = false }: { compact?: boolean }) {
   );
 }
 
-export function TaskThumbnail({ task }: { task: Task }) {
-  const file = getTaskFiles(task.versions[0])[0];
+export function FileContentThumbnail({
+  file,
+  alt,
+  className = '',
+}: {
+  file?: UploadedTaskFile;
+  alt: string;
+  className?: string;
+}) {
   const kind = getFileKind(file);
 
-  if (isLocalOnlyFileUrl(task.thumbnailUrl || file?.url)) {
+  if (!file || isLocalOnlyFileUrl(file.url)) {
     return <MissingSharedFile compact />;
   }
 
-  if (task.thumbnailUrl || kind === 'image') {
+  if (kind === 'image') {
     return (
       <img
-        src={task.thumbnailUrl || file?.url}
-        alt={task.name}
+        src={file.url}
+        alt={alt}
         loading="lazy"
         decoding="async"
-        className="h-full w-full object-cover"
+        className={className || 'h-full w-full object-cover'}
       />
     );
   }
 
   if (kind === 'video') {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-slate-100 text-slate-400">
-        <FileVideo className="h-7 w-7" />
-        <span className="text-[10px] font-black uppercase tracking-wide">Video</span>
-      </div>
+      <video
+        src={`${file.url}#t=0.1`}
+        className={className || 'h-full w-full object-cover'}
+        muted
+        playsInline
+        preload="metadata"
+      />
     );
   }
 
   if (kind === 'pdf') {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-slate-100 text-slate-400">
-        <FileText className="h-7 w-7" />
-        <span className="text-[10px] font-black uppercase tracking-wide">PDF</span>
+      <div className="relative h-full w-full overflow-hidden bg-white">
+        <iframe
+          src={getPdfPreviewUrl(file.url)}
+          title={`${file.name} preview`}
+          loading="lazy"
+          className="pointer-events-none h-[240%] w-[240%] origin-top-left scale-[0.42] border-0 bg-white"
+        />
       </div>
     );
   }
@@ -94,6 +108,20 @@ export function TaskThumbnail({ task }: { task: Task }) {
       <span className="max-w-[80px] truncate text-[10px] font-black uppercase">FILE</span>
     </div>
   );
+}
+
+export function TaskThumbnail({ task }: { task: Task }) {
+  const file = getTaskFiles(task.versions[0])[0];
+
+  if (isLocalOnlyFileUrl(task.thumbnailUrl || file?.url)) {
+    return <MissingSharedFile compact />;
+  }
+
+  if (task.thumbnailUrl && (!file || getFileKind(file) === 'image')) {
+    return <FileContentThumbnail file={{ ...(file || { id: task.id, name: task.name, type: 'image/jpeg', size: 0 }), url: task.thumbnailUrl }} alt={task.name} />;
+  }
+
+  return <FileContentThumbnail file={file} alt={task.name} />;
 }
 
 export function FilePreview({
