@@ -363,8 +363,16 @@ export function Sidebar({
                   Mina: 1, Dina: 2, Marwa: 3, Mariam: 4, Noreen: 5, Yomna: 6.
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  <button type="button" onClick={logout} className="rounded-xl border border-slate-200 px-4 py-3 font-black text-slate-600 transition-colors hover:bg-slate-50">
-                    Logout
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPassword('');
+                      setLoginError('');
+                      setAuthMode('register');
+                    }}
+                    className="rounded-xl border border-slate-200 px-4 py-3 font-black text-slate-600 transition-colors hover:bg-slate-50"
+                  >
+                    Register
                   </button>
                   <button type="submit" className="rounded-xl bg-indigo-600 px-4 py-3 font-black text-white transition-colors hover:bg-indigo-700">
                     Login
