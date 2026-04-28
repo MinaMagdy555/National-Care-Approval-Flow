@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { ErrorInfo, ReactNode, useEffect, useRef, useState } from 'react';
 import { AppProvider, useAppStore } from './lib/store';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
@@ -267,11 +267,68 @@ function AppContent() {
   );
 }
 
+class AppErrorBoundary extends React.Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('App crashed', error, info);
+  }
+
+  clearLocalData = async () => {
+    window.localStorage.removeItem('national-care-current-user-id');
+    window.localStorage.removeItem('national-care-registered-users');
+    window.localStorage.removeItem('national-care-registered-passwords');
+
+    if ('indexedDB' in window) {
+      await new Promise<void>(resolve => {
+        const request = indexedDB.deleteDatabase('national-care-approval-flow');
+        request.onsuccess = () => resolve();
+        request.onerror = () => resolve();
+        request.onblocked = () => resolve();
+      });
+    }
+
+    window.location.href = window.location.origin;
+  };
+
+  render() {
+    const { children } = (this as unknown as { props: { children: ReactNode } }).props;
+    if (!this.state.error) return children;
+
+    return (
+      <div className="flex min-h-[100dvh] items-center justify-center bg-slate-50 p-6 text-slate-900">
+        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+          <h1 className="text-xl font-black">The app could not load</h1>
+          <p className="mt-2 text-sm font-semibold text-slate-500">
+            Old local browser data is probably conflicting with the shared database.
+          </p>
+          <p className="mt-3 rounded-lg bg-slate-50 p-3 text-left text-xs font-mono text-slate-500">
+            {this.state.error.message}
+          </p>
+          <button
+            type="button"
+            onClick={this.clearLocalData}
+            className="mt-5 w-full rounded-xl bg-indigo-600 px-4 py-3 font-black text-white transition-colors hover:bg-indigo-700"
+          >
+            Clear Local Cache and Reload
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
 export default function App() {
   return (
-    <AppProvider>
-      <AppContent />
-    </AppProvider>
+    <AppErrorBoundary>
+      <AppProvider>
+        <AppContent />
+      </AppProvider>
+    </AppErrorBoundary>
   );
 }
 

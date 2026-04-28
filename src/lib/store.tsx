@@ -82,8 +82,38 @@ function normalizeMinaCreatedTask(task: Task): Task {
   };
 }
 
+function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
+  if (!task || !task.id) return null;
+
+  const now = new Date().toISOString();
+  const versions = Array.isArray(task.versions) ? task.versions : [];
+
+  return {
+    id: task.id,
+    code: task.code || `TSK-${task.id}`,
+    name: task.name || 'Untitled task',
+    taskType: task.taskType || 'others',
+    reviewMode: task.reviewMode || 'full_review',
+    environment: task.environment || 'production',
+    createdBy: task.createdBy || MINA_ID,
+    handledBy: Array.isArray(task.handledBy) ? task.handledBy : [task.createdBy || MINA_ID],
+    status: task.status || 'submitted',
+    currentOwnerRole: task.currentOwnerRole ?? null,
+    currentOwnerUserId: task.currentOwnerUserId ?? null,
+    priority: task.priority || 'not_set',
+    deadlineText: task.deadlineText ?? null,
+    versions,
+    comments: Array.isArray(task.comments) ? task.comments : [],
+    thumbnailUrl: task.thumbnailUrl || '',
+    archivedAt: task.archivedAt ?? null,
+    archivedReason: task.archivedReason ?? null,
+    createdAt: task.createdAt || now,
+    updatedAt: task.updatedAt || task.createdAt || now,
+  };
+}
+
 function reviveTaskFiles(tasks: Task[]): Task[] {
-  return tasks.map(task => {
+  return tasks.map(task => coerceTask(task)).filter(Boolean).map(task => {
     const versions = task.versions.map(version => {
       const files = version.files?.map(file => ({
         ...file,
@@ -103,7 +133,7 @@ function reviveTaskFiles(tasks: Task[]): Task[] {
       versions,
       thumbnailUrl: thumbnailFile?.url || task.thumbnailUrl,
     });
-  });
+  }) as Task[];
 }
 
 async function uploadMigratedTaskFiles(task: Task): Promise<Task> {
@@ -209,14 +239,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const loadState = isSupabaseConfigured
       ? Promise.all([fetchSupabaseTasks(), fetchSupabaseNotifications(), loadAppState()]).then(([loadedTasks, loadedNotifications, localState]) => {
           if (localState) {
+            const localTasks = Array.isArray(localState.tasks) ? reviveTaskFiles(localState.tasks) : [];
+            const localNotifications = Array.isArray(localState.notifications) ? localState.notifications : [];
             const supabaseTaskIds = new Set(loadedTasks.map(task => task.id));
             const supabaseNotificationIds = new Set(loadedNotifications.map(notification => notification.id));
-            const localOnlyTasks = localState.tasks.filter(task => !supabaseTaskIds.has(task.id));
-            const localOnlyNotifications = localState.notifications.filter(notification => !supabaseNotificationIds.has(notification.id));
+            const localOnlyTasks = localTasks.filter(task => !supabaseTaskIds.has(task.id));
+            const localOnlyNotifications = localNotifications.filter(notification => notification?.id && !supabaseNotificationIds.has(notification.id));
 
             if (localOnlyTasks.length > 0 || localOnlyNotifications.length > 0) {
               setLocalMigrationState({
-                tasks: reviveTaskFiles(localOnlyTasks),
+                tasks: localOnlyTasks,
                 notifications: localOnlyNotifications,
               });
             }
@@ -233,8 +265,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .then(state => {
         if (!isMounted) return;
         if (state) {
-          setTasks(reviveTaskFiles(state.tasks));
-          setNotifications(state.notifications);
+          setTasks(reviveTaskFiles(Array.isArray(state.tasks) ? state.tasks : []));
+          setNotifications(Array.isArray(state.notifications) ? state.notifications.filter(notification => notification?.id) : []);
         }
       })
       .catch(error => {
