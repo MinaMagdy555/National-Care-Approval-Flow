@@ -218,7 +218,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!hasLoadedPersistedState.current || !isSupabaseConfigured) return;
 
-    const autoArchiveTasks = tasks.filter(shouldAutoArchiveTask);
+    const autoArchiveTasks = tasks.filter(task => shouldAutoArchiveTask(task));
     if (autoArchiveTasks.length === 0) return;
 
     setTasks(prev => prev.map(task => (
