@@ -1,4 +1,5 @@
 import { Task } from './types';
+import { isTaskArchived } from './archiveUtils';
 
 const CLOSED_STATUSES = new Set(['approved_by_art_director', 'completed', 'archived']);
 const WEEKDAY_INDEXES: Record<string, number> = {
@@ -60,7 +61,7 @@ function parseDeadlineDate(deadlineText: string | null, today = new Date()): Dat
 }
 
 export function isOpenTask(task: Task) {
-  return !CLOSED_STATUSES.has(task.status);
+  return !CLOSED_STATUSES.has(task.status) && !isTaskArchived(task);
 }
 
 export function isDueToday(task: Task, today = new Date()) {

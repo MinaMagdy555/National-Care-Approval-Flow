@@ -4,6 +4,7 @@ import { TaskCard } from './TaskCard';
 import { AlertCircle, Clock, CheckCircle2, History, LucideIcon, XCircle } from 'lucide-react';
 import { initialUsers } from '../lib/mockData';
 import { isDueThisWeek, isDueToday } from '../lib/deadlineUtils';
+import { isTaskArchived } from '../lib/archiveUtils';
 
 function SummaryCard({
   label,
@@ -48,7 +49,7 @@ export function Dashboard({
 }) {
   const { tasks, currentUser, environment } = useAppStore();
 
-  const envTasks = tasks.filter(t => t.environment === environment);
+  const envTasks = tasks.filter(t => t.environment === environment && !isTaskArchived(t));
   const minaName = initialUsers.find(u => u.role === 'reviewer')?.name.split(' ')[0] || 'Mina';
   const marwaName = initialUsers.find(u => u.role === 'art_director')?.name.split(' ')[0] || 'Marwa';
   const isMemberOrLeader = currentUser.role === 'team_member' || currentUser.role === 'team_leader';

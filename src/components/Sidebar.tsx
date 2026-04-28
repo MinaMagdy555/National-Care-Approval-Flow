@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { LayoutDashboard, CheckSquare, Clock, FileText, Bell, ChevronDown, ChevronRight, X, LogIn, UserPlus } from 'lucide-react';
+import { LayoutDashboard, CheckSquare, Clock, FileText, Bell, ChevronDown, ChevronRight, X, LogIn, UserPlus, Archive } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { initialUsers, userRoleLabels } from '../lib/mockData';
+import { userRoleLabels } from '../lib/mockData';
 import { CustomSelect } from './CustomSelect';
+import { Role } from '../lib/types';
 
 type MenuItem = {
   id: string;
@@ -23,11 +24,14 @@ export function Sidebar({
   isOpen: boolean;
   onClose: () => void;
 }) {
-  const { currentUser, notifications, loginWithPassword } = useAppStore();
+  const { currentUser, userList, notifications, loginWithPassword, logout, registerProfile, deleteCurrentProfile } = useAppStore();
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
-  const [isLoginOpen, setIsLoginOpen] = useState(false);
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [loginUserId, setLoginUserId] = useState(currentUser.id);
   const [password, setPassword] = useState('');
+  const [registerName, setRegisterName] = useState('');
+  const [registerRole, setRegisterRole] = useState<Role>('team_member');
   const [loginError, setLoginError] = useState('');
 
   const unreadCount = notifications ? notifications.filter(n => n.userId === currentUser.id && !n.read).length : 0;
@@ -44,7 +48,8 @@ export function Sidebar({
       currentView === 'waiting_for_mina' ||
       currentView === 'waiting_for_marwa' ||
       currentView === 'approved_by_me' ||
-      currentView === 'rejected_reopened'
+      currentView === 'rejected_reopened' ||
+      currentView === 'archived_tasks'
     ) {
       setExpandedGroups(prev => (prev.includes('task_center') ? prev : [...prev, 'task_center']));
     }
@@ -71,8 +76,28 @@ export function Sidebar({
 
     setPassword('');
     setLoginError('');
-    setIsLoginOpen(false);
+    setIsAuthOpen(false);
     onClose();
+  };
+
+  const handleRegister = (event: React.FormEvent) => {
+    event.preventDefault();
+    const success = registerProfile(registerName, password, registerRole);
+    if (!success) {
+      setLoginError('Enter a name and password.');
+      return;
+    }
+
+    setRegisterName('');
+    setPassword('');
+    setLoginError('');
+    setIsAuthOpen(false);
+    onClose();
+  };
+
+  const handleDeleteCurrentProfile = () => {
+    const success = deleteCurrentProfile();
+    setLoginError(success ? '' : 'Built-in profiles cannot be deleted.');
   };
 
   const getMenuForRole = (): MenuItem[] => {
@@ -94,6 +119,7 @@ export function Sidebar({
               { id: 'waiting_for_marwa', label: 'Waiting for Marwa', icon: FileText },
               { id: 'rejected_reopened', label: 'Rejected', icon: Clock },
               { id: 'approved_by_me', label: 'Approved', icon: CheckSquare },
+              { id: 'archived_tasks', label: 'Archived', icon: Archive },
             ]
           }
         ];
@@ -110,6 +136,7 @@ export function Sidebar({
               { id: 'ad_queue', label: 'Needs Marwa Action', icon: FileText },
               { id: 'approved_by_me', label: 'Approved', icon: CheckSquare },
               { id: 'rejected_reopened', label: 'Rejected', icon: FileText },
+              { id: 'archived_tasks', label: 'Archived', icon: Archive },
             ]
           }
         ];
@@ -123,6 +150,7 @@ export function Sidebar({
               { id: 'ad_queue', label: 'Needs Your Action', icon: Clock },
               { id: 'approved_by_me', label: 'Approved', icon: CheckSquare },
               { id: 'rejected_reopened', label: 'Rejected', icon: FileText },
+              { id: 'archived_tasks', label: 'Archived', icon: Archive },
             ]
           }
         ];
@@ -137,6 +165,7 @@ export function Sidebar({
               { id: 'waiting_for_marwa', label: 'Waiting for Marwa', icon: FileText },
               { id: 'rejected_reopened', label: 'Rejected', icon: FileText },
               { id: 'approved_by_me', label: 'Approved', icon: CheckSquare },
+              { id: 'archived_tasks', label: 'Archived', icon: Archive },
             ]
           }
         ];
@@ -159,7 +188,8 @@ export function Sidebar({
     'waiting_for_mina',
     'waiting_for_marwa',
     'approved_by_me',
-    'rejected_reopened'
+    'rejected_reopened',
+    'archived_tasks'
   ]);
 
   const renderMenuItem = (item: MenuItem, depth = 0) => {
@@ -268,19 +298,22 @@ export function Sidebar({
                 setLoginUserId(currentUser.id);
                 setPassword('');
                 setLoginError('');
-                setIsLoginOpen(true);
+                setAuthMode('login');
+                setIsAuthOpen(true);
               }}
               className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-white transition-colors hover:bg-white/10"
             >
-              <LogIn className="h-3.5 w-3.5" /> Login
+              <LogIn className="h-3.5 w-3.5" /> Logout
             </button>
             <button
               type="button"
               onClick={() => {
                 setLoginUserId(currentUser.id);
+                setRegisterName('');
                 setPassword('');
-                setLoginError('Registration is not connected yet. Use an existing profile for now.');
-                setIsLoginOpen(true);
+                setLoginError('');
+                setAuthMode('register');
+                setIsAuthOpen(true);
               }}
               className="inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-black text-slate-400 transition-colors hover:bg-white/5 hover:text-white"
             >
@@ -290,46 +323,98 @@ export function Sidebar({
         </div>
       </aside>
 
-      {isLoginOpen && (
+      {isAuthOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
           <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
               <div>
-                <h2 className="text-lg font-black text-slate-900">Login</h2>
-                <p className="text-xs font-semibold text-slate-500">Use the temporary profile passwords.</p>
+                <h2 className="text-lg font-black text-slate-900">{authMode === 'login' ? 'Login or Logout' : 'Register'}</h2>
+                <p className="text-xs font-semibold text-slate-500">
+                  {authMode === 'login' ? 'Switch profile or log out from this device.' : 'Create a temporary local profile.'}
+                </p>
               </div>
-              <button type="button" onClick={() => setIsLoginOpen(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-900">
+              <button type="button" onClick={() => setIsAuthOpen(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-900">
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <form onSubmit={handleLogin} className="space-y-4 p-5">
-              <div>
-                <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Profile</label>
-                <CustomSelect
-                  value={loginUserId}
-                  onChange={setLoginUserId}
-                  options={initialUsers.map(user => ({ value: user.id, label: user.name }))}
-                  buttonClassName="rounded-xl border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 shadow-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Password</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={event => setPassword(event.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-                  autoFocus
-                />
-              </div>
-              {loginError && <p className="text-sm font-bold text-rose-600">{loginError}</p>}
-              <div className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">
-                Mina: 1, Dina: 2, Marwa: 3, Mariam: 4, Noreen: 5, Yomna: 6.
-              </div>
-              <button type="submit" className="w-full rounded-xl bg-indigo-600 px-4 py-3 font-black text-white transition-colors hover:bg-indigo-700">
-                Login
-              </button>
-            </form>
+            {authMode === 'login' ? (
+              <form onSubmit={handleLogin} className="space-y-4 p-5">
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Profile</label>
+                  <CustomSelect
+                    value={loginUserId}
+                    onChange={setLoginUserId}
+                    options={userList.map(user => ({ value: user.id, label: user.name }))}
+                    buttonClassName="rounded-xl border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 shadow-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Password</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={event => setPassword(event.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                    autoFocus
+                  />
+                </div>
+                {loginError && <p className="text-sm font-bold text-rose-600">{loginError}</p>}
+                <div className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">
+                  Mina: 1, Dina: 2, Marwa: 3, Mariam: 4, Noreen: 5, Yomna: 6.
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" onClick={logout} className="rounded-xl border border-slate-200 px-4 py-3 font-black text-slate-600 transition-colors hover:bg-slate-50">
+                    Logout
+                  </button>
+                  <button type="submit" className="rounded-xl bg-indigo-600 px-4 py-3 font-black text-white transition-colors hover:bg-indigo-700">
+                    Login
+                  </button>
+                </div>
+                <button type="button" onClick={handleDeleteCurrentProfile} className="w-full rounded-xl border border-rose-200 px-4 py-2.5 text-sm font-black text-rose-600 transition-colors hover:bg-rose-50">
+                  Delete Current Registered Profile
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleRegister} className="space-y-4 p-5">
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Name</label>
+                  <input
+                    type="text"
+                    value={registerName}
+                    onChange={event => setRegisterName(event.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                    autoFocus
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Role</label>
+                  <CustomSelect
+                    value={registerRole}
+                    onChange={value => setRegisterRole(value as Role)}
+                    options={[
+                      { value: 'team_member', label: 'Team Member' },
+                      { value: 'reviewer', label: 'Reviewer' },
+                      { value: 'art_director', label: 'Art Director' },
+                      { value: 'team_leader', label: 'Team Leader' },
+                    ]}
+                    buttonClassName="rounded-xl border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 shadow-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Password</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={event => setPassword(event.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                {loginError && <p className="text-sm font-bold text-rose-600">{loginError}</p>}
+                <button type="submit" className="w-full rounded-xl bg-indigo-600 px-4 py-3 font-black text-white transition-colors hover:bg-indigo-700">
+                  Register
+                </button>
+              </form>
+            )}
           </div>
         </div>
       )}

@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useRef, useState, ReactNod
 import { User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile } from './types';
 import { initialUsers, initialTasks } from './mockData';
 import { clearAppState, loadAppState, saveAppState } from './localDb';
+import { shouldAutoArchiveTask } from './archiveUtils';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 import {
   fetchSupabaseNotifications,
@@ -16,6 +17,8 @@ const MARWA_ID = 'user_2';
 const DINA_ID = 'user_3';
 const REVIEWER_WAITING_STATUSES: TaskStatus[] = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'];
 const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
+const REGISTERED_USERS_STORAGE_KEY = 'national-care-registered-users';
+const REGISTERED_PASSWORDS_STORAGE_KEY = 'national-care-registered-passwords';
 const PROFILE_PASSWORDS: Record<string, string> = {
   user_1: '1',
   user_3: '2',
@@ -25,9 +28,41 @@ const PROFILE_PASSWORDS: Record<string, string> = {
   user_6: '6',
 };
 
+type StoredUser = User & { password?: string };
+
+function getStoredUsers(): StoredUser[] {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    return JSON.parse(window.localStorage.getItem(REGISTERED_USERS_STORAGE_KEY) || '[]') as StoredUser[];
+  } catch {
+    return [];
+  }
+}
+
+function getStoredPasswords(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+
+  try {
+    return JSON.parse(window.localStorage.getItem(REGISTERED_PASSWORDS_STORAGE_KEY) || '{}') as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function saveRegisteredProfiles(users: User[], passwords: Record<string, string>) {
+  window.localStorage.setItem(REGISTERED_USERS_STORAGE_KEY, JSON.stringify(users));
+  window.localStorage.setItem(REGISTERED_PASSWORDS_STORAGE_KEY, JSON.stringify(passwords));
+}
+
+function getAllInitialUsers() {
+  return [...initialUsers, ...getStoredUsers().map(({ password, ...user }) => user)];
+}
+
 function getInitialCurrentUser() {
   const storedUserId = typeof window !== 'undefined' ? window.localStorage.getItem(CURRENT_USER_STORAGE_KEY) : null;
-  return initialUsers.find(user => user.id === storedUserId) || initialUsers.find(u => u.role === 'reviewer') || initialUsers[0];
+  const users = getAllInitialUsers();
+  return users.find(user => user.id === storedUserId) || users.find(u => u.role === 'reviewer') || users[0];
 }
 
 function normalizeMinaCreatedTask(task: Task): Task {
@@ -95,6 +130,7 @@ interface AppState {
   environment: Environment;
   tasks: Task[];
   users: Record<string, User>;
+  userList: User[];
   notifications: Notification[];
   persistenceMode: 'supabase' | 'local';
   persistenceError: string | null;
@@ -115,6 +151,10 @@ interface AppContextType extends AppState {
   markNotificationAsRead: (id: string) => void;
   loginWithPassword: (userId: string, password: string) => boolean;
   logout: () => void;
+  registerProfile: (name: string, password: string, role: Role) => boolean;
+  deleteCurrentProfile: () => boolean;
+  archiveTask: (taskId: string, reason?: string) => void;
+  unarchiveTask: (taskId: string) => void;
   migrateLocalDataToSupabase: () => Promise<void>;
   dismissLocalMigration: () => void;
 }
@@ -123,7 +163,8 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const hasLoadedPersistedState = useRef(false);
-  const usersObj = initialUsers.reduce((acc, user) => {
+  const [userList, setUserList] = useState<User[]>(getAllInitialUsers);
+  const usersObj = userList.reduce((acc, user) => {
     acc[user.id] = user;
     return acc;
   }, {} as Record<string, User>);
@@ -141,6 +182,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setCurrentUserState(user);
     window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, user.id);
   };
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState.current || !isSupabaseConfigured) return;
+
+    const autoArchiveTasks = tasks.filter(shouldAutoArchiveTask);
+    if (autoArchiveTasks.length === 0) return;
+
+    setTasks(prev => prev.map(task => (
+      autoArchiveTasks.some(item => item.id === task.id)
+        ? {
+            ...task,
+            archivedAt: new Date().toISOString(),
+            archivedReason: 'Auto archived after 3 months of inactivity',
+            updatedAt: new Date().toISOString(),
+          }
+        : task
+    )));
+  }, [tasks]);
 
   useEffect(() => {
     let isMounted = true;
@@ -268,9 +327,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const loginWithPassword = (userId: string, password: string) => {
-    if (PROFILE_PASSWORDS[userId] !== password.trim()) return false;
+    const storedPasswords = getStoredPasswords();
+    if ((PROFILE_PASSWORDS[userId] || storedPasswords[userId]) !== password.trim()) return false;
 
-    const user = initialUsers.find(item => item.id === userId);
+    const user = userList.find(item => item.id === userId);
     if (!user) return false;
 
     setCurrentUser(user);
@@ -279,7 +339,55 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
-    setCurrentUserState(initialUsers.find(u => u.role === 'reviewer') || initialUsers[0]);
+    setCurrentUserState(userList.find(u => u.role === 'reviewer') || userList[0]);
+  };
+
+  const registerProfile = (name: string, password: string, role: Role) => {
+    const trimmedName = name.trim();
+    const trimmedPassword = password.trim();
+    if (!trimmedName || !trimmedPassword) return false;
+
+    const newUser: User = {
+      id: `custom_${Date.now()}`,
+      name: trimmedName,
+      role,
+      jobTitle: role === 'team_member' ? 'Team Member' : role.replaceAll('_', ' '),
+    };
+    const nextUserList = [...userList, newUser];
+    const nextPasswords = { ...getStoredPasswords(), [newUser.id]: trimmedPassword };
+
+    setUserList(nextUserList);
+    saveRegisteredProfiles(nextUserList.filter(user => user.id.startsWith('custom_')), nextPasswords);
+    setCurrentUser(newUser);
+    return true;
+  };
+
+  const deleteCurrentProfile = () => {
+    if (!currentUser.id.startsWith('custom_')) return false;
+
+    const nextUserList = userList.filter(user => user.id !== currentUser.id);
+    const nextPasswords = getStoredPasswords();
+    delete nextPasswords[currentUser.id];
+
+    setUserList(nextUserList);
+    saveRegisteredProfiles(nextUserList.filter(user => user.id.startsWith('custom_')), nextPasswords);
+    window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
+    setCurrentUserState(nextUserList.find(u => u.role === 'reviewer') || nextUserList[0]);
+    return true;
+  };
+
+  const archiveTask = (taskId: string, reason = 'Archived manually') => {
+    setTasks(prev => prev.map(task => task.id === taskId
+      ? { ...task, archivedAt: new Date().toISOString(), archivedReason: reason, updatedAt: new Date().toISOString() }
+      : task
+    ));
+  };
+
+  const unarchiveTask = (taskId: string) => {
+    setTasks(prev => prev.map(task => task.id === taskId
+      ? { ...task, archivedAt: null, archivedReason: null, updatedAt: new Date().toISOString() }
+      : task
+    ));
   };
 
   const migrateLocalDataToSupabase = async () => {
@@ -437,6 +545,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       environment,
       tasks,
       users: usersObj,
+      userList,
       notifications,
       persistenceMode: isSupabaseConfigured ? 'supabase' : 'local',
       persistenceError,
@@ -454,6 +563,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       markNotificationAsRead,
       loginWithPassword,
       logout,
+      registerProfile,
+      deleteCurrentProfile,
+      archiveTask,
+      unarchiveTask,
       migrateLocalDataToSupabase,
       dismissLocalMigration,
     }}>

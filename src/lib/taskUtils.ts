@@ -1,4 +1,5 @@
 import { Task, Role, Priority, TaskType, ReviewMode } from './types';
+import { isTaskArchived } from './archiveUtils';
 
 export function getTaskTypeLabel(type: TaskType): string {
   switch (type) {
@@ -34,6 +35,10 @@ export function getPriorityLabel(priority: Priority): string {
 
 export function getStatusInfo(task: Task, viewerRole: Role): { label: string; color: 'amber' | 'blue' | 'green' | 'red' | 'gray' | 'purple' } {
   const { status } = task;
+
+  if (isTaskArchived(task)) {
+    return { label: 'Archived', color: 'gray' };
+  }
 
   if (viewerRole === 'team_member') {
     switch (status) {
@@ -102,6 +107,10 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
 
 export function getNextActionLabel(task: Task, viewerRole: Role): string {
   const { status } = task;
+
+  if (isTaskArchived(task)) {
+    return 'Archived';
+  }
 
   if (viewerRole === 'team_member') {
     if (status === 'changes_requested_by_reviewer' || status === 'changes_requested_by_art_director') {

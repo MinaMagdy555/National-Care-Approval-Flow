@@ -97,6 +97,8 @@ export interface Task {
   versions: TaskVersion[];
   comments?: TaskComment[];
   thumbnailUrl: string;
+  archivedAt?: string | null;
+  archivedReason?: string | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -7,6 +7,7 @@ import { cn } from '../lib/utils';
 import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, File as FileIcon } from 'lucide-react';
 import { FilePreview, getFileKind, getPdfPreviewUrl, getTaskFiles, isLocalOnlyFileUrl } from './FilePreview';
 import { uploadTaskFiles } from '../lib/supabaseDb';
+import { isTaskArchived } from '../lib/archiveUtils';
 
 type ReviewNoteSection = {
   id: string;
@@ -24,7 +25,7 @@ const DINA_ID = 'user_3';
 const INTERNAL_REVIEW_VIEWERS = [MINA_ID, MARWA_ID, DINA_ID];
 
 export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => void }) {
-  const { tasks, currentUser, updateTaskStatus, updateTaskPriority, addTaskComment, addTaskVersion, replaceTaskVersionFiles } = useAppStore();
+  const { tasks, currentUser, updateTaskStatus, updateTaskPriority, addTaskComment, addTaskVersion, replaceTaskVersionFiles, archiveTask, unarchiveTask } = useAppStore();
   const task = tasks.find(t => t.id === taskId);
   
   const [modal, setModal] = useState<'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
@@ -56,6 +57,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const files = getTaskFiles(currentVersion);
   const selectedFile = files[selectedFileIndex] || files[0];
   const currentVersionHasLocalOnlyFiles = files.some(file => isLocalOnlyFileUrl(file.url));
+  const isArchived = isTaskArchived(task);
   const isDetailedReviewType = task.taskType === 'ai_packet' || task.taskType === 'video';
   const isSelfCreatedTask = task.createdBy === currentUser.id;
   const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
@@ -760,9 +762,29 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               </div>
             </div>
           )}
-        </div>
+          </div>
 
-      </div>
+          <div className="mt-4">
+            {isArchived ? (
+              <button
+                type="button"
+                onClick={() => unarchiveTask(task.id)}
+                className="w-full rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700 transition-colors hover:bg-emerald-100"
+              >
+                Unarchive Task
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => archiveTask(task.id)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-600 transition-colors hover:bg-slate-50"
+              >
+                Archive Task
+              </button>
+            )}
+          </div>
+
+        </div>
 
       {/* MODALS */}
       {modal === 'send_to_ad' && (

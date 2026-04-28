@@ -7,6 +7,7 @@ import { ReviewQueue } from './components/ReviewQueue';
 import { NotificationsList } from './components/Notifications';
 import { CreateTask } from './components/CreateTask';
 import { isDueThisWeek, isDueToday } from './lib/deadlineUtils';
+import { isTaskArchived } from './lib/archiveUtils';
 import { Menu } from 'lucide-react';
 
 const FULL_WORKSPACE_VIEWERS = ['user_1', 'user_2', 'user_3'];
@@ -130,7 +131,10 @@ function AppContent() {
 
   const canViewFullWorkspace = FULL_WORKSPACE_VIEWERS.includes(currentUser.id);
   const envTasks = tasks.filter(t => t.environment === environment);
-  const visibleEnvTasks = canViewFullWorkspace ? envTasks : envTasks.filter(t => t.createdBy === currentUser.id);
+  const activeEnvTasks = envTasks.filter(task => !isTaskArchived(task));
+  const archivedEnvTasks = envTasks.filter(isTaskArchived);
+  const visibleEnvTasks = canViewFullWorkspace ? activeEnvTasks : activeEnvTasks.filter(t => t.createdBy === currentUser.id);
+  const visibleArchivedTasks = canViewFullWorkspace ? archivedEnvTasks : archivedEnvTasks.filter(t => t.createdBy === currentUser.id);
 
   const renderContent = () => {
     if (activeTaskId) {
@@ -193,6 +197,9 @@ function AppContent() {
       case 'my_tasks': {
         const myTasks = visibleEnvTasks.filter(t => t.createdBy === currentUser.id);
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={myTasks} title="My Tasks" />;
+      }
+      case 'archived_tasks': {
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={visibleArchivedTasks} title="Archived Tasks" />;
       }
       default:
         return (
