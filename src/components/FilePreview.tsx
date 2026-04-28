@@ -1,5 +1,5 @@
 import React from 'react';
-import { Image as ImageIcon } from 'lucide-react';
+import { FileWarning, Image as ImageIcon } from 'lucide-react';
 import { Task, TaskVersion, UploadedTaskFile } from '../lib/types';
 
 export function getTaskFiles(version?: TaskVersion): UploadedTaskFile[] {
@@ -30,9 +30,33 @@ export function getPdfPreviewUrl(url: string) {
   return `${url}#toolbar=0&navpanes=0&scrollbar=0&page=1&view=FitH`;
 }
 
+export function isLocalOnlyFileUrl(url?: string) {
+  return Boolean(url?.startsWith('blob:'));
+}
+
+function MissingSharedFile({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-slate-100 p-3 text-center text-slate-500">
+      <FileWarning className={compact ? 'h-5 w-5' : 'h-8 w-8'} />
+      <span className={`${compact ? 'text-[10px]' : 'text-sm'} font-black uppercase tracking-wide`}>
+        File needs re-upload
+      </span>
+      {!compact && (
+        <p className="max-w-sm text-xs font-semibold text-slate-400">
+          This task was migrated before its file was uploaded to shared storage.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function TaskThumbnail({ task }: { task: Task }) {
   const file = getTaskFiles(task.versions[0])[0];
   const kind = getFileKind(file);
+
+  if (isLocalOnlyFileUrl(task.thumbnailUrl || file?.url)) {
+    return <MissingSharedFile compact />;
+  }
 
   if (task.thumbnailUrl || kind === 'image') {
     return (
@@ -89,6 +113,10 @@ export function FilePreview({
 
   if (!file) {
     return <div className="flex h-full w-full items-center justify-center text-sm font-bold text-slate-400">No file uploaded</div>;
+  }
+
+  if (isLocalOnlyFileUrl(file.url)) {
+    return <MissingSharedFile />;
   }
 
   if (kind === 'image') {

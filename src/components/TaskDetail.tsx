@@ -5,7 +5,7 @@ import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, File as FileIcon } from 'lucide-react';
-import { FilePreview, getFileKind, getPdfPreviewUrl, getTaskFiles } from './FilePreview';
+import { FilePreview, getFileKind, getPdfPreviewUrl, getTaskFiles, isLocalOnlyFileUrl } from './FilePreview';
 import { uploadTaskFiles } from '../lib/supabaseDb';
 
 type ReviewNoteSection = {
@@ -24,7 +24,7 @@ const DINA_ID = 'user_3';
 const INTERNAL_REVIEW_VIEWERS = [MINA_ID, MARWA_ID, DINA_ID];
 
 export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => void }) {
-  const { tasks, currentUser, updateTaskStatus, updateTaskPriority, addTaskComment, addTaskVersion } = useAppStore();
+  const { tasks, currentUser, updateTaskStatus, updateTaskPriority, addTaskComment, addTaskVersion, replaceTaskVersionFiles } = useAppStore();
   const task = tasks.find(t => t.id === taskId);
   
   const [modal, setModal] = useState<'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
@@ -39,7 +39,10 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [resubmitNote, setResubmitNote] = useState('');
   const [resubmitError, setResubmitError] = useState('');
   const [isResubmitting, setIsResubmitting] = useState(false);
+  const [repairError, setRepairError] = useState('');
+  const [isRepairingFiles, setIsRepairingFiles] = useState(false);
   const resubmitInputRef = useRef<HTMLInputElement>(null);
+  const repairInputRef = useRef<HTMLInputElement>(null);
 
   const canViewFullWorkspace = INTERNAL_REVIEW_VIEWERS.includes(currentUser.id);
 
@@ -53,6 +56,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const currentVersion = task.versions[0];
   const files = getTaskFiles(currentVersion);
   const selectedFile = files[selectedFileIndex] || files[0];
+  const currentVersionHasLocalOnlyFiles = files.some(file => isLocalOnlyFileUrl(file.url));
   const isDetailedReviewType = task.taskType === 'ai_packet' || task.taskType === 'video';
   const isSelfCreatedTask = task.createdBy === currentUser.id;
   const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
@@ -148,6 +152,43 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       setResubmitError('Could not upload the revised files. Please try again.');
     } finally {
       setIsResubmitting(false);
+    }
+  };
+
+  const handleRepairFiles = async (incomingFiles: File[]) => {
+    if (incomingFiles.length === 0 || isRepairingFiles) return;
+
+    const validFiles = incomingFiles.filter(file => {
+      const extension = file.name.split('.').pop()?.toLowerCase() || '';
+      return ALLOWED_FILE_EXTENSIONS.includes(extension) && file.size <= MAX_FILE_SIZE_BYTES;
+    });
+
+    if (validFiles.length !== incomingFiles.length) {
+      setRepairError(`Only PNG, JPG, MP4, or PDF files up to ${MAX_FILE_SIZE_MB}MB are allowed.`);
+      return;
+    }
+
+    setIsRepairingFiles(true);
+    setRepairError('');
+
+    const localFiles: UploadedTaskFile[] = validFiles.map(file => ({
+      id: Math.random().toString(36).substring(7),
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      blob: file,
+      url: URL.createObjectURL(file),
+    }));
+
+    try {
+      const uploadedFiles = await uploadTaskFiles(task.id, localFiles);
+      replaceTaskVersionFiles(task.id, currentVersion.id, uploadedFiles);
+      setSelectedFileIndex(0);
+    } catch (error) {
+      console.error('Failed to repair task files', error);
+      setRepairError('Could not upload replacement files. Please try again.');
+    } finally {
+      setIsRepairingFiles(false);
     }
   };
 
@@ -381,6 +422,39 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
           <div className="flex min-h-[48vh] flex-1 items-center justify-center overflow-hidden rounded-xl bg-white shadow-2xl ring-1 ring-gray-900/5">
             <FilePreview file={selectedFile} onImageClick={setLightboxUrl} onPdfFullscreen={setFullscreenPdf} />
           </div>
+
+          {currentVersionHasLocalOnlyFiles && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-900 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-black">This file is local-only</p>
+                  <p className="mt-1 text-xs font-semibold text-amber-700">
+                    Re-upload the original file here to make it visible on every device.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => repairInputRef.current?.click()}
+                  disabled={isRepairingFiles}
+                  className="rounded-lg bg-amber-600 px-4 py-2 text-xs font-black uppercase tracking-wide text-white shadow-sm transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-amber-300"
+                >
+                  {isRepairingFiles ? 'Uploading...' : 'Re-upload File'}
+                </button>
+              </div>
+              <input
+                ref={repairInputRef}
+                type="file"
+                multiple
+                accept=".png,.jpg,.jpeg,.mp4,.pdf,image/png,image/jpeg,video/mp4,application/pdf"
+                className="hidden"
+                onChange={event => {
+                  handleRepairFiles(Array.from(event.target.files || []));
+                  event.target.value = '';
+                }}
+              />
+              {repairError && <p className="mt-3 text-sm font-bold text-rose-600">{repairError}</p>}
+            </div>
+          )}
 
           {files.length > 1 && (
             <div className="flex gap-3 overflow-x-auto rounded-xl border border-slate-200 bg-white p-3 shadow-sm">

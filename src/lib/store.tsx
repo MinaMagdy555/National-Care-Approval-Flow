@@ -1,11 +1,12 @@
 import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
-import { User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion } from './types';
+import { User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile } from './types';
 import { initialUsers, initialTasks } from './mockData';
 import { clearAppState, loadAppState, saveAppState } from './localDb';
 import { isSupabaseConfigured } from './supabaseClient';
 import {
   fetchSupabaseNotifications,
   fetchSupabaseTasks,
+  uploadTaskFiles,
   upsertSupabaseNotifications,
   upsertSupabaseTask,
 } from './supabaseDb';
@@ -54,6 +55,27 @@ function reviveTaskFiles(tasks: Task[]): Task[] {
   });
 }
 
+async function uploadMigratedTaskFiles(task: Task): Promise<Task> {
+  const versions = await Promise.all(task.versions.map(async version => {
+    if (!version.files || version.files.length === 0) return version;
+
+    const uploadedFiles = await uploadTaskFiles(task.id, version.files);
+
+    return {
+      ...version,
+      files: uploadedFiles,
+      fileUrl: uploadedFiles[0]?.url || version.fileUrl,
+    };
+  }));
+  const newestImageFile = versions[0]?.files?.find(file => file.type.startsWith('image/'));
+
+  return {
+    ...task,
+    versions,
+    thumbnailUrl: newestImageFile?.url || task.thumbnailUrl,
+  };
+}
+
 interface AppState {
   currentUser: User;
   environment: Environment;
@@ -73,6 +95,7 @@ interface AppContextType extends AppState {
   updateTaskPriority: (taskId: string, priority: Priority, deadline: string | null) => void;
   addTaskComment: (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => void;
   addTaskVersion: (taskId: string, version: TaskVersion) => void;
+  replaceTaskVersionFiles: (taskId: string, versionId: string, files: UploadedTaskFile[]) => void;
   addTask: (task: Task) => void;
   addNotification: (notification: Omit<Notification, 'id' | 'createdAt' | 'read'>) => void;
   markNotificationAsRead: (id: string) => void;
@@ -190,14 +213,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPersistenceError(null);
 
     try {
+      const uploadedTasks = await Promise.all(localMigrationState.tasks.map(uploadMigratedTaskFiles));
+
       await Promise.all([
-        ...localMigrationState.tasks.map(task => upsertSupabaseTask(task)),
+        ...uploadedTasks.map(task => upsertSupabaseTask(task)),
         upsertSupabaseNotifications(localMigrationState.notifications),
       ]);
 
       setTasks(prev => {
         const existingIds = new Set(prev.map(task => task.id));
-        return [...localMigrationState.tasks.filter(task => !existingIds.has(task.id)), ...prev];
+        return [...uploadedTasks.filter(task => !existingIds.has(task.id)), ...prev];
       });
       setNotifications(prev => {
         const existingIds = new Set(prev.map(notification => notification.id));
@@ -288,6 +313,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }));
   };
 
+  const replaceTaskVersionFiles = (taskId: string, versionId: string, files: UploadedTaskFile[]) => {
+    setTasks(prev => prev.map(task => {
+      if (task.id !== taskId) return task;
+
+      const versions = task.versions.map(version => (
+        version.id === versionId
+          ? {
+              ...version,
+              files,
+              fileUrl: files[0]?.url || version.fileUrl,
+            }
+          : version
+      ));
+      const thumbnailFile = versions[0]?.files?.find(file => file.type.startsWith('image/'));
+
+      return {
+        ...task,
+        versions,
+        thumbnailUrl: thumbnailFile?.url || task.thumbnailUrl,
+        updatedAt: new Date().toISOString(),
+      };
+    }));
+  };
+
   const addTaskComment = (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => {
     setTasks(prev => prev.map(task => {
       if (task.id !== taskId) return task;
@@ -323,6 +372,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTaskPriority,
       addTaskComment,
       addTaskVersion,
+      replaceTaskVersionFiles,
       addTask,
       addNotification,
       markNotificationAsRead,
