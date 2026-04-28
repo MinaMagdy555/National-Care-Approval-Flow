@@ -463,7 +463,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (taskIndex !== -1) {
       const task = tasks[taskIndex];
       if (newStatus === 'approved_by_art_director' && task.status !== newStatus) {
-        addNotifications([DINA_ID, MINA_ID, task.createdBy], taskId, `Marwa approved "${task.name}".`);
+        addNotifications([MARWA_ID, DINA_ID, MINA_ID, task.createdBy, ...task.handledBy], taskId, `Marwa approved "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_reviewer' && task.status !== newStatus) {
         addNotifications([MARWA_ID, DINA_ID, task.createdBy], taskId, `Mina requested changes on "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_art_director' && task.status !== newStatus) {

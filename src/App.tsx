@@ -11,6 +11,7 @@ import { isTaskArchived } from './lib/archiveUtils';
 import { Menu } from 'lucide-react';
 
 const FULL_WORKSPACE_VIEWERS = ['user_1', 'user_2', 'user_3'];
+let notificationAudioContext: AudioContext | null = null;
 
 type AppRoute = {
   view: string;
@@ -38,7 +39,11 @@ function playNotificationSound() {
   const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioContextClass) return;
 
-  const audioContext = new AudioContextClass();
+  notificationAudioContext = notificationAudioContext || new AudioContextClass();
+  const audioContext = notificationAudioContext;
+  if (audioContext.state === 'suspended') {
+    void audioContext.resume();
+  }
   const gain = audioContext.createGain();
   const firstTone = audioContext.createOscillator();
   const secondTone = audioContext.createOscillator();
@@ -60,7 +65,6 @@ function playNotificationSound() {
   firstTone.stop(audioContext.currentTime + 0.18);
   secondTone.start(audioContext.currentTime + 0.2);
   secondTone.stop(audioContext.currentTime + 0.45);
-  window.setTimeout(() => audioContext.close(), 700);
 }
 
 function AppContent() {
@@ -81,6 +85,7 @@ function AppContent() {
     dismissLocalMigration,
   } = useAppStore();
   const initialUnreadCountRef = useRef<number | null>(null);
+  const unreadNotificationIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     writeRouteToUrl({ view: currentView, taskId: activeTaskId }, 'replace');
@@ -96,18 +101,41 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    const unreadCount = notifications.filter(notification => notification.userId === currentUser.id && !notification.read).length;
+    const unreadNotifications = notifications.filter(notification => notification.userId === currentUser.id && !notification.read);
+    const unreadIds = new Set(unreadNotifications.map(notification => notification.id));
+
     if (initialUnreadCountRef.current === null) {
-      initialUnreadCountRef.current = unreadCount;
+      initialUnreadCountRef.current = unreadNotifications.length;
+      unreadNotificationIdsRef.current = unreadIds;
       return;
     }
 
-    if (unreadCount > initialUnreadCountRef.current && (document.hidden || !document.hasFocus())) {
+    const hasNewUnreadNotification = unreadNotifications.some(notification => !unreadNotificationIdsRef.current.has(notification.id));
+    if (hasNewUnreadNotification) {
       playNotificationSound();
     }
 
-    initialUnreadCountRef.current = unreadCount;
+    initialUnreadCountRef.current = unreadNotifications.length;
+    unreadNotificationIdsRef.current = unreadIds;
   }, [notifications, currentUser.id]);
+
+  useEffect(() => {
+    const unlockNotificationAudio = () => {
+      const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextClass) return;
+      notificationAudioContext = notificationAudioContext || new AudioContextClass();
+      if (notificationAudioContext.state === 'suspended') {
+        void notificationAudioContext.resume();
+      }
+    };
+
+    window.addEventListener('pointerdown', unlockNotificationAudio, { once: true });
+    window.addEventListener('keydown', unlockNotificationAudio, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlockNotificationAudio);
+      window.removeEventListener('keydown', unlockNotificationAudio);
+    };
+  }, []);
 
   const navigateTo = (route: AppRoute, mode: 'push' | 'replace' = 'push') => {
     setView(route.view);
