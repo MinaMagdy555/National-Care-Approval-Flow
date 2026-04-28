@@ -6,9 +6,21 @@ import { CustomSelect } from './CustomSelect';
 import { Menu } from 'lucide-react';
 
 export function TopBar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
-  const { environment, setEnvironment, currentUser, setCurrentUser } = useAppStore();
+  const {
+    environment,
+    setEnvironment,
+    currentUser,
+    setCurrentUser,
+    persistenceMode,
+    persistenceError,
+    localMigrationCount,
+    isMigratingLocalData,
+    migrateLocalDataToSupabase,
+    dismissLocalMigration,
+  } = useAppStore();
 
   const isDemo = environment === 'demo';
+  const hasSharedData = persistenceMode === 'supabase' && !persistenceError;
 
   const envOptions = [
     { value: 'production', label: 'Production' },
@@ -40,7 +52,42 @@ export function TopBar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
             <span className="truncate text-xs font-bold uppercase tracking-wide">Production Mode</span>
           </div>
         )}
+        <div className={`flex min-w-0 items-center gap-2 rounded-full border px-3 py-1.5 ${
+          hasSharedData
+            ? 'border-sky-200 bg-sky-50 text-sky-700'
+            : 'border-amber-200 bg-amber-50 text-amber-800'
+        }`}>
+          <span className={`h-2 w-2 shrink-0 rounded-full ${hasSharedData ? 'bg-sky-500' : 'bg-amber-500'}`}></span>
+          <span className="truncate text-xs font-bold uppercase tracking-wide">
+            {hasSharedData ? 'Shared Data' : persistenceMode === 'supabase' ? 'Shared Data Error' : 'Local Data Only'}
+          </span>
+        </div>
       </div>
+
+      {hasSharedData && localMigrationCount > 0 && (
+        <div className="col-span-full flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 md:order-last md:w-full lg:flex-row lg:items-center lg:justify-between">
+          <p className="text-sm font-bold">
+            {localMigrationCount} local-only item{localMigrationCount === 1 ? '' : 's'} found on this browser.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={migrateLocalDataToSupabase}
+              disabled={isMigratingLocalData}
+              className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-amber-300"
+            >
+              {isMigratingLocalData ? 'Uploading...' : 'Move to Shared Data'}
+            </button>
+            <button
+              type="button"
+              onClick={dismissLocalMigration}
+              className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-black uppercase tracking-wide text-amber-800 transition-colors hover:bg-amber-100"
+            >
+              Not Now
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 md:w-auto md:flex md:flex-wrap md:items-center md:justify-end md:gap-4 lg:gap-6">
         <div className="grid min-w-0 grid-cols-[112px,minmax(0,1fr)] items-center gap-2 sm:grid-cols-1 sm:gap-1 md:flex md:justify-start md:gap-2">

@@ -50,3 +50,7 @@ export async function loadAppState(): Promise<PersistedAppState | null> {
 export async function saveAppState(state: PersistedAppState): Promise<void> {
   await transact<IDBValidKey>('readwrite', store => store.put(state, STATE_KEY));
 }
+
+export async function clearAppState(): Promise<void> {
+  await transact<undefined>('readwrite', store => store.delete(STATE_KEY));
+}

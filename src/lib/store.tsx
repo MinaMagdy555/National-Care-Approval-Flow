@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion } from './types';
 import { initialUsers, initialTasks } from './mockData';
-import { loadAppState, saveAppState } from './localDb';
+import { clearAppState, loadAppState, saveAppState } from './localDb';
 import { isSupabaseConfigured } from './supabaseClient';
 import {
   fetchSupabaseNotifications,
@@ -60,6 +60,10 @@ interface AppState {
   tasks: Task[];
   users: Record<string, User>;
   notifications: Notification[];
+  persistenceMode: 'supabase' | 'local';
+  persistenceError: string | null;
+  localMigrationCount: number;
+  isMigratingLocalData: boolean;
 }
 
 interface AppContextType extends AppState {
@@ -72,6 +76,8 @@ interface AppContextType extends AppState {
   addTask: (task: Task) => void;
   addNotification: (notification: Omit<Notification, 'id' | 'createdAt' | 'read'>) => void;
   markNotificationAsRead: (id: string) => void;
+  migrateLocalDataToSupabase: () => Promise<void>;
+  dismissLocalMigration: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -87,15 +93,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [environment, setEnvironment] = useState<Environment>('production');
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [persistenceError, setPersistenceError] = useState<string | null>(null);
+  const [localMigrationState, setLocalMigrationState] = useState<{ tasks: Task[]; notifications: Notification[] } | null>(null);
+  const [isMigratingLocalData, setIsMigratingLocalData] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
 
     const loadState = isSupabaseConfigured
-      ? Promise.all([fetchSupabaseTasks(), fetchSupabaseNotifications()]).then(([loadedTasks, loadedNotifications]) => ({
-          tasks: loadedTasks,
-          notifications: loadedNotifications,
-        }))
+      ? Promise.all([fetchSupabaseTasks(), fetchSupabaseNotifications(), loadAppState()]).then(([loadedTasks, loadedNotifications, localState]) => {
+          if (localState) {
+            const supabaseTaskIds = new Set(loadedTasks.map(task => task.id));
+            const supabaseNotificationIds = new Set(loadedNotifications.map(notification => notification.id));
+            const localOnlyTasks = localState.tasks.filter(task => !supabaseTaskIds.has(task.id));
+            const localOnlyNotifications = localState.notifications.filter(notification => !supabaseNotificationIds.has(notification.id));
+
+            if (localOnlyTasks.length > 0 || localOnlyNotifications.length > 0) {
+              setLocalMigrationState({
+                tasks: reviveTaskFiles(localOnlyTasks),
+                notifications: localOnlyNotifications,
+              });
+            }
+          }
+
+          return {
+            tasks: loadedTasks,
+            notifications: loadedNotifications,
+          };
+        })
       : loadAppState();
 
     loadState
@@ -108,6 +133,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       })
       .catch(error => {
         console.error('Failed to load persisted app state', error);
+        setPersistenceError(error instanceof Error ? error.message : 'Failed to load persisted app state.');
       })
       .finally(() => {
         if (isMounted) hasLoadedPersistedState.current = true;
@@ -128,9 +154,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ])
       : saveAppState({ tasks, notifications });
 
-    saveState.catch(error => {
-      console.error('Failed to save app state', error);
-    });
+    saveState
+      .then(() => {
+        setPersistenceError(null);
+      })
+      .catch(error => {
+        console.error('Failed to save app state', error);
+        setPersistenceError(error instanceof Error ? error.message : 'Failed to save app state.');
+      });
   }, [tasks, notifications]);
 
   const addNotification = (notif: Omit<Notification, 'id' | 'createdAt' | 'read'>) => {
@@ -150,6 +181,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const markNotificationAsRead = (id: string) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  };
+
+  const migrateLocalDataToSupabase = async () => {
+    if (!isSupabaseConfigured || !localMigrationState || isMigratingLocalData) return;
+
+    setIsMigratingLocalData(true);
+    setPersistenceError(null);
+
+    try {
+      await Promise.all([
+        ...localMigrationState.tasks.map(task => upsertSupabaseTask(task)),
+        upsertSupabaseNotifications(localMigrationState.notifications),
+      ]);
+
+      setTasks(prev => {
+        const existingIds = new Set(prev.map(task => task.id));
+        return [...localMigrationState.tasks.filter(task => !existingIds.has(task.id)), ...prev];
+      });
+      setNotifications(prev => {
+        const existingIds = new Set(prev.map(notification => notification.id));
+        return [...localMigrationState.notifications.filter(notification => !existingIds.has(notification.id)), ...prev];
+      });
+      setLocalMigrationState(null);
+      await clearAppState();
+    } catch (error) {
+      console.error('Failed to migrate local data to Supabase', error);
+      setPersistenceError(error instanceof Error ? error.message : 'Failed to migrate local data.');
+    } finally {
+      setIsMigratingLocalData(false);
+    }
+  };
+
+  const dismissLocalMigration = () => {
+    setLocalMigrationState(null);
   };
 
   const updateTaskStatus = (taskId: string, newStatus: TaskStatus, newOwnerRole: Role | null) => {
@@ -248,6 +313,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       tasks,
       users: usersObj,
       notifications,
+      persistenceMode: isSupabaseConfigured ? 'supabase' : 'local',
+      persistenceError,
+      localMigrationCount: (localMigrationState?.tasks.length || 0) + (localMigrationState?.notifications.length || 0),
+      isMigratingLocalData,
       setCurrentUser,
       setEnvironment,
       updateTaskStatus,
@@ -257,6 +326,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addTask,
       addNotification,
       markNotificationAsRead,
+      migrateLocalDataToSupabase,
+      dismissLocalMigration,
     }}>
       {children}
     </AppContext.Provider>

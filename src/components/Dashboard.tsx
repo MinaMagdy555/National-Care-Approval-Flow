@@ -3,6 +3,7 @@ import { useAppStore } from '../lib/store';
 import { TaskCard } from './TaskCard';
 import { AlertCircle, Clock, CheckCircle2, History, LucideIcon, XCircle } from 'lucide-react';
 import { initialUsers } from '../lib/mockData';
+import { isDueThisWeek, isDueToday } from '../lib/deadlineUtils';
 
 function SummaryCard({
   label,
@@ -89,6 +90,8 @@ export function Dashboard({
   const waitingMarwaCount = envTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status)).length;
   const approvedCount = envTasks.filter(t => t.status === 'approved_by_art_director').length;
   const rejectedCount = returned.length;
+  const dueTodayCount = envTasks.filter(isDueToday).length;
+  const dueThisWeekCount = envTasks.filter(isDueThisWeek).length;
 
   return (
     <div className="mx-auto max-w-7xl space-y-8 px-4 py-6 sm:px-6 lg:px-8 lg:space-y-12">
@@ -220,26 +223,34 @@ export function Dashboard({
 
       {!isMemberOrLeader && (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div className="group relative overflow-hidden rounded-2xl border border-rose-100 bg-rose-50 p-5 shadow-sm">
+          <button
+            type="button"
+            onClick={() => onNavigate('due_today')}
+            className="group relative overflow-hidden rounded-2xl border border-rose-100 bg-rose-50 p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+          >
             <div className="mb-2 flex items-center justify-between">
               <span className="text-sm font-bold text-rose-800">Due Today</span>
               <span className="rounded-full bg-rose-200 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-rose-800">Urgent</span>
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-black text-rose-900">0</span>
+              <span className="text-3xl font-black text-rose-900">{dueTodayCount}</span>
               <span className="text-sm font-semibold text-rose-700">Tasks</span>
             </div>
-          </div>
-          <div className="group relative overflow-hidden rounded-2xl border border-orange-100 bg-orange-50 p-5 shadow-sm">
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate('due_this_week')}
+            className="group relative overflow-hidden rounded-2xl border border-orange-100 bg-orange-50 p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+          >
             <div className="mb-2 flex items-center justify-between">
               <span className="text-sm font-bold text-orange-800">Due This Week</span>
               <span className="rounded-full bg-orange-200 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-orange-800">Upcoming</span>
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-black text-orange-900">2</span>
+              <span className="text-3xl font-black text-orange-900">{dueThisWeekCount}</span>
               <span className="text-sm font-semibold text-orange-700">Tasks</span>
             </div>
-          </div>
+          </button>
         </div>
       )}
 

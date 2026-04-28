@@ -7,6 +7,7 @@ import { TaskDetail } from './components/TaskDetail';
 import { ReviewQueue } from './components/ReviewQueue';
 import { NotificationsList } from './components/Notifications';
 import { CreateTask } from './components/CreateTask';
+import { isDueThisWeek, isDueToday } from './lib/deadlineUtils';
 
 const FULL_WORKSPACE_VIEWERS = ['user_1', 'user_2', 'user_3'];
 
@@ -60,6 +61,14 @@ function AppContent() {
       case 'ad_queue': {
         const needsAd = visibleEnvTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director'));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsAd} title="Needs Marwa Action" />;
+      }
+      case 'due_today': {
+        const dueToday = visibleEnvTasks.filter(isDueToday);
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={dueToday} title="Due Today" />;
+      }
+      case 'due_this_week': {
+        const dueThisWeek = visibleEnvTasks.filter(isDueThisWeek);
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={dueThisWeek} title="Due This Week" />;
       }
       case 'waiting_for_mina': {
         const waitingForMina = visibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));

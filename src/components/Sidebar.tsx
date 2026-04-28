@@ -34,6 +34,8 @@ export function Sidebar({
       currentView === 'review_queue' ||
       currentView === 'quick_look_queue' ||
       currentView === 'ad_queue' ||
+      currentView === 'due_today' ||
+      currentView === 'due_this_week' ||
       currentView === 'waiting_for_mina' ||
       currentView === 'waiting_for_marwa' ||
       currentView === 'approved_by_me' ||
@@ -133,6 +135,8 @@ export function Sidebar({
     'review_queue',
     'quick_look_queue',
     'ad_queue',
+    'due_today',
+    'due_this_week',
     'waiting_for_mina',
     'waiting_for_marwa',
     'approved_by_me',

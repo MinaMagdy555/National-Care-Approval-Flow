@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
+    "prebuild": "tsx scripts/validate-env.ts",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "check:supabase": "tsx scripts/check-supabase.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
