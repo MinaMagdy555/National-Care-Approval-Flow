@@ -34,7 +34,8 @@ function getStoredUsers(): StoredUser[] {
   if (typeof window === 'undefined') return [];
 
   try {
-    return JSON.parse(window.localStorage.getItem(REGISTERED_USERS_STORAGE_KEY) || '[]') as StoredUser[];
+    const users = JSON.parse(window.localStorage.getItem(REGISTERED_USERS_STORAGE_KEY) || '[]') as unknown;
+    return Array.isArray(users) ? users.filter(user => user && typeof user === 'object' && 'id' in user && 'name' in user) as StoredUser[] : [];
   } catch {
     return [];
   }
@@ -44,7 +45,8 @@ function getStoredPasswords(): Record<string, string> {
   if (typeof window === 'undefined') return {};
 
   try {
-    return JSON.parse(window.localStorage.getItem(REGISTERED_PASSWORDS_STORAGE_KEY) || '{}') as Record<string, string>;
+    const passwords = JSON.parse(window.localStorage.getItem(REGISTERED_PASSWORDS_STORAGE_KEY) || '{}') as unknown;
+    return passwords && typeof passwords === 'object' && !Array.isArray(passwords) ? passwords as Record<string, string> : {};
   } catch {
     return {};
   }
