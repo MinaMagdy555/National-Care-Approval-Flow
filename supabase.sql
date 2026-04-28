@@ -25,6 +25,13 @@ insert into storage.buckets (id, name, public)
 values ('task-files', 'task-files', true)
 on conflict (id) do update set public = true;
 
+update storage.buckets
+set
+  public = true,
+  file_size_limit = 209715200,
+  allowed_mime_types = array['image/png', 'image/jpeg', 'video/mp4', 'application/pdf']
+where id = 'task-files';
+
 alter table public.approval_tasks enable row level security;
 alter table public.approval_notifications enable row level security;
 
@@ -68,3 +75,17 @@ on storage.objects for all
 to anon
 using (bucket_id = 'task-files')
 with check (bucket_id = 'task-files');
+
+do $$
+begin
+  alter publication supabase_realtime add table public.approval_tasks;
+exception
+  when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table public.approval_notifications;
+exception
+  when duplicate_object then null;
+end $$;

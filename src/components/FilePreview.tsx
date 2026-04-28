@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileWarning, Image as ImageIcon } from 'lucide-react';
+import { ExternalLink, FileWarning, Image as ImageIcon } from 'lucide-react';
 import { Task, TaskVersion, UploadedTaskFile } from '../lib/types';
 
 export function getTaskFiles(version?: TaskVersion): UploadedTaskFile[] {
@@ -103,11 +103,9 @@ export function TaskThumbnail({ task }: { task: Task }) {
 export function FilePreview({
   file,
   onImageClick,
-  onPdfFullscreen,
 }: {
   file?: UploadedTaskFile;
   onImageClick?: (url: string) => void;
-  onPdfFullscreen?: (file: UploadedTaskFile) => void;
 }) {
   const kind = getFileKind(file);
 
@@ -122,26 +120,29 @@ export function FilePreview({
   if (kind === 'image') {
     return (
       <button type="button" onClick={() => onImageClick?.(file.url)} className="flex h-full w-full items-center justify-center">
-        <img src={file.url} alt={file.name} className="max-h-full max-w-full object-contain" />
+        <img src={file.url} alt={file.name} className="h-full max-h-full w-full max-w-full object-contain" />
       </button>
     );
   }
 
   if (kind === 'video') {
-    return <video src={file.url} controls className="max-h-full max-w-full rounded-lg bg-black" />;
+    return <video src={file.url} controls className="h-full max-h-full w-full max-w-full rounded-lg bg-black object-contain" />;
   }
 
   if (kind === 'pdf') {
     return (
       <div className="relative h-full w-full">
-        <button
-          type="button"
-          onClick={() => onPdfFullscreen?.(file)}
-          className="absolute right-3 top-3 z-10 rounded-lg bg-slate-900/90 px-3 py-2 text-xs font-black text-white shadow-sm transition-colors hover:bg-slate-950"
+        <a
+          href={file.url}
+          target="_blank"
+          rel="noreferrer"
+          className="absolute right-3 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900/90 text-white shadow-sm transition-colors hover:bg-slate-950"
+          aria-label="Open PDF in new tab"
+          title="Open PDF in new tab"
         >
-          Full screen
-        </button>
-        <iframe src={file.url} title={file.name} className="h-full min-h-[70vh] w-full rounded-lg bg-white" />
+          <ExternalLink className="h-4 w-4" />
+        </a>
+        <iframe src={file.url} title={file.name} className="h-full w-full rounded-lg bg-white" />
       </div>
     );
   }

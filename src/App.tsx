@@ -1,36 +1,130 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AppProvider, useAppStore } from './lib/store';
 import { Sidebar } from './components/Sidebar';
-import { TopBar } from './components/TopBar';
 import { Dashboard } from './components/Dashboard';
 import { TaskDetail } from './components/TaskDetail';
 import { ReviewQueue } from './components/ReviewQueue';
 import { NotificationsList } from './components/Notifications';
 import { CreateTask } from './components/CreateTask';
 import { isDueThisWeek, isDueToday } from './lib/deadlineUtils';
+import { Menu } from 'lucide-react';
 
 const FULL_WORKSPACE_VIEWERS = ['user_1', 'user_2', 'user_3'];
 
+type AppRoute = {
+  view: string;
+  taskId: string | null;
+};
+
+function getRouteFromUrl(): AppRoute {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    view: params.get('view') || 'dashboard',
+    taskId: params.get('task') || null,
+  };
+}
+
+function writeRouteToUrl(route: AppRoute, mode: 'push' | 'replace' = 'push') {
+  const params = new URLSearchParams();
+  if (route.view !== 'dashboard' || route.taskId) params.set('view', route.view);
+  if (route.taskId) params.set('task', route.taskId);
+
+  const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
+  window.history[mode === 'push' ? 'pushState' : 'replaceState'](route, '', nextUrl);
+}
+
+function playNotificationSound() {
+  const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextClass) return;
+
+  const audioContext = new AudioContextClass();
+  const gain = audioContext.createGain();
+  const firstTone = audioContext.createOscillator();
+  const secondTone = audioContext.createOscillator();
+
+  gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.08, audioContext.currentTime + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.45);
+
+  firstTone.frequency.value = 740;
+  secondTone.frequency.value = 980;
+  firstTone.type = 'sine';
+  secondTone.type = 'sine';
+
+  firstTone.connect(gain);
+  secondTone.connect(gain);
+  gain.connect(audioContext.destination);
+
+  firstTone.start();
+  firstTone.stop(audioContext.currentTime + 0.18);
+  secondTone.start(audioContext.currentTime + 0.2);
+  secondTone.stop(audioContext.currentTime + 0.45);
+  window.setTimeout(() => audioContext.close(), 700);
+}
+
 function AppContent() {
-  const [currentView, setView] = useState('dashboard');
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const initialRoute = getRouteFromUrl();
+  const [currentView, setView] = useState(initialRoute.view);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(initialRoute.taskId);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const { tasks, currentUser, environment } = useAppStore();
+  const {
+    tasks,
+    currentUser,
+    environment,
+    notifications,
+    persistenceMode,
+    persistenceError,
+    localMigrationCount,
+    isMigratingLocalData,
+    migrateLocalDataToSupabase,
+    dismissLocalMigration,
+  } = useAppStore();
+  const initialUnreadCountRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    writeRouteToUrl({ view: currentView, taskId: activeTaskId }, 'replace');
+    const handlePopState = () => {
+      const route = getRouteFromUrl();
+      setView(route.view);
+      setActiveTaskId(route.taskId);
+      setIsSidebarOpen(false);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    const unreadCount = notifications.filter(notification => notification.userId === currentUser.id && !notification.read).length;
+    if (initialUnreadCountRef.current === null) {
+      initialUnreadCountRef.current = unreadCount;
+      return;
+    }
+
+    if (unreadCount > initialUnreadCountRef.current && (document.hidden || !document.hasFocus())) {
+      playNotificationSound();
+    }
+
+    initialUnreadCountRef.current = unreadCount;
+  }, [notifications, currentUser.id]);
+
+  const navigateTo = (route: AppRoute, mode: 'push' | 'replace' = 'push') => {
+    setView(route.view);
+    setActiveTaskId(route.taskId);
+    writeRouteToUrl(route, mode);
+  };
 
   const handleOpenTask = (id: string) => {
-    setActiveTaskId(id);
+    navigateTo({ view: 'task_detail', taskId: id });
     setIsSidebarOpen(false);
-    setView('task_detail');
   };
 
   const handleBack = () => {
-    setActiveTaskId(null);
-    setView('dashboard');
+    navigateTo({ view: 'dashboard', taskId: null });
   };
 
   const handleNavigate = (view: string) => {
-    setActiveTaskId(null);
-    setView(view);
+    navigateTo({ view, taskId: null });
     setIsSidebarOpen(false);
   };
 
@@ -121,8 +215,44 @@ function AppContent() {
         onClose={() => setIsSidebarOpen(false)}
       />
       <div className="flex min-h-[100dvh] flex-1 flex-col min-w-0 md:pl-64">
-        <TopBar onOpenSidebar={() => setIsSidebarOpen(true)} />
         <main className="flex-1 overflow-y-auto relative min-w-0">
+          <button
+            type="button"
+            onClick={() => setIsSidebarOpen(true)}
+            className="fixed left-4 top-4 z-20 inline-flex rounded-lg border border-slate-200 bg-white p-2 text-slate-600 shadow-sm transition-colors hover:bg-slate-50 hover:text-slate-900 md:hidden"
+            aria-label="Open navigation"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          {persistenceMode === 'supabase' && persistenceError && (
+            <div className="mx-4 mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700 sm:mx-6 lg:mx-8">
+              Shared data error: {persistenceError}
+            </div>
+          )}
+          {persistenceMode === 'supabase' && !persistenceError && localMigrationCount > 0 && (
+            <div className="mx-4 mt-4 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 sm:mx-6 lg:mx-8 lg:flex-row lg:items-center lg:justify-between">
+              <p className="text-sm font-bold">
+                {localMigrationCount} local-only item{localMigrationCount === 1 ? '' : 's'} found on this browser.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={migrateLocalDataToSupabase}
+                  disabled={isMigratingLocalData}
+                  className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-amber-300"
+                >
+                  {isMigratingLocalData ? 'Uploading...' : 'Move to Shared Data'}
+                </button>
+                <button
+                  type="button"
+                  onClick={dismissLocalMigration}
+                  className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-black uppercase tracking-wide text-amber-800 transition-colors hover:bg-amber-100"
+                >
+                  Not Now
+                </button>
+              </div>
+            </div>
+          )}
           {renderContent()}
         </main>
       </div>

@@ -30,7 +30,6 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [modal, setModal] = useState<'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
-  const [fullscreenPdf, setFullscreenPdf] = useState<UploadedTaskFile | null>(null);
   const [reviewNotes, setReviewNotes] = useState<ReviewNoteSection[]>([{ id: 'note_1', note: '' }]);
   const [adRejectComment, setAdRejectComment] = useState('');
   const [adRejectNotes, setAdRejectNotes] = useState<ReviewNoteSection[]>([{ id: 'ad_note_1', note: '' }]);
@@ -400,9 +399,9 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   };
 
   return (
-    <div className="relative flex min-h-full flex-col bg-[#f8fafc] text-slate-900 md:h-full md:flex-row md:border-l md:border-slate-200">
+    <div className="relative flex min-h-full flex-col bg-[#f8fafc] text-slate-900 md:h-[100dvh] md:flex-row md:border-l md:border-slate-200">
       {/* Left Side: Media Preview */}
-      <div className="relative flex min-h-[42dvh] flex-col bg-slate-100 md:min-h-0 md:flex-1 md:border-r md:border-slate-200">
+      <div className="relative flex min-h-[42dvh] flex-col bg-slate-100 md:min-h-0 md:flex-1 md:overflow-hidden md:border-r md:border-slate-200">
         <div className="absolute top-4 left-4 z-10 hidden md:block">
           <button 
             onClick={onBack}
@@ -418,9 +417,9 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
           </div>
         )}
 
-        <div className="mt-0 flex flex-1 flex-col gap-4 overflow-auto p-4 pt-16 sm:p-6 sm:pt-16 md:mt-10 md:p-8">
-          <div className="flex min-h-[48vh] flex-1 items-center justify-center overflow-hidden rounded-xl bg-white shadow-2xl ring-1 ring-gray-900/5">
-            <FilePreview file={selectedFile} onImageClick={setLightboxUrl} onPdfFullscreen={setFullscreenPdf} />
+        <div className="mt-0 flex flex-1 flex-col gap-4 overflow-auto p-4 pt-16 sm:p-6 sm:pt-16 md:mt-10 md:min-h-0 md:p-8">
+          <div className="flex h-[calc(100dvh-9rem)] min-h-[48vh] flex-none items-center justify-center overflow-hidden rounded-xl bg-white shadow-2xl ring-1 ring-gray-900/5 md:min-h-0">
+            <FilePreview file={selectedFile} onImageClick={setLightboxUrl} />
           </div>
 
           {currentVersionHasLocalOnlyFiles && (
@@ -893,30 +892,6 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             <X className="h-6 w-6" />
           </button>
           <img src={lightboxUrl} alt="Full screen preview" className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" onClick={event => event.stopPropagation()} />
-        </div>
-      )}
-
-      {fullscreenPdf && (
-        <div className="fixed inset-0 z-[70] flex flex-col bg-slate-950/90 p-4">
-          <div className="mb-3 flex items-center justify-between gap-4 text-white">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-black">{fullscreenPdf.name}</p>
-              <p className="text-xs font-semibold text-slate-300">PDF preview</p>
-            </div>
-            <button
-              type="button"
-              className="rounded-full bg-white/10 p-2 text-white transition-colors hover:bg-white/20"
-              onClick={() => setFullscreenPdf(null)}
-              aria-label="Close PDF preview"
-            >
-              <X className="h-6 w-6" />
-            </button>
-          </div>
-          <iframe
-            src={fullscreenPdf.url}
-            title={fullscreenPdf.name}
-            className="min-h-0 flex-1 rounded-xl border-0 bg-white shadow-2xl"
-          />
         </div>
       )}
     </div>

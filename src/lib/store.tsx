@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useRef, useState, ReactNod
 import { User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile } from './types';
 import { initialUsers, initialTasks } from './mockData';
 import { clearAppState, loadAppState, saveAppState } from './localDb';
-import { isSupabaseConfigured } from './supabaseClient';
+import { isSupabaseConfigured, supabase } from './supabaseClient';
 import {
   fetchSupabaseNotifications,
   fetchSupabaseTasks,
@@ -15,6 +15,20 @@ const MINA_ID = 'user_1';
 const MARWA_ID = 'user_2';
 const DINA_ID = 'user_3';
 const REVIEWER_WAITING_STATUSES: TaskStatus[] = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'];
+const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
+const PROFILE_PASSWORDS: Record<string, string> = {
+  user_1: '1',
+  user_3: '2',
+  user_2: '3',
+  user_4: '4',
+  user_5: '5',
+  user_6: '6',
+};
+
+function getInitialCurrentUser() {
+  const storedUserId = typeof window !== 'undefined' ? window.localStorage.getItem(CURRENT_USER_STORAGE_KEY) : null;
+  return initialUsers.find(user => user.id === storedUserId) || initialUsers.find(u => u.role === 'reviewer') || initialUsers[0];
+}
 
 function normalizeMinaCreatedTask(task: Task): Task {
   if (task.createdBy !== MINA_ID || !REVIEWER_WAITING_STATUSES.includes(task.status)) {
@@ -99,6 +113,8 @@ interface AppContextType extends AppState {
   addTask: (task: Task) => void;
   addNotification: (notification: Omit<Notification, 'id' | 'createdAt' | 'read'>) => void;
   markNotificationAsRead: (id: string) => void;
+  loginWithPassword: (userId: string, password: string) => boolean;
+  logout: () => void;
   migrateLocalDataToSupabase: () => Promise<void>;
   dismissLocalMigration: () => void;
 }
@@ -112,13 +128,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return acc;
   }, {} as Record<string, User>);
 
-  const [currentUser, setCurrentUser] = useState<User>(initialUsers.find(u => u.role === 'reviewer') || initialUsers[0]);
+  const [currentUserState, setCurrentUserState] = useState<User>(getInitialCurrentUser);
   const [environment, setEnvironment] = useState<Environment>('production');
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [localMigrationState, setLocalMigrationState] = useState<{ tasks: Task[]; notifications: Notification[] } | null>(null);
   const [isMigratingLocalData, setIsMigratingLocalData] = useState(false);
+  const currentUser = currentUserState;
+
+  const setCurrentUser = (user: User) => {
+    setCurrentUserState(user);
+    window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, user.id);
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -187,6 +209,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
   }, [tasks, notifications]);
 
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return;
+
+    const channel = supabase
+      .channel('approval-flow-shared-data')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'approval_tasks' }, payload => {
+        const row = payload.new as { payload?: Task } | null;
+        const task = row?.payload;
+        if (!task) return;
+
+        setTasks(prev => {
+          const exists = prev.some(item => item.id === task.id);
+          const revivedTask = reviveTaskFiles([task])[0];
+          if (exists && prev.some(item => item.id === task.id && item.updatedAt === task.updatedAt)) return prev;
+          return exists
+            ? prev.map(item => item.id === task.id ? revivedTask : item)
+            : [revivedTask, ...prev];
+        });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'approval_notifications' }, payload => {
+        const row = payload.new as { payload?: Notification } | null;
+        const notification = row?.payload;
+        if (!notification) return;
+
+        setNotifications(prev => {
+          const exists = prev.some(item => item.id === notification.id);
+          if (exists && prev.some(item => item.id === notification.id && item.read === notification.read)) return prev;
+          return exists
+            ? prev.map(item => item.id === notification.id ? notification : item)
+            : [notification, ...prev];
+        });
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   const addNotification = (notif: Omit<Notification, 'id' | 'createdAt' | 'read'>) => {
     setNotifications(prev => [{
       ...notif,
@@ -204,6 +265,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const markNotificationAsRead = (id: string) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  };
+
+  const loginWithPassword = (userId: string, password: string) => {
+    if (PROFILE_PASSWORDS[userId] !== password.trim()) return false;
+
+    const user = initialUsers.find(item => item.id === userId);
+    if (!user) return false;
+
+    setCurrentUser(user);
+    return true;
+  };
+
+  const logout = () => {
+    window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
+    setCurrentUserState(initialUsers.find(u => u.role === 'reviewer') || initialUsers[0]);
   };
 
   const migrateLocalDataToSupabase = async () => {
@@ -376,6 +452,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addTask,
       addNotification,
       markNotificationAsRead,
+      loginWithPassword,
+      logout,
       migrateLocalDataToSupabase,
       dismissLocalMigration,
     }}>

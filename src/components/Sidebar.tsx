@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { LayoutDashboard, CheckSquare, Clock, FileText, Bell, ChevronDown, ChevronRight, X } from 'lucide-react';
+import { LayoutDashboard, CheckSquare, Clock, FileText, Bell, ChevronDown, ChevronRight, X, LogIn, LogOut } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { userRoleLabels } from '../lib/mockData';
+import { initialUsers, userRoleLabels } from '../lib/mockData';
 
 type MenuItem = {
   id: string;
@@ -22,8 +22,12 @@ export function Sidebar({
   isOpen: boolean;
   onClose: () => void;
 }) {
-  const { currentUser, notifications } = useAppStore();
+  const { currentUser, notifications, loginWithPassword, logout } = useAppStore();
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
+  const [isLoginOpen, setIsLoginOpen] = useState(false);
+  const [loginUserId, setLoginUserId] = useState(currentUser.id);
+  const [password, setPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
 
   const unreadCount = notifications ? notifications.filter(n => n.userId === currentUser.id && !n.read).length : 0;
 
@@ -53,6 +57,20 @@ export function Sidebar({
 
   const handleNavigate = (view: string) => {
     setView(view);
+    onClose();
+  };
+
+  const handleLogin = (event: React.FormEvent) => {
+    event.preventDefault();
+    const success = loginWithPassword(loginUserId, password);
+    if (!success) {
+      setLoginError('Wrong password for this profile.');
+      return;
+    }
+
+    setPassword('');
+    setLoginError('');
+    setIsLoginOpen(false);
     onClose();
   };
 
@@ -232,7 +250,7 @@ export function Sidebar({
           {menu.map(item => renderMenuItem(item))}
         </nav>
         
-        <div className="p-5 md:p-6 border-t border-white/10">
+        <div className="space-y-3 border-t border-white/10 p-5 md:p-6">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-indigo-200 border-2 border-white/20 overflow-hidden flex items-center justify-center text-indigo-900 font-bold uppercase shrink-0">
               {currentUser.avatar ? <img src={currentUser.avatar} alt="avatar" className="w-full h-full object-cover" /> : currentUser.name.charAt(0)}
@@ -242,8 +260,76 @@ export function Sidebar({
               <p className="text-[10px] text-slate-400 leading-tight mt-0.5">{currentUser.jobTitle || userRoleLabels[currentUser.role]}</p>
             </div>
           </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setLoginUserId(currentUser.id);
+                setPassword('');
+                setLoginError('');
+                setIsLoginOpen(true);
+              }}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-white transition-colors hover:bg-white/10"
+            >
+              <LogIn className="h-3.5 w-3.5" /> Login
+            </button>
+            <button
+              type="button"
+              onClick={logout}
+              className="inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-black text-slate-400 transition-colors hover:bg-white/5 hover:text-white"
+            >
+              <LogOut className="h-3.5 w-3.5" /> Reset
+            </button>
+          </div>
         </div>
       </aside>
+
+      {isLoginOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-black text-slate-900">Login</h2>
+                <p className="text-xs font-semibold text-slate-500">Use the temporary profile passwords.</p>
+              </div>
+              <button type="button" onClick={() => setIsLoginOpen(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-900">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <form onSubmit={handleLogin} className="space-y-4 p-5">
+              <div>
+                <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Profile</label>
+                <select
+                  value={loginUserId}
+                  onChange={event => setLoginUserId(event.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                >
+                  {initialUsers.map(user => (
+                    <option key={user.id} value={user.id}>{user.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={event => setPassword(event.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                  autoFocus
+                />
+              </div>
+              {loginError && <p className="text-sm font-bold text-rose-600">{loginError}</p>}
+              <div className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">
+                Mina: 1, Dina: 2, Marwa: 3, Mariam: 4, Noreen: 5, Yomna: 6.
+              </div>
+              <button type="submit" className="w-full rounded-xl bg-indigo-600 px-4 py-3 font-black text-white transition-colors hover:bg-indigo-700">
+                Login
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 }
