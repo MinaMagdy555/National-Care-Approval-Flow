@@ -6,10 +6,8 @@ import { initialUsers } from '../lib/mockData';
 import { CustomSelect } from './CustomSelect';
 import { uploadTaskFiles } from '../lib/supabaseDb';
 import { sanitizeHandledBy } from '../lib/handlerUtils';
+import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText, uploadLimitLabel } from '../lib/uploadLimits';
 
-const MAX_FILE_SIZE_MB = 200;
-const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
-const ALLOWED_FILE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'mp4', 'pdf'];
 const FORM_SELECT_BUTTON_CLASS = 'rounded-xl border-slate-300 px-4 py-3 text-sm font-bold text-slate-900 shadow-none hover:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500';
 
 export function CreateTask() {
@@ -59,11 +57,11 @@ export function CreateTask() {
   const appendValidFiles = (incomingFiles: File[]) => {
     const validFiles = incomingFiles.filter(file => {
       const extension = file.name.split('.').pop()?.toLowerCase() || '';
-      return ALLOWED_FILE_EXTENSIONS.includes(extension) && file.size <= MAX_FILE_SIZE_BYTES;
+      return ALLOWED_UPLOAD_EXTENSIONS.includes(extension) && file.size <= MAX_UPLOAD_SIZE_BYTES;
     });
 
     const rejectedCount = incomingFiles.length - validFiles.length;
-    setFileError(rejectedCount > 0 ? `Only PNG, JPG, MP4, or PDF files up to ${MAX_FILE_SIZE_MB}MB are allowed.` : '');
+    setFileError(rejectedCount > 0 ? uploadLimitHelpText() : '');
 
     if (validFiles.length > 0) {
       setFiles(prev => [...prev, ...validFiles]);
@@ -285,7 +283,7 @@ export function CreateTask() {
                   <Upload className="w-6 h-6 text-indigo-500" />
                 </div>
                 <p className="text-sm font-bold text-slate-900 mb-1">Click to upload or drag and drop</p>
-                <p className="text-xs font-semibold text-slate-500">PNG, JPG, MP4 or PDF (max. 200MB)</p>
+                <p className="text-xs font-semibold text-slate-500">PNG, JPG, MP4 or PDF (max. {uploadLimitLabel()})</p>
                 <input 
                   type="file" 
                   ref={fileInputRef} 

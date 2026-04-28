@@ -1,5 +1,6 @@
 import { Notification, Task, UploadedTaskFile } from './types';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
+import { uploadLimitHelpText } from './uploadLimits';
 
 const TASK_FILES_BUCKET = 'task-files';
 
@@ -56,7 +57,7 @@ export async function uploadTaskFiles(taskId: string, files: UploadedTaskFile[])
     if (error) {
       const message = 'message' in error ? error.message : 'Upload failed.';
       const help = message.toLowerCase().includes('maximum allowed size')
-        ? ' The Supabase task-files bucket still needs its 200MB file_size_limit setting applied.'
+        ? ` ${uploadLimitHelpText()}`
         : '';
       throw new Error(`${file.name}: ${message}${help}`);
     }

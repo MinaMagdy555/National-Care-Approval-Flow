@@ -9,6 +9,7 @@ import { FileContentThumbnail, FilePreview, getTaskFiles, isLocalOnlyFileUrl } f
 import { uploadTaskFiles } from '../lib/supabaseDb';
 import { isTaskArchived } from '../lib/archiveUtils';
 import { isAssignableHandler } from '../lib/handlerUtils';
+import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText, uploadLimitLabel } from '../lib/uploadLimits';
 
 type ReviewNoteSection = {
   id: string;
@@ -17,9 +18,6 @@ type ReviewNoteSection = {
   imageUrl?: string;
 };
 
-const MAX_FILE_SIZE_MB = 200;
-const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
-const ALLOWED_FILE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'mp4', 'pdf'];
 const MINA_ID = 'user_1';
 const MARWA_ID = 'user_2';
 const DINA_ID = 'user_3';
@@ -124,11 +122,11 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const appendResubmitFiles = (incomingFiles: File[]) => {
     const validFiles = incomingFiles.filter(file => {
       const extension = file.name.split('.').pop()?.toLowerCase() || '';
-      return ALLOWED_FILE_EXTENSIONS.includes(extension) && file.size <= MAX_FILE_SIZE_BYTES;
+      return ALLOWED_UPLOAD_EXTENSIONS.includes(extension) && file.size <= MAX_UPLOAD_SIZE_BYTES;
     });
 
     const rejectedCount = incomingFiles.length - validFiles.length;
-    setResubmitError(rejectedCount > 0 ? `Only PNG, JPG, MP4, or PDF files up to ${MAX_FILE_SIZE_MB}MB are allowed.` : '');
+    setResubmitError(rejectedCount > 0 ? uploadLimitHelpText() : '');
 
     if (validFiles.length > 0) {
       setResubmitFiles(prev => [...prev, ...validFiles]);
@@ -179,11 +177,11 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
     const validFiles = incomingFiles.filter(file => {
       const extension = file.name.split('.').pop()?.toLowerCase() || '';
-      return ALLOWED_FILE_EXTENSIONS.includes(extension) && file.size <= MAX_FILE_SIZE_BYTES;
+      return ALLOWED_UPLOAD_EXTENSIONS.includes(extension) && file.size <= MAX_UPLOAD_SIZE_BYTES;
     });
 
     if (validFiles.length !== incomingFiles.length) {
-      setRepairError(`Only PNG, JPG, MP4, or PDF files up to ${MAX_FILE_SIZE_MB}MB are allowed.`);
+      setRepairError(uploadLimitHelpText());
       return;
     }
 
@@ -576,7 +574,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               >
                 <Upload className="mx-auto mb-2 h-6 w-6 text-indigo-500" />
                 <p className="text-sm font-black text-slate-900">Upload revised files</p>
-                <p className="mt-1 text-xs font-semibold text-slate-500">PNG, JPG, MP4 or PDF (max. 200MB)</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">PNG, JPG, MP4 or PDF (max. {uploadLimitLabel()})</p>
                 <input
                   ref={resubmitInputRef}
                   type="file"
