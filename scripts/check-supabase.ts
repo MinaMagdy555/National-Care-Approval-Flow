@@ -122,8 +122,19 @@ async function main() {
   if (storageError) fail('Cannot access task-files storage bucket. Check bucket and storage policies.', storageError);
   pass('task-files storage bucket is accessible');
 
-  await supabase.from('approval_notifications').delete().eq('id', smokeId);
-  await supabase.from('approval_tasks').delete().eq('id', smokeId);
+  const { error: notificationDeleteError, count: deletedNotifications } = await supabase
+    .from('approval_notifications')
+    .delete({ count: 'exact' })
+    .eq('id', smokeId);
+  if (notificationDeleteError) fail('Cannot clean up smoke notification.', notificationDeleteError);
+  if (deletedNotifications !== 1) fail(`Smoke notification cleanup deleted ${deletedNotifications ?? 0} rows instead of 1.`);
+
+  const { error: taskDeleteError, count: deletedTasks } = await supabase
+    .from('approval_tasks')
+    .delete({ count: 'exact' })
+    .eq('id', smokeId);
+  if (taskDeleteError) fail('Cannot clean up smoke task.', taskDeleteError);
+  if (deletedTasks !== 1) fail(`Smoke task cleanup deleted ${deletedTasks ?? 0} rows instead of 1.`);
   pass('smoke test cleanup completed');
 }
 

@@ -164,10 +164,12 @@ async function createVideoPreviewBlob(file: PreviewSource): Promise<Blob> {
 function getFileKind(file: Pick<UploadedTaskFile, 'type' | 'name' | 'url'>): 'image' | 'video' | 'pdf' | 'file' {
   const name = file.name.toLowerCase();
   const type = file.type.toLowerCase();
+  const urlPath = file.url.split('?')[0].toLowerCase();
+  const source = `${name} ${urlPath}`;
 
-  if (type.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(name) || file.url.includes('images.unsplash.com')) return 'image';
-  if (type.startsWith('video/') || /\.(mp4|webm|mov)$/i.test(name)) return 'video';
-  if (type === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
+  if (type.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(source) || file.url.includes('images.unsplash.com')) return 'image';
+  if (type.startsWith('video/') || /\.(mp4|webm|mov)$/i.test(source)) return 'video';
+  if (type === 'application/pdf' || source.includes('.pdf')) return 'pdf';
   return 'file';
 }
 
@@ -267,6 +269,62 @@ export function taskNeedsPreviewOptimization(task: Task) {
   const hasMissingFilePreview = task.versions.some(version => getTaskFiles(version).some(file => !isStoredPreviewUrl(file)));
   const hasBase64CommentImage = (task.comments || []).some(comment => comment.sections.some(section => isDataImageUrl(section.imageUrl)));
   return hasMissingFilePreview || hasBase64CommentImage;
+}
+
+export function taskNeedsThumbnailPreview(task: Task) {
+  if (isStoredTaskThumbnail(task)) return false;
+
+  const firstVersionFiles = getTaskFiles(task.versions[0]);
+  return firstVersionFiles.some(file => !isStoredPreviewUrl(file));
+}
+
+export async function optimizeTaskThumbnailForPreview(task: Task): Promise<{
+  versions: TaskVersion[];
+  thumbnailUrl: string;
+  thumbnailStoragePath?: string;
+  changed: boolean;
+}> {
+  const firstVersion = task.versions[0];
+  if (!firstVersion) {
+    return {
+      versions: task.versions,
+      thumbnailUrl: task.thumbnailUrl,
+      thumbnailStoragePath: task.thumbnailStoragePath,
+      changed: false,
+    };
+  }
+
+  let changed = false;
+  const files = getTaskFiles(firstVersion);
+  let previewedFiles = files;
+
+  if (files.some(file => !isStoredPreviewUrl(file))) {
+    previewedFiles = await addLowResPreviewsToFiles(task.id, files);
+    if (previewedFiles.some((file, index) => file.previewStoragePath !== files[index]?.previewStoragePath)) {
+      changed = true;
+    }
+  }
+
+  const versions = [...task.versions];
+  versions[0] = {
+    ...firstVersion,
+    files: previewedFiles,
+    fileUrl: previewedFiles[0]?.url || firstVersion.fileUrl,
+  };
+
+  const firstPreviewFile = previewedFiles.find(isStoredPreviewUrl);
+  const thumbnailUrl = firstPreviewFile?.previewUrl || task.thumbnailUrl;
+  const thumbnailStoragePath = firstPreviewFile?.previewStoragePath || task.thumbnailStoragePath;
+  if (thumbnailUrl !== task.thumbnailUrl || thumbnailStoragePath !== task.thumbnailStoragePath) {
+    changed = true;
+  }
+
+  return {
+    versions,
+    thumbnailUrl,
+    thumbnailStoragePath,
+    changed,
+  };
 }
 
 export async function optimizeTaskMediaForPreview(task: Task): Promise<{

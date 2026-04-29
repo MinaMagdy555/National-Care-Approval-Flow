@@ -798,13 +798,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(task => {
       if (task.id !== taskId) return task;
+      const incomingVersionsById = new Map(updates.versions.map(version => [version.id, version]));
+      const versions = task.versions.map(version => incomingVersionsById.get(version.id) || version);
+      const incomingCommentsById = new Map((updates.comments || []).map(comment => [comment.id, comment]));
+      const comments = updates.comments
+        ? (task.comments || []).map(comment => incomingCommentsById.get(comment.id) || comment)
+        : task.comments;
+      const latestPreviewFile = versions[0]?.files?.find(file => file.previewUrl && file.previewStoragePath);
+      const updateMatchesLatestVersion = task.versions[0]?.id === updates.versions[0]?.id;
 
       return {
         ...task,
-        versions: updates.versions,
-        comments: updates.comments ?? task.comments,
-        thumbnailUrl: updates.thumbnailUrl,
-        thumbnailStoragePath: updates.thumbnailStoragePath,
+        versions,
+        comments,
+        thumbnailUrl: latestPreviewFile?.previewUrl || (updateMatchesLatestVersion ? updates.thumbnailUrl : task.thumbnailUrl),
+        thumbnailStoragePath: latestPreviewFile?.previewStoragePath || (updateMatchesLatestVersion ? updates.thumbnailStoragePath : task.thumbnailStoragePath),
       };
     }));
   };

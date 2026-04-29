@@ -1,16 +1,48 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ExternalLink, FileText, FileWarning, Film, Image as ImageIcon } from 'lucide-react';
 import { Task, UploadedTaskFile } from '../lib/types';
-import { getTaskFiles, isStoredPreviewUrl, isStoredTaskThumbnail } from '../lib/previewUtils';
+import {
+  getTaskFiles,
+  isStoredPreviewUrl,
+  isStoredTaskThumbnail,
+  optimizeTaskThumbnailForPreview,
+  taskNeedsThumbnailPreview,
+} from '../lib/previewUtils';
+import { useAppStore } from '../lib/store';
+
+const thumbnailPreviewBackfillAttempts = new Set<string>();
+const thumbnailPreviewBackfillQueue: Array<() => Promise<void>> = [];
+const MAX_THUMBNAIL_BACKFILLS = 2;
+let activeThumbnailBackfills = 0;
+
+function runNextThumbnailBackfill() {
+  if (activeThumbnailBackfills >= MAX_THUMBNAIL_BACKFILLS) return;
+
+  const job = thumbnailPreviewBackfillQueue.shift();
+  if (!job) return;
+
+  activeThumbnailBackfills += 1;
+  void job().finally(() => {
+    activeThumbnailBackfills -= 1;
+    runNextThumbnailBackfill();
+  });
+}
+
+function enqueueThumbnailBackfill(job: () => Promise<void>) {
+  thumbnailPreviewBackfillQueue.push(job);
+  runNextThumbnailBackfill();
+}
 
 export function getFileKind(file?: Pick<UploadedTaskFile, 'type' | 'name' | 'url'>): 'image' | 'video' | 'pdf' | 'file' {
   if (!file) return 'file';
   const name = file.name.toLowerCase();
   const type = file.type.toLowerCase();
+  const urlPath = file.url.split('?')[0].toLowerCase();
+  const source = `${name} ${urlPath}`;
 
-  if (type.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(name) || file.url.includes('images.unsplash.com')) return 'image';
-  if (type.startsWith('video/') || /\.(mp4|webm|mov)$/i.test(name)) return 'video';
-  if (type === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
+  if (type.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(source) || file.url.includes('images.unsplash.com')) return 'image';
+  if (type.startsWith('video/') || /\.(mp4|webm|mov)$/i.test(source)) return 'video';
+  if (type === 'application/pdf' || source.includes('.pdf')) return 'pdf';
   return 'file';
 }
 
@@ -160,15 +192,73 @@ export function FileContentThumbnail({
 }
 
 export function TaskThumbnail({ task }: { task: Task }) {
+  const { updateTaskMediaPreviews } = useAppStore();
+  const thumbnailRef = useRef<HTMLDivElement>(null);
+  const [isVisible, setIsVisible] = useState(false);
+  const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
   const file = getTaskFiles(task.versions[0])[0];
+  const hasLocalOnlyFile = isLocalOnlyFileUrl(task.thumbnailUrl) || isLocalOnlyFileUrl(file?.url);
 
-  if (isLocalOnlyFileUrl(task.thumbnailUrl || file?.url)) {
-    return <MissingSharedFile compact />;
-  }
+  useEffect(() => {
+    const element = thumbnailRef.current;
+    if (!element) return;
 
-  if (isStoredTaskThumbnail(task)) {
+    if (!('IntersectionObserver' in window)) {
+      setIsVisible(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) {
+        setIsVisible(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: '240px' });
+
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isVisible || hasLocalOnlyFile || !taskNeedsThumbnailPreview(task) || thumbnailPreviewBackfillAttempts.has(task.id)) return;
+
+    thumbnailPreviewBackfillAttempts.add(task.id);
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      enqueueThumbnailBackfill(async () => {
+        if (cancelled) return;
+        setIsGeneratingPreview(true);
+
+        try {
+          const updates = await optimizeTaskThumbnailForPreview(task);
+          if (!cancelled && updates.changed) {
+            updateTaskMediaPreviews(task.id, updates);
+          }
+        } catch (error) {
+          console.warn('Could not create task thumbnail preview', error);
+          thumbnailPreviewBackfillAttempts.delete(task.id);
+        } finally {
+          if (!cancelled) setIsGeneratingPreview(false);
+        }
+      });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [hasLocalOnlyFile, isVisible, task, updateTaskMediaPreviews]);
+
+  let content: React.ReactNode;
+
+  if (hasLocalOnlyFile) {
+    content = <MissingSharedFile compact />;
+  } else if (isStoredTaskThumbnail(task)) {
     const previewFile = file || { id: task.id, name: task.name, type: 'image/jpeg', size: 0, url: task.thumbnailUrl };
-    return (
+    content = (
       <FileContentThumbnail
         file={{
           ...previewFile,
@@ -178,9 +268,20 @@ export function TaskThumbnail({ task }: { task: Task }) {
         alt={task.name}
       />
     );
+  } else {
+    content = <FileContentThumbnail file={file} alt={task.name} />;
   }
 
-  return <FileContentThumbnail file={file} alt={task.name} />;
+  return (
+    <div ref={thumbnailRef} className="relative h-full w-full">
+      {content}
+      {isGeneratingPreview && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-white/80 to-transparent py-1">
+          <span className="h-1 w-10 animate-pulse rounded-full bg-indigo-500/70" />
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function FilePreview({
