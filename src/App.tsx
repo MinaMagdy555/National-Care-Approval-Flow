@@ -250,7 +250,7 @@ function AppContent() {
         onClose={() => setIsSidebarOpen(false)}
       />
       <div className="flex min-h-[100dvh] flex-1 flex-col min-w-0 md:pl-64">
-        <main className="flex-1 overflow-y-auto relative min-w-0">
+        <main className="flex-1 overflow-y-auto relative min-w-0 pt-16 md:pt-0">
           <button
             type="button"
             onClick={() => setIsSidebarOpen(true)}

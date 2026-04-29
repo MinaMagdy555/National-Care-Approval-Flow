@@ -27,14 +27,14 @@ function SummaryCard({
     <button
       type="button"
       onClick={onClick}
-      className={`group relative min-w-0 overflow-hidden rounded-2xl border bg-white text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${borderClassName}`}
+      className={`group relative min-w-0 overflow-hidden rounded-xl border bg-white text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:rounded-2xl ${borderClassName}`}
     >
-      <div className="absolute right-0 top-0 p-4 opacity-10 transition-opacity group-hover:opacity-20">
-        <Icon className={`h-16 w-16 ${iconClassName}`} />
+      <div className="absolute right-0 top-0 p-3 opacity-10 transition-opacity group-hover:opacity-20 sm:p-4">
+        <Icon className={`h-12 w-12 sm:h-16 sm:w-16 ${iconClassName}`} />
       </div>
-      <div className="relative z-10 flex h-full flex-col justify-between p-4">
-        <span className={`mb-4 text-sm font-bold ${textClassName}`}>{label}</span>
-        <span className={`text-3xl font-black ${textClassName}`}>{value}</span>
+      <div className="relative z-10 flex min-h-20 flex-col justify-between p-3 sm:min-h-32 sm:p-4">
+        <span className={`mb-2 text-sm font-bold leading-tight sm:mb-4 ${textClassName}`}>{label}</span>
+        <span className={`text-2xl font-black leading-none sm:text-3xl ${textClassName}`}>{value}</span>
       </div>
     </button>
   );
@@ -95,13 +95,13 @@ export function Dashboard({
   const dueThisWeekCount = envTasks.filter(isDueThisWeek).length;
 
   return (
-    <div className="mx-auto max-w-7xl space-y-8 px-4 py-6 sm:px-6 lg:px-8 lg:space-y-12">
-      <div className="mb-4">
-        <h2 className="mb-2 text-2xl font-black tracking-tight text-slate-900 sm:text-3xl">Welcome, {currentUser.name.split(' ')[0]}</h2>
-        <p className="font-medium text-slate-500">Here's an overview of the current workspace.</p>
+    <div className="mx-auto max-w-7xl space-y-5 px-4 pb-6 pt-0 sm:space-y-8 sm:px-6 sm:py-6 lg:space-y-12 lg:px-8">
+      <div className="mb-1 sm:mb-4">
+        <h2 className="mb-1 text-2xl font-black tracking-tight text-slate-900 sm:mb-2 sm:text-3xl">Welcome, {currentUser.name.split(' ')[0]}</h2>
+        <p className="text-sm font-medium text-slate-500 sm:text-base">Here's an overview of the current workspace.</p>
       </div>
 
-      <div className={`grid grid-cols-1 gap-4 md:grid-cols-2 ${isMemberOrLeader ? 'xl:grid-cols-4' : 'xl:grid-cols-5'}`}>
+      <div className={`grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2 ${isMemberOrLeader ? 'xl:grid-cols-4' : 'xl:grid-cols-5'}`}>
         {isMemberOrLeader ? (
           <>
             <SummaryCard
@@ -223,32 +223,32 @@ export function Dashboard({
       </div>
 
       {!isMemberOrLeader && (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2">
           <button
             type="button"
             onClick={() => onNavigate('due_today')}
-            className="group relative overflow-hidden rounded-2xl border border-rose-100 bg-rose-50 p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+            className="group relative overflow-hidden rounded-xl border border-rose-100 bg-rose-50 p-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:rounded-2xl sm:p-5"
           >
-            <div className="mb-2 flex items-center justify-between">
+            <div className="mb-1 flex items-center justify-between sm:mb-2">
               <span className="text-sm font-bold text-rose-800">Due Today</span>
               <span className="rounded-full bg-rose-200 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-rose-800">Urgent</span>
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-black text-rose-900">{dueTodayCount}</span>
+              <span className="text-2xl font-black leading-none text-rose-900 sm:text-3xl">{dueTodayCount}</span>
               <span className="text-sm font-semibold text-rose-700">Tasks</span>
             </div>
           </button>
           <button
             type="button"
             onClick={() => onNavigate('due_this_week')}
-            className="group relative overflow-hidden rounded-2xl border border-orange-100 bg-orange-50 p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+            className="group relative overflow-hidden rounded-xl border border-orange-100 bg-orange-50 p-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:rounded-2xl sm:p-5"
           >
-            <div className="mb-2 flex items-center justify-between">
+            <div className="mb-1 flex items-center justify-between sm:mb-2">
               <span className="text-sm font-bold text-orange-800">Due This Week</span>
               <span className="rounded-full bg-orange-200 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-orange-800">Upcoming</span>
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-black text-orange-900">{dueThisWeekCount}</span>
+              <span className="text-2xl font-black leading-none text-orange-900 sm:text-3xl">{dueThisWeekCount}</span>
               <span className="text-sm font-semibold text-orange-700">Tasks</span>
             </div>
           </button>
