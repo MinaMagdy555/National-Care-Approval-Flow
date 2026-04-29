@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ExternalLink, FileWarning, Image as ImageIcon } from 'lucide-react';
 import { Task, TaskVersion, UploadedTaskFile } from '../lib/types';
 
@@ -50,6 +50,68 @@ function MissingSharedFile({ compact = false }: { compact?: boolean }) {
   );
 }
 
+function PdfCanvasPreview({
+  file,
+  compact = false,
+}: {
+  file: UploadedTaskFile;
+  compact?: boolean;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setFailed(false);
+
+    async function renderPdfPage() {
+      try {
+        const pdfjs = await import('pdfjs-dist');
+        pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString();
+
+        const loadingTask = pdfjs.getDocument({
+          url: file.url,
+          withCredentials: false,
+        });
+        const pdf = await loadingTask.promise;
+        const page = await pdf.getPage(1);
+        const viewport = page.getViewport({ scale: compact ? 0.28 : 0.5 });
+        const canvas = canvasRef.current;
+        const context = canvas?.getContext('2d');
+        if (!canvas || !context || cancelled) return;
+
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        await page.render({ canvas, canvasContext: context, viewport }).promise;
+      } catch (error) {
+        console.error('Failed to render PDF preview', error);
+        if (!cancelled) setFailed(true);
+      }
+    }
+
+    renderPdfPage();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [compact, file.url]);
+
+  if (failed) {
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-slate-100 p-2 text-center text-slate-500">
+        <FileWarning className="h-5 w-5" />
+        <span className="text-[10px] font-black uppercase tracking-wide">PDF preview unavailable</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full w-full items-center justify-center overflow-hidden bg-slate-200">
+      <canvas ref={canvasRef} className="h-full w-full object-cover" aria-label={`${file.name} preview`} />
+    </div>
+  );
+}
+
 export function FileContentThumbnail({
   file,
   alt,
@@ -90,16 +152,7 @@ export function FileContentThumbnail({
   }
 
   if (kind === 'pdf') {
-    return (
-      <div className="relative h-full w-full overflow-hidden bg-white">
-        <iframe
-          src={getPdfPreviewUrl(file.url)}
-          title={`${file.name} preview`}
-          loading="lazy"
-          className="pointer-events-none h-[240%] w-[240%] origin-top-left scale-[0.42] border-0 bg-white"
-        />
-      </div>
-    );
+    return <PdfCanvasPreview file={file} compact />;
   }
 
   return (
@@ -166,7 +219,7 @@ export function FilePreview({
         >
           <ExternalLink className="h-4 w-4" />
         </a>
-        <iframe src={file.url} title={file.name} className="h-full w-full rounded-lg bg-white" />
+        <PdfCanvasPreview file={file} />
       </div>
     );
   }

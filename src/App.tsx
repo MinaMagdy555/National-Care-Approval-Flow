@@ -86,6 +86,7 @@ function AppContent() {
   } = useAppStore();
   const initialUnreadCountRef = useRef<number | null>(null);
   const unreadNotificationIdsRef = useRef<Set<string>>(new Set());
+  const mainRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     writeRouteToUrl({ view: currentView, taskId: activeTaskId }, 'replace');
@@ -141,6 +142,10 @@ function AppContent() {
     setView(route.view);
     setActiveTaskId(route.taskId);
     writeRouteToUrl(route, mode);
+    requestAnimationFrame(() => {
+      mainRef.current?.scrollTo({ top: 0, left: 0 });
+      window.scrollTo({ top: 0, left: 0 });
+    });
   };
 
   const handleOpenTask = (id: string) => {
@@ -250,7 +255,7 @@ function AppContent() {
         onClose={() => setIsSidebarOpen(false)}
       />
       <div className="flex min-h-[100dvh] flex-1 flex-col min-w-0 md:pl-64">
-        <main className="flex-1 overflow-y-auto relative min-w-0 pt-16 md:pt-0">
+        <main ref={mainRef} className="flex-1 overflow-y-auto relative min-w-0 pt-16 md:pt-0">
           <button
             type="button"
             onClick={() => setIsSidebarOpen(true)}

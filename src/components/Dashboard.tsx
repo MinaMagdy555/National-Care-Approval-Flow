@@ -30,11 +30,49 @@ function SummaryCard({
       className={`group relative min-w-0 overflow-hidden rounded-xl border bg-white text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:rounded-2xl ${borderClassName}`}
     >
       <div className="absolute right-0 top-0 p-3 opacity-10 transition-opacity group-hover:opacity-20 sm:p-4">
-        <Icon className={`h-12 w-12 sm:h-16 sm:w-16 ${iconClassName}`} />
+        <Icon className={`h-10 w-10 sm:h-16 sm:w-16 ${iconClassName}`} />
       </div>
-      <div className="relative z-10 flex min-h-20 flex-col justify-between p-3 sm:min-h-32 sm:p-4">
-        <span className={`mb-2 text-sm font-bold leading-tight sm:mb-4 ${textClassName}`}>{label}</span>
-        <span className={`text-2xl font-black leading-none sm:text-3xl ${textClassName}`}>{value}</span>
+      <div className="relative z-10 flex min-h-16 flex-col justify-between p-2.5 sm:min-h-32 sm:p-4">
+        <span className={`mb-1.5 text-xs font-bold leading-tight sm:mb-4 sm:text-sm ${textClassName}`}>{label}</span>
+        <span className={`text-xl font-black leading-none sm:text-3xl ${textClassName}`}>{value}</span>
+      </div>
+    </button>
+  );
+}
+
+function DueSummaryCard({
+  label,
+  value,
+  tone,
+  badge,
+  onClick,
+}: {
+  label: string;
+  value: number;
+  tone: 'rose' | 'orange';
+  badge: string;
+  onClick: () => void;
+}) {
+  const toneClass = tone === 'rose'
+    ? 'border-rose-100 bg-rose-50 text-rose-900'
+    : 'border-orange-100 bg-orange-50 text-orange-900';
+  const badgeClass = tone === 'rose'
+    ? 'bg-rose-200 text-rose-800'
+    : 'bg-orange-200 text-orange-800';
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`group relative min-w-0 overflow-hidden rounded-xl border p-2.5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:rounded-2xl sm:p-5 ${toneClass}`}
+    >
+      <div className="mb-1 flex items-center justify-between gap-2 sm:mb-2">
+        <span className="min-w-0 truncate text-xs font-bold sm:text-sm">{label}</span>
+        <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider sm:px-2 sm:text-[10px] ${badgeClass}`}>{badge}</span>
+      </div>
+      <div className="flex items-baseline gap-1.5">
+        <span className="text-xl font-black leading-none sm:text-3xl">{value}</span>
+        <span className="text-xs font-semibold sm:text-sm">Tasks</span>
       </div>
     </button>
   );
@@ -101,7 +139,7 @@ export function Dashboard({
         <p className="text-sm font-medium text-slate-500 sm:text-base">Here's an overview of the current workspace.</p>
       </div>
 
-      <div className={`grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2 ${isMemberOrLeader ? 'xl:grid-cols-4' : 'xl:grid-cols-5'}`}>
+      <div className={`grid grid-cols-2 gap-2 min-[380px]:grid-cols-3 sm:gap-4 md:grid-cols-2 ${isMemberOrLeader ? 'xl:grid-cols-4' : 'xl:grid-cols-5'}`}>
         {isMemberOrLeader ? (
           <>
             <SummaryCard
@@ -188,6 +226,20 @@ export function Dashboard({
               iconClassName="text-emerald-600"
               onClick={() => onNavigate('approved_by_me')}
             />
+            <DueSummaryCard
+              label="Due Today"
+              value={dueTodayCount}
+              tone="rose"
+              badge="Urgent"
+              onClick={() => onNavigate('due_today')}
+            />
+            <DueSummaryCard
+              label="Due This Week"
+              value={dueThisWeekCount}
+              tone="orange"
+              badge="Upcoming"
+              onClick={() => onNavigate('due_this_week')}
+            />
           </>
         ) : currentUser.role === 'art_director' ? (
           <>
@@ -218,11 +270,25 @@ export function Dashboard({
               iconClassName="text-emerald-600"
               onClick={() => onNavigate('approved_by_me')}
             />
+            <DueSummaryCard
+              label="Due Today"
+              value={dueTodayCount}
+              tone="rose"
+              badge="Urgent"
+              onClick={() => onNavigate('due_today')}
+            />
+            <DueSummaryCard
+              label="Due This Week"
+              value={dueThisWeekCount}
+              tone="orange"
+              badge="Upcoming"
+              onClick={() => onNavigate('due_this_week')}
+            />
           </>
         ) : null}
       </div>
 
-      {!isMemberOrLeader && (
+      {!isMemberOrLeader && currentUser.role !== 'reviewer' && currentUser.role !== 'art_director' && (
         <div className="grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2">
           <button
             type="button"
