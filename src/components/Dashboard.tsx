@@ -32,9 +32,9 @@ function SummaryCard({
       <div className="absolute right-0 top-0 p-3 opacity-10 transition-opacity group-hover:opacity-20 sm:p-4">
         <Icon className={`h-10 w-10 sm:h-16 sm:w-16 ${iconClassName}`} />
       </div>
-      <div className="relative z-10 flex min-h-16 flex-col justify-between p-2.5 sm:min-h-32 sm:p-4">
-        <span className={`mb-1.5 text-xs font-bold leading-tight sm:mb-4 sm:text-sm ${textClassName}`}>{label}</span>
-        <span className={`text-xl font-black leading-none sm:text-3xl ${textClassName}`}>{value}</span>
+      <div className="relative z-10 flex min-h-[4.75rem] flex-col justify-between p-3 sm:min-h-32 sm:p-4">
+        <span className={`mb-2 text-[13px] font-bold leading-tight sm:mb-4 sm:text-sm ${textClassName}`}>{label}</span>
+        <span className={`text-2xl font-black leading-none sm:text-3xl ${textClassName}`}>{value}</span>
       </div>
     </button>
   );
@@ -64,15 +64,15 @@ function DueSummaryCard({
     <button
       type="button"
       onClick={onClick}
-      className={`group relative min-w-0 overflow-hidden rounded-xl border p-2.5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:rounded-2xl sm:p-5 ${toneClass}`}
+      className={`group relative min-w-0 overflow-hidden rounded-xl border p-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:rounded-2xl sm:p-5 ${toneClass}`}
     >
       <div className="mb-1 flex items-center justify-between gap-2 sm:mb-2">
-        <span className="min-w-0 truncate text-xs font-bold sm:text-sm">{label}</span>
-        <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider sm:px-2 sm:text-[10px] ${badgeClass}`}>{badge}</span>
+        <span className="min-w-0 text-[13px] font-bold leading-tight sm:text-sm">{label}</span>
+        <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider sm:px-2 sm:text-[10px] ${badgeClass}`}>{badge}</span>
       </div>
       <div className="flex items-baseline gap-1.5">
-        <span className="text-xl font-black leading-none sm:text-3xl">{value}</span>
-        <span className="text-xs font-semibold sm:text-sm">Tasks</span>
+        <span className="text-2xl font-black leading-none sm:text-3xl">{value}</span>
+        <span className="text-sm font-semibold">Tasks</span>
       </div>
     </button>
   );
@@ -139,7 +139,7 @@ export function Dashboard({
         <p className="text-sm font-medium text-slate-500 sm:text-base">Here's an overview of the current workspace.</p>
       </div>
 
-      <div className={`grid grid-cols-2 gap-2 min-[380px]:grid-cols-3 sm:gap-4 md:grid-cols-2 ${isMemberOrLeader ? 'xl:grid-cols-4' : 'xl:grid-cols-5'}`}>
+      <div className={`grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-2 ${isMemberOrLeader ? 'xl:grid-cols-4' : 'xl:grid-cols-5'}`}>
         {isMemberOrLeader ? (
           <>
             <SummaryCard
@@ -234,7 +234,7 @@ export function Dashboard({
               onClick={() => onNavigate('due_today')}
             />
             <DueSummaryCard
-              label="Due This Week"
+              label="This Week"
               value={dueThisWeekCount}
               tone="orange"
               badge="Upcoming"
@@ -278,7 +278,7 @@ export function Dashboard({
               onClick={() => onNavigate('due_today')}
             />
             <DueSummaryCard
-              label="Due This Week"
+              label="This Week"
               value={dueThisWeekCount}
               tone="orange"
               badge="Upcoming"
