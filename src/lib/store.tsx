@@ -12,7 +12,7 @@ import {
   upsertSupabaseNotifications,
   upsertSupabaseTask,
 } from './supabaseDb';
-import { addLowResPreviewsToFiles } from './previewUtils';
+import { addLowResPreviewsToFiles, getTaskFiles } from './previewUtils';
 
 const REVIEWER_WAITING_STATUSES: TaskStatus[] = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'];
 const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
@@ -173,6 +173,39 @@ function taskSyncKey(task: Task) {
   return `${task.id}:${task.updatedAt}:${task.status}:${task.archivedAt || ''}:${task.thumbnailStoragePath || ''}:${previewKey}:${commentImageKey}`;
 }
 
+function preserveStoredMediaPreviews(currentTask: Task, incomingTask: Task): Task {
+  const currentFilesById = new Map(
+    currentTask.versions
+      .flatMap(version => getTaskFiles(version))
+      .filter(file => file.previewUrl && file.previewStoragePath)
+      .map(file => [file.id, file])
+  );
+
+  const versions = incomingTask.versions.map(version => ({
+    ...version,
+    files: version.files?.map(file => {
+      if (file.previewUrl && file.previewStoragePath) return file;
+
+      const currentFile = currentFilesById.get(file.id);
+      return currentFile?.previewUrl && currentFile.previewStoragePath
+        ? {
+            ...file,
+            previewUrl: currentFile.previewUrl,
+            previewStoragePath: currentFile.previewStoragePath,
+          }
+        : file;
+    }),
+  }));
+  const thumbnailFile = versions[0]?.files?.find(file => file.previewUrl && file.previewStoragePath);
+
+  return {
+    ...incomingTask,
+    versions,
+    thumbnailUrl: incomingTask.thumbnailUrl || thumbnailFile?.previewUrl || currentTask.thumbnailUrl,
+    thumbnailStoragePath: incomingTask.thumbnailStoragePath || thumbnailFile?.previewStoragePath || currentTask.thumbnailStoragePath,
+  };
+}
+
 function notificationSyncKey(notification: Notification) {
   return `${notification.id}:${notification.read ? 'read' : 'unread'}:${notification.message}:${notification.createdAt}`;
 }
@@ -182,9 +215,10 @@ function mergeTaskIntoState(currentTasks: Task[], incomingTask: Task) {
   const nextTasks = currentTasks.map(task => {
     if (task.id !== incomingTask.id) return task;
     if (new Date(task.updatedAt).getTime() > new Date(incomingTask.updatedAt).getTime()) return task;
-    if (taskSyncKey(task) === taskSyncKey(incomingTask)) return task;
+    const mergedIncomingTask = preserveStoredMediaPreviews(task, incomingTask);
+    if (taskSyncKey(task) === taskSyncKey(mergedIncomingTask)) return task;
     changed = true;
-    return incomingTask;
+    return mergedIncomingTask;
   });
 
   if (!currentTasks.some(task => task.id === incomingTask.id)) {

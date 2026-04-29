@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ExternalLink, FileText, FileWarning, Film, Image as ImageIcon } from 'lucide-react';
 import { Task, UploadedTaskFile } from '../lib/types';
 import {
+  getExpectedFilePreview,
   getTaskFiles,
   isStoredPreviewUrl,
   isStoredTaskThumbnail,
@@ -167,11 +168,18 @@ export function FileContentThumbnail({
   alt: string;
   className?: string;
 }) {
+  const previewUrl = file?.previewUrl || '';
+  const [previewLoadFailed, setPreviewLoadFailed] = useState(false);
+
+  useEffect(() => {
+    setPreviewLoadFailed(false);
+  }, [previewUrl]);
+
   if (!file) {
     return <MissingSharedFile compact />;
   }
 
-  if (isStoredPreviewUrl(file)) {
+  if (isStoredPreviewUrl(file) && !previewLoadFailed) {
     return (
       <img
         src={file.previewUrl}
@@ -179,6 +187,7 @@ export function FileContentThumbnail({
         loading="lazy"
         decoding="async"
         fetchPriority="low"
+        onError={() => setPreviewLoadFailed(true)}
         className={className || 'h-full w-full object-cover'}
       />
     );
@@ -194,10 +203,24 @@ export function FileContentThumbnail({
 export function TaskThumbnail({ task }: { task: Task }) {
   const { updateTaskMediaPreviews } = useAppStore();
   const thumbnailRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(false);
+  const updateTaskMediaPreviewsRef = useRef(updateTaskMediaPreviews);
   const [isVisible, setIsVisible] = useState(false);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
   const file = getTaskFiles(task.versions[0])[0];
   const hasLocalOnlyFile = isLocalOnlyFileUrl(task.thumbnailUrl) || isLocalOnlyFileUrl(file?.url);
+  const expectedPreview = !hasLocalOnlyFile ? getExpectedFilePreview(task.id, file) : null;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    updateTaskMediaPreviewsRef.current = updateTaskMediaPreviews;
+  }, [updateTaskMediaPreviews]);
 
   useEffect(() => {
     const element = thumbnailRef.current;
@@ -226,31 +249,24 @@ export function TaskThumbnail({ task }: { task: Task }) {
     if (!isVisible || hasLocalOnlyFile || !taskNeedsThumbnailPreview(task) || thumbnailPreviewBackfillAttempts.has(task.id)) return;
 
     thumbnailPreviewBackfillAttempts.add(task.id);
-    let cancelled = false;
-    const timeoutId = window.setTimeout(() => {
-      enqueueThumbnailBackfill(async () => {
-        if (cancelled) return;
-        setIsGeneratingPreview(true);
+    const taskSnapshot = task;
 
-        try {
-          const updates = await optimizeTaskThumbnailForPreview(task);
-          if (!cancelled && updates.changed) {
-            updateTaskMediaPreviews(task.id, updates);
-          }
-        } catch (error) {
-          console.warn('Could not create task thumbnail preview', error);
-          thumbnailPreviewBackfillAttempts.delete(task.id);
-        } finally {
-          if (!cancelled) setIsGeneratingPreview(false);
+    enqueueThumbnailBackfill(async () => {
+      if (mountedRef.current) setIsGeneratingPreview(true);
+
+      try {
+        const updates = await optimizeTaskThumbnailForPreview(taskSnapshot);
+        if (updates.changed) {
+          updateTaskMediaPreviewsRef.current(taskSnapshot.id, updates);
         }
-      });
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timeoutId);
-    };
-  }, [hasLocalOnlyFile, isVisible, task, updateTaskMediaPreviews]);
+      } catch (error) {
+        console.warn('Could not create task thumbnail preview', error);
+        thumbnailPreviewBackfillAttempts.delete(taskSnapshot.id);
+      } finally {
+        if (mountedRef.current) setIsGeneratingPreview(false);
+      }
+    });
+  }, [hasLocalOnlyFile, isVisible, task]);
 
   let content: React.ReactNode;
 
@@ -264,6 +280,16 @@ export function TaskThumbnail({ task }: { task: Task }) {
           ...previewFile,
           previewUrl: task.thumbnailUrl,
           previewStoragePath: task.thumbnailStoragePath,
+        }}
+        alt={task.name}
+      />
+    );
+  } else if (file && expectedPreview) {
+    content = (
+      <FileContentThumbnail
+        file={{
+          ...file,
+          ...expectedPreview,
         }}
         alt={task.name}
       />

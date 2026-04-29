@@ -1,9 +1,9 @@
 import { Task, TaskComment, TaskCommentSection, TaskVersion, UploadedTaskFile } from './types';
-import { uploadTaskPreviewImage } from './supabaseDb';
+import { getTaskFilePublicUrl, uploadTaskPreviewImage } from './supabaseDb';
 
 const PREVIEW_MAX_EDGE = 420;
 const PREVIEW_JPEG_QUALITY = 0.45;
-const VIDEO_PREVIEW_TIME_SECONDS = 0.1;
+const VIDEO_PREVIEW_TIME_SECONDS = 0.75;
 
 type PreviewSource = UploadedTaskFile & { blob?: Blob };
 
@@ -183,6 +183,19 @@ export function isStoredTaskThumbnail(task: Pick<Task, 'thumbnailUrl' | 'thumbna
 
 export function isDataImageUrl(url?: string) {
   return Boolean(url?.startsWith('data:image/'));
+}
+
+export function getExpectedFilePreview(taskId: string, file?: Pick<UploadedTaskFile, 'id' | 'name' | 'type' | 'url'>): PreviewUpload | null {
+  if (!file?.id || !file.url || file.url.startsWith('blob:') || getFileKind(file) === 'file') return null;
+
+  const previewStoragePath = `${safePathPart(taskId)}/previews/${safePathPart(file.id)}.jpg`;
+  const previewUrl = getTaskFilePublicUrl(previewStoragePath);
+  if (!previewUrl) return null;
+
+  return {
+    previewUrl: `${previewUrl}?preview=${encodeURIComponent(previewStoragePath)}`,
+    previewStoragePath,
+  };
 }
 
 export async function createLowResPreviewBlob(file: PreviewSource): Promise<Blob | null> {

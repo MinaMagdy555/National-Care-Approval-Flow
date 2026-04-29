@@ -103,6 +103,13 @@ export async function uploadTaskPreviewImage(storagePath: string, previewBlob: B
   };
 }
 
+export function getTaskFilePublicUrl(storagePath: string) {
+  if (!isSupabaseConfigured || !supabase) return '';
+
+  const { data } = supabase.storage.from(TASK_FILES_BUCKET).getPublicUrl(storagePath);
+  return data.publicUrl;
+}
+
 export async function fetchSupabaseTasks(): Promise<Task[]> {
   const client = ensureSupabase();
   const { data, error } = await client
