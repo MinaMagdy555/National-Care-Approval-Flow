@@ -200,6 +200,15 @@ export function Dashboard({
               onClick={() => onNavigate('quick_look_queue')}
             />
             <SummaryCard
+              label="Approved"
+              value={approvedCount}
+              icon={CheckCircle2}
+              textClassName="text-emerald-800"
+              borderClassName="border-emerald-100"
+              iconClassName="text-emerald-600"
+              onClick={() => onNavigate('approved_by_me')}
+            />
+            <SummaryCard
               label={`Waiting for ${marwaName}`}
               value={waitingMarwaCount}
               icon={History}
@@ -216,15 +225,6 @@ export function Dashboard({
               borderClassName="border-rose-100"
               iconClassName="text-rose-600"
               onClick={() => onNavigate('rejected_reopened')}
-            />
-            <SummaryCard
-              label="Approved"
-              value={approvedCount}
-              icon={CheckCircle2}
-              textClassName="text-emerald-800"
-              borderClassName="border-emerald-100"
-              iconClassName="text-emerald-600"
-              onClick={() => onNavigate('approved_by_me')}
             />
             <DueSummaryCard
               label="Due Today"
