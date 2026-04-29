@@ -17,6 +17,9 @@ const REVIEWER_WAITING_STATUSES: TaskStatus[] = ['submitted', 'waiting_reviewer_
 const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
 const REGISTERED_USERS_STORAGE_KEY = 'national-care-registered-users';
 const REGISTERED_PASSWORDS_STORAGE_KEY = 'national-care-registered-passwords';
+const SHARED_DATA_CHANNEL = 'approval-flow-shared-data';
+const SHARED_DATA_EVENT = 'state-change';
+const SHARED_DATA_POLL_INTERVAL_MS = 2500;
 const PROFILE_PASSWORDS: Record<string, string> = {
   user_1: '1',
   user_3: '2',
@@ -27,6 +30,12 @@ const PROFILE_PASSWORDS: Record<string, string> = {
 };
 
 type StoredUser = User & { password?: string };
+
+type SharedDataPayload =
+  | { type: 'task_upsert'; task: Task }
+  | { type: 'notification_upsert'; notification: Notification };
+
+type SharedDataMessage = SharedDataPayload & { originClientId: string };
 
 function getStoredUsers(): StoredUser[] {
   if (typeof window === 'undefined') return [];
@@ -63,6 +72,12 @@ function getInitialCurrentUser() {
   const storedUserId = typeof window !== 'undefined' ? window.localStorage.getItem(CURRENT_USER_STORAGE_KEY) : null;
   const users = getAllInitialUsers();
   return users.find(user => user.id === storedUserId) || users.find(u => u.role === 'reviewer') || users[0];
+}
+
+function createClientId() {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `client_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
 function normalizeMinaCreatedTask(task: Task): Task {
@@ -134,6 +149,66 @@ function reviveTaskFiles(tasks: Task[]): Task[] {
   }) as Task[];
 }
 
+function sortTasksByUpdate(tasks: Task[]) {
+  return [...tasks].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+}
+
+function sortNotificationsByCreatedAt(notifications: Notification[]) {
+  return [...notifications].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+function taskSyncKey(task: Task) {
+  return `${task.id}:${task.updatedAt}:${task.status}:${task.archivedAt || ''}`;
+}
+
+function notificationSyncKey(notification: Notification) {
+  return `${notification.id}:${notification.read ? 'read' : 'unread'}:${notification.message}:${notification.createdAt}`;
+}
+
+function mergeTaskIntoState(currentTasks: Task[], incomingTask: Task) {
+  let changed = false;
+  const nextTasks = currentTasks.map(task => {
+    if (task.id !== incomingTask.id) return task;
+    if (new Date(task.updatedAt).getTime() > new Date(incomingTask.updatedAt).getTime()) return task;
+    if (taskSyncKey(task) === taskSyncKey(incomingTask)) return task;
+    changed = true;
+    return incomingTask;
+  });
+
+  if (!currentTasks.some(task => task.id === incomingTask.id)) {
+    changed = true;
+    nextTasks.unshift(incomingTask);
+  }
+
+  return changed ? sortTasksByUpdate(nextTasks) : currentTasks;
+}
+
+function mergeTasksIntoState(currentTasks: Task[], incomingTasks: Task[]) {
+  return incomingTasks.reduce(mergeTaskIntoState, currentTasks);
+}
+
+function mergeNotificationIntoState(currentNotifications: Notification[], incomingNotification: Notification) {
+  let changed = false;
+  const nextNotifications = currentNotifications.map(notification => {
+    if (notification.id !== incomingNotification.id) return notification;
+    if (notification.read && !incomingNotification.read) return notification;
+    if (notificationSyncKey(notification) === notificationSyncKey(incomingNotification)) return notification;
+    changed = true;
+    return incomingNotification;
+  });
+
+  if (!currentNotifications.some(notification => notification.id === incomingNotification.id)) {
+    changed = true;
+    nextNotifications.unshift(incomingNotification);
+  }
+
+  return changed ? sortNotificationsByCreatedAt(nextNotifications) : currentNotifications;
+}
+
+function mergeNotificationsIntoState(currentNotifications: Notification[], incomingNotifications: Notification[]) {
+  return incomingNotifications.reduce(mergeNotificationIntoState, currentNotifications);
+}
+
 async function uploadMigratedTaskFiles(task: Task): Promise<Task> {
   const versions = await Promise.all(task.versions.map(async version => {
     if (!version.files || version.files.length === 0) return version;
@@ -193,6 +268,12 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const hasLoadedPersistedState = useRef(false);
+  const clientIdRef = useRef(createClientId());
+  const sharedDataChannelRef = useRef<ReturnType<NonNullable<typeof supabase>['channel']> | null>(null);
+  const isSharedDataChannelReadyRef = useRef(false);
+  const pendingTaskBroadcastIdsRef = useRef<Set<string>>(new Set());
+  const pendingNotificationBroadcastIdsRef = useRef<Set<string>>(new Set());
+  const queuedSharedDataMessagesRef = useRef<SharedDataMessage[]>([]);
   const [userList, setUserList] = useState<User[]>(getAllInitialUsers);
   const usersObj = userList.reduce((acc, user) => {
     acc[user.id] = user;
@@ -207,6 +288,55 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [localMigrationState, setLocalMigrationState] = useState<{ tasks: Task[]; notifications: Notification[] } | null>(null);
   const [isMigratingLocalData, setIsMigratingLocalData] = useState(false);
   const currentUser = currentUserState;
+
+  const sendSharedDataMessage = (message: SharedDataPayload) => {
+    if (!isSupabaseConfigured || !supabase) return;
+
+    const sharedMessage = {
+      ...message,
+      originClientId: clientIdRef.current,
+    } as SharedDataMessage;
+
+    if (!isSharedDataChannelReadyRef.current || !sharedDataChannelRef.current) {
+      queuedSharedDataMessagesRef.current.push(sharedMessage);
+      return;
+    }
+
+    void sharedDataChannelRef.current
+      .send({
+        type: 'broadcast',
+        event: SHARED_DATA_EVENT,
+        payload: sharedMessage,
+      })
+      .catch(error => {
+        console.error('Failed to broadcast shared data change', error);
+      });
+  };
+
+  const flushQueuedSharedDataMessages = () => {
+    if (!isSharedDataChannelReadyRef.current || !sharedDataChannelRef.current) return;
+
+    const queuedMessages = queuedSharedDataMessagesRef.current.splice(0);
+    queuedMessages.forEach(message => {
+      void sharedDataChannelRef.current
+        ?.send({
+          type: 'broadcast',
+          event: SHARED_DATA_EVENT,
+          payload: message,
+        })
+        .catch(error => {
+          console.error('Failed to broadcast queued shared data change', error);
+        });
+    });
+  };
+
+  const queueTaskBroadcast = (taskId: string) => {
+    pendingTaskBroadcastIdsRef.current.add(taskId);
+  };
+
+  const queueNotificationBroadcast = (notificationId: string) => {
+    pendingNotificationBroadcastIdsRef.current.add(notificationId);
+  };
 
   const setCurrentUser = (user: User) => {
     setCurrentUserState(user);
@@ -283,6 +413,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!hasLoadedPersistedState.current) return;
 
+    const pendingTaskIds = Array.from(pendingTaskBroadcastIdsRef.current);
+    const pendingNotificationIds = Array.from(pendingNotificationBroadcastIdsRef.current);
+    pendingTaskBroadcastIdsRef.current.clear();
+    pendingNotificationBroadcastIdsRef.current.clear();
+
+    pendingTaskIds.forEach(taskId => {
+      const task = tasks.find(item => item.id === taskId);
+      if (task) sendSharedDataMessage({ type: 'task_upsert', task });
+    });
+    pendingNotificationIds.forEach(notificationId => {
+      const notification = notifications.find(item => item.id === notificationId);
+      if (notification) sendSharedDataMessage({ type: 'notification_upsert', notification });
+    });
+
     const saveState = isSupabaseConfigured
       ? Promise.all([
           ...tasks.map(task => upsertSupabaseTask(task)),
@@ -304,19 +448,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!isSupabaseConfigured || !supabase) return;
 
     const channel = supabase
-      .channel('approval-flow-shared-data')
+      .channel(SHARED_DATA_CHANNEL, {
+        config: {
+          broadcast: { ack: true, self: false },
+        },
+      })
+      .on('broadcast', { event: SHARED_DATA_EVENT }, payload => {
+        const message = payload.payload as SharedDataMessage | undefined;
+        if (!message || message.originClientId === clientIdRef.current) return;
+
+        if (message.type === 'task_upsert') {
+          const revivedTask = reviveTaskFiles([message.task])[0];
+          if (revivedTask) {
+            setTasks(prev => mergeTaskIntoState(prev, revivedTask));
+          }
+          return;
+        }
+
+        if (message.type === 'notification_upsert') {
+          setNotifications(prev => mergeNotificationIntoState(prev, message.notification));
+        }
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'approval_tasks' }, payload => {
         const row = payload.new as { payload?: Task } | null;
         const task = row?.payload;
         if (!task) return;
 
         setTasks(prev => {
-          const exists = prev.some(item => item.id === task.id);
           const revivedTask = reviveTaskFiles([task])[0];
-          if (exists && prev.some(item => item.id === task.id && item.updatedAt === task.updatedAt)) return prev;
-          return exists
-            ? prev.map(item => item.id === task.id ? revivedTask : item)
-            : [revivedTask, ...prev];
+          return revivedTask ? mergeTaskIntoState(prev, revivedTask) : prev;
         });
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'approval_notifications' }, payload => {
@@ -324,28 +484,80 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const notification = row?.payload;
         if (!notification) return;
 
-        setNotifications(prev => {
-          const exists = prev.some(item => item.id === notification.id);
-          if (exists && prev.some(item => item.id === notification.id && item.read === notification.read)) return prev;
-          return exists
-            ? prev.map(item => item.id === notification.id ? notification : item)
-            : [notification, ...prev];
-        });
+        setNotifications(prev => mergeNotificationIntoState(prev, notification));
       })
-      .subscribe();
+      .subscribe(status => {
+        isSharedDataChannelReadyRef.current = status === 'SUBSCRIBED';
+        if (status === 'SUBSCRIBED') {
+          flushQueuedSharedDataMessages();
+        }
+      });
+
+    sharedDataChannelRef.current = channel;
 
     return () => {
+      isSharedDataChannelReadyRef.current = false;
+      sharedDataChannelRef.current = null;
       supabase.removeChannel(channel);
     };
   }, []);
 
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    let isMounted = true;
+    let isPolling = false;
+
+    const syncLatestSharedData = async () => {
+      if (!hasLoadedPersistedState.current || isPolling) return;
+
+      isPolling = true;
+      try {
+        const [latestTasks, latestNotifications] = await Promise.all([
+          fetchSupabaseTasks(),
+          fetchSupabaseNotifications(),
+        ]);
+
+        if (!isMounted) return;
+
+        setTasks(prev => mergeTasksIntoState(prev, reviveTaskFiles(latestTasks)));
+        setNotifications(prev => mergeNotificationsIntoState(prev, latestNotifications.filter(notification => notification?.id)));
+        setPersistenceError(null);
+      } catch (error) {
+        console.error('Failed to sync latest shared data', error);
+        if (isMounted) {
+          setPersistenceError(error instanceof Error ? error.message : 'Failed to sync latest shared data.');
+        }
+      } finally {
+        isPolling = false;
+      }
+    };
+
+    const intervalId = window.setInterval(syncLatestSharedData, SHARED_DATA_POLL_INTERVAL_MS);
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        void syncLatestSharedData();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
   const addNotification = (notif: Omit<Notification, 'id' | 'createdAt' | 'read'>) => {
-    setNotifications(prev => [{
+    const notification: Notification = {
       ...notif,
       id: Math.random().toString(36).substring(7),
       createdAt: new Date().toISOString(),
       read: false
-    }, ...prev]);
+    };
+
+    queueNotificationBroadcast(notification.id);
+    setNotifications(prev => [notification, ...prev]);
   };
 
   const addNotifications = (userIds: string[], taskId: string, message: string) => {
@@ -355,6 +567,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const markNotificationAsRead = (id: string) => {
+    const notification = notifications.find(item => item.id === id);
+    if (!notification || notification.read) return;
+
+    queueNotificationBroadcast(id);
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
   };
 
@@ -409,6 +625,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const archiveTask = (taskId: string, reason = 'Archived manually') => {
+    queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(task => task.id === taskId
       ? { ...task, archivedAt: new Date().toISOString(), archivedReason: reason, updatedAt: new Date().toISOString() }
       : task
@@ -416,6 +633,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const unarchiveTask = (taskId: string) => {
+    queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(task => task.id === taskId
       ? { ...task, archivedAt: null, archivedReason: null, updatedAt: new Date().toISOString() }
       : task
@@ -473,6 +691,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     }
 
+    queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(t => {
       if (t.id === taskId) {
         return { ...t, status: newStatus, currentOwnerRole: newOwnerRole, updatedAt: new Date().toISOString() };
@@ -482,6 +701,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const updateTaskPriority = (taskId: string, priority: Priority, deadline: string | null) => {
+    queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(t => {
       if (t.id === taskId) {
         return { ...t, priority, deadlineText: deadline, updatedAt: new Date().toISOString() };
@@ -491,7 +711,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const addTask = (task: Task) => {
-    setTasks(prev => [normalizeMinaCreatedTask(task), ...prev]);
+    const normalizedTask = normalizeMinaCreatedTask(task);
+    queueTaskBroadcast(normalizedTask.id);
+    setTasks(prev => [normalizedTask, ...prev]);
   };
 
   const addTaskVersion = (taskId: string, version: TaskVersion) => {
@@ -510,6 +732,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     addNotifications(recipients, taskId, `${creatorName} uploaded V${version.versionNumber} for "${task.name}".`);
 
+    queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(t => {
       if (t.id !== taskId) return t;
 
@@ -529,6 +752,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const replaceTaskVersionFiles = (taskId: string, versionId: string, files: UploadedTaskFile[]) => {
+    queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(task => {
       if (task.id !== taskId) return task;
 
@@ -553,6 +777,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const addTaskComment = (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => {
+    queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(task => {
       if (task.id !== taskId) return task;
 

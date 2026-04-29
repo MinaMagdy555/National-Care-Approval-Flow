@@ -35,36 +35,59 @@ function writeRouteToUrl(route: AppRoute, mode: 'push' | 'replace' = 'push') {
   window.history[mode === 'push' ? 'pushState' : 'replaceState'](route, '', nextUrl);
 }
 
-function playNotificationSound() {
+async function playNotificationSound() {
   const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioContextClass) return;
 
   notificationAudioContext = notificationAudioContext || new AudioContextClass();
   const audioContext = notificationAudioContext;
   if (audioContext.state === 'suspended') {
-    void audioContext.resume();
+    try {
+      await audioContext.resume();
+    } catch {
+      return;
+    }
   }
-  const gain = audioContext.createGain();
-  const firstTone = audioContext.createOscillator();
-  const secondTone = audioContext.createOscillator();
 
-  gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.08, audioContext.currentTime + 0.02);
-  gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.45);
+  const startTime = audioContext.currentTime + 0.02;
+  const masterGain = audioContext.createGain();
+  const filter = audioContext.createBiquadFilter();
+  const tones = [
+    { frequency: 880, offset: 0, duration: 0.11 },
+    { frequency: 1175, offset: 0.12, duration: 0.13 },
+    { frequency: 1568, offset: 0.27, duration: 0.22 },
+  ];
 
-  firstTone.frequency.value = 740;
-  secondTone.frequency.value = 980;
-  firstTone.type = 'sine';
-  secondTone.type = 'sine';
+  filter.type = 'highpass';
+  filter.frequency.value = 420;
+  masterGain.gain.setValueAtTime(0.0001, startTime);
+  masterGain.gain.exponentialRampToValueAtTime(0.22, startTime + 0.03);
+  masterGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.62);
+  filter.connect(masterGain);
+  masterGain.connect(audioContext.destination);
 
-  firstTone.connect(gain);
-  secondTone.connect(gain);
-  gain.connect(audioContext.destination);
+  tones.forEach(tone => {
+    const oscillator = audioContext.createOscillator();
+    const toneGain = audioContext.createGain();
+    const toneStart = startTime + tone.offset;
+    const toneEnd = toneStart + tone.duration;
 
-  firstTone.start();
-  firstTone.stop(audioContext.currentTime + 0.18);
-  secondTone.start(audioContext.currentTime + 0.2);
-  secondTone.stop(audioContext.currentTime + 0.45);
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(tone.frequency, toneStart);
+    oscillator.frequency.exponentialRampToValueAtTime(tone.frequency * 0.985, toneEnd);
+    toneGain.gain.setValueAtTime(0.0001, toneStart);
+    toneGain.gain.exponentialRampToValueAtTime(0.95, toneStart + 0.015);
+    toneGain.gain.exponentialRampToValueAtTime(0.0001, toneEnd);
+
+    oscillator.connect(toneGain);
+    toneGain.connect(filter);
+    oscillator.start(toneStart);
+    oscillator.stop(toneEnd + 0.03);
+  });
+
+  if ('vibrate' in navigator) {
+    navigator.vibrate([70, 35, 70]);
+  }
 }
 
 function AppContent() {
@@ -86,6 +109,7 @@ function AppContent() {
   } = useAppStore();
   const initialUnreadCountRef = useRef<number | null>(null);
   const unreadNotificationIdsRef = useRef<Set<string>>(new Set());
+  const unreadNotificationUserIdRef = useRef(currentUser.id);
   const mainRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -105,15 +129,16 @@ function AppContent() {
     const unreadNotifications = notifications.filter(notification => notification.userId === currentUser.id && !notification.read);
     const unreadIds = new Set(unreadNotifications.map(notification => notification.id));
 
-    if (initialUnreadCountRef.current === null) {
+    if (initialUnreadCountRef.current === null || unreadNotificationUserIdRef.current !== currentUser.id) {
       initialUnreadCountRef.current = unreadNotifications.length;
       unreadNotificationIdsRef.current = unreadIds;
+      unreadNotificationUserIdRef.current = currentUser.id;
       return;
     }
 
     const hasNewUnreadNotification = unreadNotifications.some(notification => !unreadNotificationIdsRef.current.has(notification.id));
     if (hasNewUnreadNotification) {
-      playNotificationSound();
+      void playNotificationSound();
     }
 
     initialUnreadCountRef.current = unreadNotifications.length;
