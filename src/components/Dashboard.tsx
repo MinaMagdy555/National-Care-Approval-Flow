@@ -13,6 +13,7 @@ function SummaryCard({
   textClassName,
   borderClassName,
   iconClassName,
+  className = '',
   onClick,
 }: {
   label: string;
@@ -21,13 +22,14 @@ function SummaryCard({
   textClassName: string;
   borderClassName: string;
   iconClassName: string;
+  className?: string;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`group relative min-w-0 overflow-hidden rounded-xl border bg-white text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:rounded-2xl ${borderClassName}`}
+      className={`group relative min-w-0 overflow-hidden rounded-xl border bg-white text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:rounded-2xl ${borderClassName} ${className}`}
     >
       <div className="absolute right-0 top-0 p-3 opacity-10 transition-opacity group-hover:opacity-20 sm:p-4">
         <Icon className={`h-10 w-10 sm:h-16 sm:w-16 ${iconClassName}`} />
@@ -178,6 +180,20 @@ export function Dashboard({
               iconClassName="text-emerald-600"
               onClick={() => onNavigate('approved_by_me')}
             />
+            <DueSummaryCard
+              label="Due Today"
+              value={dueTodayCount}
+              tone="rose"
+              badge="Urgent"
+              onClick={() => onNavigate('due_today')}
+            />
+            <DueSummaryCard
+              label="This Week"
+              value={dueThisWeekCount}
+              tone="orange"
+              badge="Upcoming"
+              onClick={() => onNavigate('due_this_week')}
+            />
           </>
         ) : currentUser.role === 'reviewer' ? (
           <>
@@ -200,21 +216,13 @@ export function Dashboard({
               onClick={() => onNavigate('quick_look_queue')}
             />
             <SummaryCard
-              label="Approved"
-              value={approvedCount}
-              icon={CheckCircle2}
-              textClassName="text-emerald-800"
-              borderClassName="border-emerald-100"
-              iconClassName="text-emerald-600"
-              onClick={() => onNavigate('approved_by_me')}
-            />
-            <SummaryCard
               label={`Waiting for ${marwaName}`}
               value={waitingMarwaCount}
               icon={History}
               textClassName="text-slate-800"
               borderClassName="border-slate-200"
               iconClassName="text-slate-600"
+              className="col-span-2 md:col-span-1"
               onClick={() => onNavigate('ad_queue')}
             />
             <SummaryCard
@@ -225,6 +233,15 @@ export function Dashboard({
               borderClassName="border-rose-100"
               iconClassName="text-rose-600"
               onClick={() => onNavigate('rejected_reopened')}
+            />
+            <SummaryCard
+              label="Approved"
+              value={approvedCount}
+              icon={CheckCircle2}
+              textClassName="text-emerald-800"
+              borderClassName="border-emerald-100"
+              iconClassName="text-emerald-600"
+              onClick={() => onNavigate('approved_by_me')}
             />
             <DueSummaryCard
               label="Due Today"
@@ -250,6 +267,7 @@ export function Dashboard({
               textClassName="text-amber-800"
               borderClassName="border-amber-100"
               iconClassName="text-amber-600"
+              className="col-span-2 md:col-span-1"
               onClick={() => onNavigate('ad_queue')}
             />
             <SummaryCard
@@ -289,35 +307,21 @@ export function Dashboard({
       </div>
 
       {!isMemberOrLeader && currentUser.role !== 'reviewer' && currentUser.role !== 'art_director' && (
-        <div className="grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2">
-          <button
-            type="button"
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-2">
+          <DueSummaryCard
+            label="Due Today"
+            value={dueTodayCount}
+            tone="rose"
+            badge="Urgent"
             onClick={() => onNavigate('due_today')}
-            className="group relative overflow-hidden rounded-xl border border-rose-100 bg-rose-50 p-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:rounded-2xl sm:p-5"
-          >
-            <div className="mb-1 flex items-center justify-between sm:mb-2">
-              <span className="text-sm font-bold text-rose-800">Due Today</span>
-              <span className="rounded-full bg-rose-200 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-rose-800">Urgent</span>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-black leading-none text-rose-900 sm:text-3xl">{dueTodayCount}</span>
-              <span className="text-sm font-semibold text-rose-700">Tasks</span>
-            </div>
-          </button>
-          <button
-            type="button"
+          />
+          <DueSummaryCard
+            label="This Week"
+            value={dueThisWeekCount}
+            tone="orange"
+            badge="Upcoming"
             onClick={() => onNavigate('due_this_week')}
-            className="group relative overflow-hidden rounded-xl border border-orange-100 bg-orange-50 p-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:rounded-2xl sm:p-5"
-          >
-            <div className="mb-1 flex items-center justify-between sm:mb-2">
-              <span className="text-sm font-bold text-orange-800">Due This Week</span>
-              <span className="rounded-full bg-orange-200 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-orange-800">Upcoming</span>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-black leading-none text-orange-900 sm:text-3xl">{dueThisWeekCount}</span>
-              <span className="text-sm font-semibold text-orange-700">Tasks</span>
-            </div>
-          </button>
+          />
         </div>
       )}
 
