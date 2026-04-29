@@ -5,17 +5,27 @@ import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, File as FileIcon } from 'lucide-react';
-import { FileContentThumbnail, FilePreview, getTaskFiles, isLocalOnlyFileUrl } from './FilePreview';
+import { FileContentThumbnail, FilePreview, isLocalOnlyFileUrl } from './FilePreview';
 import { uploadTaskFiles } from '../lib/supabaseDb';
 import { isTaskArchived } from '../lib/archiveUtils';
 import { isAssignableHandler } from '../lib/handlerUtils';
 import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText, uploadLimitLabel } from '../lib/uploadLimits';
+import {
+  addLowResPreviewsToFiles,
+  getTaskFiles,
+  optimizeTaskMediaForPreview,
+  taskNeedsPreviewOptimization,
+  uploadCommentImagePreview,
+} from '../lib/previewUtils';
 
 type ReviewNoteSection = {
   id: string;
   note: string;
   imageName?: string;
   imageUrl?: string;
+  imageStoragePath?: string;
+  imageFile?: File;
+  localPreviewUrl?: string;
 };
 
 const MINA_ID = 'user_1';
@@ -24,7 +34,7 @@ const DINA_ID = 'user_3';
 const INTERNAL_REVIEW_VIEWERS = [MINA_ID, MARWA_ID, DINA_ID];
 
 export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => void }) {
-  const { tasks, currentUser, users, updateTaskStatus, updateTaskPriority, addTaskComment, addTaskVersion, replaceTaskVersionFiles, archiveTask, unarchiveTask } = useAppStore();
+  const { tasks, currentUser, users, updateTaskStatus, updateTaskPriority, addTaskComment, addTaskVersion, replaceTaskVersionFiles, updateTaskMediaPreviews, archiveTask, unarchiveTask } = useAppStore();
   const task = tasks.find(t => t.id === taskId);
   
   const [modal, setModal] = useState<'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
@@ -41,8 +51,12 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [isResubmitting, setIsResubmitting] = useState(false);
   const [repairError, setRepairError] = useState('');
   const [isRepairingFiles, setIsRepairingFiles] = useState(false);
+  const [isSavingAction, setIsSavingAction] = useState(false);
+  const [actionError, setActionError] = useState('');
   const resubmitInputRef = useRef<HTMLInputElement>(null);
   const repairInputRef = useRef<HTMLInputElement>(null);
+  const previewOptimizationAttemptedRef = useRef<Set<string>>(new Set());
+  const updateTaskMediaPreviewsRef = useRef(updateTaskMediaPreviews);
 
   const canViewFullWorkspace = INTERNAL_REVIEW_VIEWERS.includes(currentUser.id);
 
@@ -57,6 +71,31 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       setSelectedFileIndex(0);
     }
   }, [selectedVersionIndex, task?.versions.length]);
+
+  useEffect(() => {
+    updateTaskMediaPreviewsRef.current = updateTaskMediaPreviews;
+  }, [updateTaskMediaPreviews]);
+
+  useEffect(() => {
+    if (!task || (!canViewFullWorkspace && task.createdBy !== currentUser.id) || previewOptimizationAttemptedRef.current.has(task.id) || !taskNeedsPreviewOptimization(task)) return;
+
+    previewOptimizationAttemptedRef.current.add(task.id);
+    let cancelled = false;
+
+    optimizeTaskMediaForPreview(task)
+      .then(updates => {
+        if (!cancelled && updates.changed) {
+          updateTaskMediaPreviewsRef.current(task.id, updates);
+        }
+      })
+      .catch(error => {
+        console.warn('Could not optimize task previews', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canViewFullWorkspace, currentUser.id, task]);
 
   if (!task || (!canViewFullWorkspace && task.createdBy !== currentUser.id)) return <div>Task not found</div>;
 
@@ -92,6 +131,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       note: string;
       imageName?: string;
       imageUrl?: string;
+      imageStoragePath?: string;
     }> = [];
 
     if (comment.message?.trim()) {
@@ -110,6 +150,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
           note: section.note,
           imageName: section.imageName,
           imageUrl: section.imageUrl,
+          imageStoragePath: section.imageStoragePath,
         });
       }
     });
@@ -117,7 +158,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     return items;
   });
   const selectedMinaFeedback = minaForwardableFeedback.filter(item => selectedMinaFeedbackIds.includes(item.id));
-  const canSubmitADReject = adRejectComment.trim() || selectedMinaFeedback.length > 0 || adRejectNotes.some(section => section.note.trim() || section.imageUrl);
+  const canSubmitADReject = adRejectComment.trim() || selectedMinaFeedback.length > 0 || adRejectNotes.some(section => section.note.trim() || section.imageUrl || section.localPreviewUrl || section.imageFile);
 
   const appendResubmitFiles = (incomingFiles: File[]) => {
     const validFiles = incomingFiles.filter(file => {
@@ -151,7 +192,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     }));
 
     try {
-      const uploadedFiles = await uploadTaskFiles(task.id, localFiles);
+      let uploadedFiles = await uploadTaskFiles(task.id, localFiles);
+      uploadedFiles = await addLowResPreviewsToFiles(task.id, uploadedFiles, localFiles);
       addTaskVersion(task.id, {
         id: Math.random().toString(36).substring(7),
         versionNumber: nextVersionNumber,
@@ -198,7 +240,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     }));
 
     try {
-      const uploadedFiles = await uploadTaskFiles(task.id, localFiles);
+      let uploadedFiles = await uploadTaskFiles(task.id, localFiles);
+      uploadedFiles = await addLowResPreviewsToFiles(task.id, uploadedFiles, localFiles);
       replaceTaskVersionFiles(task.id, currentVersion.id, uploadedFiles);
       setSelectedFileIndex(0);
     } catch (error) {
@@ -213,21 +256,29 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     setReviewNotes(prev => [...prev, { id: Math.random().toString(36).substring(7), note: '' }]);
   };
 
+  const revokeLocalPreviewUrl = (url?: string) => {
+    if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
+  };
+
   const updateReviewNote = (id: string, note: string) => {
     setReviewNotes(prev => prev.map(section => section.id === id ? { ...section, note } : section));
   };
 
   const updateReviewNoteImage = (id: string, file?: File) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setReviewNotes(prev => prev.map(section => section.id === id ? {
+    const localPreviewUrl = URL.createObjectURL(file);
+    setReviewNotes(prev => prev.map(section => {
+      if (section.id !== id) return section;
+      revokeLocalPreviewUrl(section.localPreviewUrl);
+      return {
         ...section,
         imageName: file.name,
-        imageUrl: typeof reader.result === 'string' ? reader.result : undefined,
-      } : section));
-    };
-    reader.readAsDataURL(file);
+        imageFile: file,
+        imageUrl: undefined,
+        imageStoragePath: undefined,
+        localPreviewUrl,
+      };
+    }));
   };
 
   const addADRejectNoteSection = () => {
@@ -240,93 +291,155 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
   const updateADRejectNoteImage = (id: string, file?: File) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setAdRejectNotes(prev => prev.map(section => section.id === id ? {
+    const localPreviewUrl = URL.createObjectURL(file);
+    setAdRejectNotes(prev => prev.map(section => {
+      if (section.id !== id) return section;
+      revokeLocalPreviewUrl(section.localPreviewUrl);
+      return {
         ...section,
         imageName: file.name,
-        imageUrl: typeof reader.result === 'string' ? reader.result : undefined,
-      } : section));
-    };
-    reader.readAsDataURL(file);
+        imageFile: file,
+        imageUrl: undefined,
+        imageStoragePath: undefined,
+        localPreviewUrl,
+      };
+    }));
   };
 
-  const getFilledReviewSections = () => reviewNotes
-    .filter(section => section.note.trim() || section.imageUrl)
-    .map(section => ({ ...section, note: section.note.trim() }));
+  const hasFilledSection = (section: ReviewNoteSection) => Boolean(section.note.trim() || section.imageUrl || section.localPreviewUrl || section.imageFile);
+  const hasFilledReviewSections = () => reviewNotes.some(hasFilledSection);
+  const hasFilledADRejectSections = () => adRejectNotes.some(hasFilledSection);
 
-  const getFilledADRejectSections = () => adRejectNotes
-    .filter(section => section.note.trim() || section.imageUrl)
-    .map(section => ({ ...section, note: section.note.trim() }));
+  const getSectionPreviewUrl = (section: ReviewNoteSection | TaskCommentSection) => (
+    'localPreviewUrl' in section && section.localPreviewUrl ? section.localPreviewUrl : section.imageUrl
+  );
+
+  const prepareCommentSections = async (sections: ReviewNoteSection[]): Promise<TaskCommentSection[]> => {
+    const filledSections = sections.filter(hasFilledSection);
+
+    return Promise.all(filledSections.map(async section => {
+      const uploadedImage = section.imageFile
+        ? await uploadCommentImagePreview(task.id, section.id, section.imageFile)
+        : null;
+      if (section.imageFile && !uploadedImage) {
+        throw new Error(`Could not upload ${section.imageName || 'screenshot'}.`);
+      }
+
+      return {
+        id: section.id,
+        note: section.note.trim(),
+        imageName: section.imageName,
+        imageUrl: uploadedImage?.imageUrl || section.imageUrl,
+        imageStoragePath: uploadedImage?.imageStoragePath || section.imageStoragePath,
+      };
+    }));
+  };
 
   const resetReviewNotes = () => {
+    reviewNotes.forEach(section => revokeLocalPreviewUrl(section.localPreviewUrl));
     setReviewNotes([{ id: Math.random().toString(36).substring(7), note: '' }]);
   };
 
   const resetADRejectNotes = () => {
+    adRejectNotes.forEach(section => revokeLocalPreviewUrl(section.localPreviewUrl));
     setAdRejectNotes([{ id: Math.random().toString(36).substring(7), note: '' }]);
   };
 
-  const handleSendToAD = (e: React.FormEvent) => {
+  const handleSendToAD = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingAction) return;
+
     const formData = new FormData(e.target as HTMLFormElement);
     const priority = formData.get('priority') as Priority;
     const deadline = formData.get('deadline') as string;
     const note = (formData.get('note') as string)?.trim();
-    const sections = getFilledReviewSections();
 
-    if (note || sections.length > 0) {
+    setIsSavingAction(true);
+    setActionError('');
+    try {
+      const sections = await prepareCommentSections(reviewNotes);
+
+      if (note || sections.length > 0) {
+        addTaskComment(task.id, {
+          authorId: currentUser.id,
+          action: 'sent_to_marwa',
+          message: note,
+          sections,
+        });
+      }
+
+      updateTaskPriority(task.id, priority, deadline);
+      updateTaskStatus(task.id, 'sent_to_art_director', 'art_director');
+      resetReviewNotes();
+      setModal(null);
+    } catch (error) {
+      console.error('Failed to save reviewer action', error);
+      setActionError('Could not save the attached screenshots. Please try again.');
+    } finally {
+      setIsSavingAction(false);
+    }
+  };
+
+  const handleRequestChanges = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSavingAction) return;
+
+    setIsSavingAction(true);
+    setActionError('');
+    try {
+      const sections = await prepareCommentSections(reviewNotes);
+      if (sections.length === 0) return;
       addTaskComment(task.id, {
         authorId: currentUser.id,
-        action: 'sent_to_marwa',
-        message: note,
+        action: 'request_edits',
         sections,
       });
+      updateTaskStatus(task.id, 'changes_requested_by_reviewer', 'team_member');
+      resetReviewNotes();
+    } catch (error) {
+      console.error('Failed to save edit request', error);
+      setActionError('Could not save the attached screenshots. Please try again.');
+    } finally {
+      setIsSavingAction(false);
     }
-    
-    updateTaskPriority(task.id, priority, deadline);
-    updateTaskStatus(task.id, 'sent_to_art_director', 'art_director');
-    resetReviewNotes();
-    setModal(null);
   };
 
-  const handleRequestChanges = (e: React.FormEvent) => {
+  const handleADReject = async (e: React.FormEvent) => {
     e.preventDefault();
-    const sections = getFilledReviewSections();
-    if (sections.length === 0) return;
-    addTaskComment(task.id, {
-      authorId: currentUser.id,
-      action: 'request_edits',
-      sections,
-    });
-    updateTaskStatus(task.id, 'changes_requested_by_reviewer', 'team_member');
-    resetReviewNotes();
-  };
+    if (isSavingAction) return;
 
-  const handleADReject = (e: React.FormEvent) => {
-    e.preventDefault();
     const message = adRejectComment.trim();
-    const marwaSections = getFilledADRejectSections();
-    if (!message && selectedMinaFeedback.length === 0 && marwaSections.length === 0) return;
+    if (!message && selectedMinaFeedback.length === 0 && !hasFilledADRejectSections()) return;
 
     const forwardedSections: TaskCommentSection[] = selectedMinaFeedback.map(item => ({
       id: Math.random().toString(36).substring(7),
       note: item.note ? `Mina note: ${item.note}` : 'Mina attached this screen for edits.',
       imageName: item.imageName,
       imageUrl: item.imageUrl,
+      imageStoragePath: item.imageStoragePath,
     }));
 
-    addTaskComment(task.id, {
-      authorId: currentUser.id,
-      action: 'marwa_rejection',
-      message: message || 'Forwarded selected notes from Mina.',
-      sections: [...forwardedSections, ...marwaSections],
-    });
-    updateTaskStatus(task.id, 'changes_requested_by_art_director', 'team_member');
-    setAdRejectComment('');
-    resetADRejectNotes();
-    setSelectedMinaFeedbackIds([]);
-    setModal(null);
+    setIsSavingAction(true);
+    setActionError('');
+    try {
+      const marwaSections = await prepareCommentSections(adRejectNotes);
+      addTaskComment(task.id, {
+        authorId: currentUser.id,
+        action: 'marwa_rejection',
+        message: message || 'Forwarded selected notes from Mina.',
+        sections: [...forwardedSections, ...marwaSections],
+      });
+      updateTaskStatus(task.id, 'changes_requested_by_art_director', 'team_member');
+      setAdRejectComment('');
+      resetADRejectNotes();
+      setSelectedMinaFeedbackIds([]);
+      setModal(null);
+    } catch (error) {
+      console.error('Failed to save rejection', error);
+      setActionError('Could not save the attached screenshots. Please try again.');
+    } finally {
+      setIsSavingAction(false);
+    }
   };
 
   const handleADApprove = () => {
@@ -345,9 +458,9 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       {reviewNotes.map((section, index) => (
         <div key={section.id} className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-[96px,1fr]">
           <label className="flex h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 text-slate-500 hover:border-indigo-400 hover:bg-indigo-50">
-            {section.imageUrl ? (
-              <button type="button" onClick={(event) => { event.preventDefault(); setLightboxUrl(section.imageUrl || null); }} className="h-full w-full overflow-hidden rounded-lg">
-                <img src={section.imageUrl} alt={section.imageName || `Screen ${index + 1}`} className="h-full w-full object-cover" />
+            {getSectionPreviewUrl(section) ? (
+              <button type="button" onClick={(event) => { event.preventDefault(); setLightboxUrl(getSectionPreviewUrl(section) || null); }} className="h-full w-full overflow-hidden rounded-lg">
+                <img src={getSectionPreviewUrl(section)} alt={section.imageName || `Screen ${index + 1}`} className="h-full w-full object-cover" />
               </button>
             ) : (
               <>
@@ -382,9 +495,9 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       {adRejectNotes.map((section, index) => (
         <div key={section.id} className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-[96px,1fr]">
           <label className="flex h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 text-slate-500 hover:border-indigo-400 hover:bg-indigo-50">
-            {section.imageUrl ? (
-              <button type="button" onClick={(event) => { event.preventDefault(); setLightboxUrl(section.imageUrl || null); }} className="h-full w-full overflow-hidden rounded-lg">
-                <img src={section.imageUrl} alt={section.imageName || `Screen ${index + 1}`} className="h-full w-full object-cover" />
+            {getSectionPreviewUrl(section) ? (
+              <button type="button" onClick={(event) => { event.preventDefault(); setLightboxUrl(getSectionPreviewUrl(section) || null); }} className="h-full w-full overflow-hidden rounded-lg">
+                <img src={getSectionPreviewUrl(section)} alt={section.imageName || `Screen ${index + 1}`} className="h-full w-full object-cover" />
               </button>
             ) : (
               <>
@@ -632,7 +745,10 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
           {currentUser.role === 'reviewer' && isReviewerActionable && (
             <>
               <button 
-                onClick={() => setModal('send_to_ad')}
+                onClick={() => {
+                  setActionError('');
+                  setModal('send_to_ad');
+                }}
                 className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-sm transition-all focus:ring-4 focus:ring-indigo-100"
               >
                 {task.status === 'waiting_reviewer_full_review' ? 'Approve & Send to Marwa' : 
@@ -645,12 +761,13 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                     <p className="mt-1 text-xs font-semibold text-rose-700/70">Add notes and optional screens for what needs editing.</p>
                   </div>
                   {renderReviewNotes()}
+                  {actionError && <p className="text-sm font-bold text-rose-600">{actionError}</p>}
                   <button 
                     type="submit"
-                    disabled={getFilledReviewSections().length === 0}
+                    disabled={!hasFilledReviewSections() || isSavingAction}
                     className="w-full rounded-xl bg-slate-900 px-4 py-3 font-black text-white shadow-sm transition-colors hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
-                    Request Edits
+                    {isSavingAction ? 'Saving...' : 'Request Edits'}
                   </button>
                 </form>
               )}
@@ -673,6 +790,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               </button>
               <button 
                 onClick={() => {
+                  setActionError('');
                   setSelectedMinaFeedbackIds([]);
                   resetADRejectNotes();
                   setModal('ad_reject');
@@ -695,6 +813,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               </div>
               <button 
                 onClick={() => {
+                  setActionError('');
                   setSelectedMinaFeedbackIds([]);
                   resetADRejectNotes();
                   setModal('ad_reject');
@@ -771,7 +890,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                             <div key={section.id} className="grid gap-3 rounded-lg bg-slate-50 p-3 sm:grid-cols-[88px,1fr]">
                               {section.imageUrl && (
                                 <button type="button" onClick={() => setLightboxUrl(section.imageUrl || null)} className="h-20 overflow-hidden rounded-lg border border-slate-200 bg-white">
-                                  <img src={section.imageUrl} alt={section.imageName || 'Comment screen'} className="h-full w-full object-cover" />
+                                  <img src={section.imageUrl} alt={section.imageName || 'Comment screen'} loading="lazy" decoding="async" className="h-full w-full object-cover" />
                                 </button>
                               )}
                               {section.note && <p className="text-sm font-medium text-slate-700">{section.note}</p>}
@@ -815,7 +934,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-slate-200">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
               <h3 className="text-lg font-black text-slate-900">Approve & Send to Marwa</h3>
-              <button onClick={() => setModal(null)} className="text-slate-400 hover:text-indigo-600 transition-colors"><X className="w-5 h-5"/></button>
+              <button onClick={() => { setActionError(''); setModal(null); }} className="text-slate-400 hover:text-indigo-600 transition-colors"><X className="w-5 h-5"/></button>
             </div>
             <form onSubmit={handleSendToAD} className="p-6 space-y-5">
               <div>
@@ -848,8 +967,11 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 <textarea name="note" rows={2} className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"></textarea>
               </div>
               {renderReviewNotes()}
+              {actionError && <p className="text-sm font-bold text-rose-600">{actionError}</p>}
               <div className="pt-2">
-                <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors">Send to Marwa</button>
+                <button type="submit" disabled={isSavingAction} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">
+                  {isSavingAction ? 'Saving...' : 'Send to Marwa'}
+                </button>
               </div>
             </form>
           </div>
@@ -863,6 +985,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               <h3 className="text-lg font-black text-rose-900 flex items-center gap-2"><AlertCircle className="w-5 h-5"/> Reject Task</h3>
               <button
                 onClick={() => {
+                  setActionError('');
                   setSelectedMinaFeedbackIds([]);
                   resetADRejectNotes();
                   setModal(null);
@@ -908,7 +1031,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                                 }}
                                 className="mt-2 h-20 w-28 overflow-hidden rounded-lg border border-slate-200 bg-white"
                               >
-                                <img src={item.imageUrl} alt={item.imageName || 'Mina note screen'} className="h-full w-full object-cover" />
+                                <img src={item.imageUrl} alt={item.imageName || 'Mina note screen'} loading="lazy" decoding="async" className="h-full w-full object-cover" />
                               </button>
                             )}
                           </div>
@@ -923,8 +1046,11 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 <textarea value={adRejectComment} onChange={event => setAdRejectComment(event.target.value)} rows={3} placeholder="Write new feedback, or select Mina's notes above, or do both..." className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-rose-500 outline-none"></textarea>
               </div>
               {renderADRejectNotes()}
+              {actionError && <p className="text-sm font-bold text-rose-600">{actionError}</p>}
               <div className="pt-2">
-                <button type="submit" disabled={!canSubmitADReject} className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">Reject and Return</button>
+                <button type="submit" disabled={!canSubmitADReject || isSavingAction} className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">
+                  {isSavingAction ? 'Saving...' : 'Reject and Return'}
+                </button>
               </div>
             </form>
           </div>

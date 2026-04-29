@@ -4,19 +4,46 @@ import { Task } from '../lib/types';
 import { getStatusInfo, getTaskTypeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
-import { Search } from 'lucide-react';
+import { CalendarDays, Search, X } from 'lucide-react';
 import { CustomSelect } from './CustomSelect';
 import { TaskThumbnail } from './FilePreview';
+
+type DateFilterMode = 'all' | 'single' | 'range';
+
+function getDateInputValue(date: string) {
+  const parsedDate = new Date(date);
+  if (Number.isNaN(parsedDate.getTime())) return '';
+
+  const year = parsedDate.getFullYear();
+  const month = String(parsedDate.getMonth() + 1).padStart(2, '0');
+  const day = String(parsedDate.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: string) => void, tasks: Task[], title: string }) {
   const { currentUser } = useAppStore();
   const [creatorFilter, setCreatorFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [dateFilterMode, setDateFilterMode] = useState<DateFilterMode>('all');
+  const [singleDate, setSingleDate] = useState('');
+  const [rangeStartDate, setRangeStartDate] = useState('');
+  const [rangeEndDate, setRangeEndDate] = useState('');
 
   const filteredTasks = tasks.filter(task => {
     if (creatorFilter !== 'all' && task.createdBy !== creatorFilter) return false;
     if (typeFilter !== 'all' && task.taskType !== typeFilter) return false;
+
+    const taskDate = getDateInputValue(task.createdAt);
+    if (dateFilterMode === 'single' && singleDate && taskDate !== singleDate) return false;
+    if (dateFilterMode === 'range' && (rangeStartDate || rangeEndDate)) {
+      const [startDate, endDate] = rangeStartDate && rangeEndDate && rangeStartDate > rangeEndDate
+        ? [rangeEndDate, rangeStartDate]
+        : [rangeStartDate, rangeEndDate];
+
+      if (startDate && taskDate < startDate) return false;
+      if (endDate && taskDate > endDate) return false;
+    }
     
     if (searchQuery) {
       const lowerQuery = searchQuery.toLowerCase();
@@ -41,6 +68,19 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
     { value: 'all', label: 'All Types' },
     ...uniqueTypes.map(t => ({ value: t, label: getTaskTypeLabel(t) }))
   ];
+  const dateFilterOptions = [
+    { value: 'all', label: 'All Dates' },
+    { value: 'single', label: 'Specific Date' },
+    { value: 'range', label: 'Date Range' },
+  ];
+
+  const hasDateFilter = dateFilterMode !== 'all' || singleDate || rangeStartDate || rangeEndDate;
+  const clearDateFilter = () => {
+    setDateFilterMode('all');
+    setSingleDate('');
+    setRangeStartDate('');
+    setRangeEndDate('');
+  };
 
   const colorStyles = {
     amber: "bg-amber-50 text-amber-800",
@@ -59,13 +99,13 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
 
       <div className="flex flex-wrap items-end gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         
-        <div className="flex min-w-full flex-col gap-1.5 lg:min-w-[250px] lg:flex-[2]">
+        <div className="flex min-w-full flex-col gap-1.5 xl:min-w-[250px] xl:flex-[2]">
           <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Search</label>
           <div className="relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input 
               type="text" 
-              placeholder="Search by name, ID, or date..."
+              placeholder="Search by name or ID..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               className="w-full border border-slate-300 rounded-lg pl-10 pr-4 py-2 text-sm font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none transition-all placeholder:font-medium"
@@ -91,6 +131,63 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
             onChange={setTypeFilter}
             options={typeOptions}
           />
+        </div>
+
+        <div className="flex min-w-full flex-col gap-1.5 lg:min-w-[220px] lg:flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Upload Date</label>
+            {hasDateFilter && (
+              <button
+                type="button"
+                onClick={clearDateFilter}
+                className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-slate-400 transition-colors hover:text-rose-600"
+              >
+                <X className="h-3 w-3" /> Clear
+              </button>
+            )}
+          </div>
+          <div className="grid gap-2 sm:grid-cols-[minmax(150px,0.9fr),minmax(180px,1fr)]">
+            <CustomSelect
+              value={dateFilterMode}
+              onChange={value => setDateFilterMode(value as DateFilterMode)}
+              options={dateFilterOptions}
+            />
+            {dateFilterMode === 'single' && (
+              <div className="relative">
+                <CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="date"
+                  value={singleDate}
+                  onChange={event => setSingleDate(event.target.value)}
+                  className="h-10 w-full rounded-lg border border-slate-300 pl-10 pr-3 text-sm font-bold text-slate-700 outline-none transition-all focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            )}
+            {dateFilterMode === 'range' && (
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="relative">
+                  <CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="date"
+                    aria-label="Start upload date"
+                    value={rangeStartDate}
+                    onChange={event => setRangeStartDate(event.target.value)}
+                    className="h-10 w-full rounded-lg border border-slate-300 pl-10 pr-3 text-sm font-bold text-slate-700 outline-none transition-all focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="relative">
+                  <CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="date"
+                    aria-label="End upload date"
+                    value={rangeEndDate}
+                    onChange={event => setRangeEndDate(event.target.value)}
+                    className="h-10 w-full rounded-lg border border-slate-300 pl-10 pr-3 text-sm font-bold text-slate-700 outline-none transition-all focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
       </div>

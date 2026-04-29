@@ -75,6 +75,34 @@ export async function uploadTaskFiles(taskId: string, files: UploadedTaskFile[])
   return uploadedFiles;
 }
 
+export async function uploadTaskPreviewImage(storagePath: string, previewBlob: Blob): Promise<{ url: string; storagePath: string }> {
+  if (!isSupabaseConfigured || !supabase) {
+    return {
+      storagePath,
+      url: URL.createObjectURL(previewBlob),
+    };
+  }
+
+  const { error } = await supabase.storage
+    .from(TASK_FILES_BUCKET)
+    .upload(storagePath, previewBlob, {
+      contentType: 'image/jpeg',
+      upsert: true,
+    });
+
+  if (error) {
+    const message = 'message' in error ? error.message : 'Preview upload failed.';
+    throw new Error(`${storagePath}: ${message}`);
+  }
+
+  const { data } = supabase.storage.from(TASK_FILES_BUCKET).getPublicUrl(storagePath);
+
+  return {
+    storagePath,
+    url: data.publicUrl,
+  };
+}
+
 export async function fetchSupabaseTasks(): Promise<Task[]> {
   const client = ensureSupabase();
   const { data, error } = await client

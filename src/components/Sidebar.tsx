@@ -1,6 +1,24 @@
 import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { LayoutDashboard, CheckSquare, Clock, FileText, Bell, ChevronDown, ChevronRight, X, LogOut, UserPlus, Archive } from 'lucide-react';
+import {
+  Archive,
+  Bell,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleX,
+  ClipboardList,
+  Clock,
+  FilePenLine,
+  FileText,
+  LayoutDashboard,
+  LogOut,
+  Send,
+  Upload,
+  UserPlus,
+  UserRoundCheck,
+  X,
+} from 'lucide-react';
 import { cn } from '../lib/utils';
 import { userRoleLabels } from '../lib/mockData';
 import { CustomSelect } from './CustomSelect';
@@ -110,15 +128,15 @@ export function Sidebar({
       case 'team_member':
         return [
           ...commonTop,
-          { id: 'create_task', label: 'Create Task', icon: CheckSquare },
+          { id: 'create_task', label: 'Upload Task', icon: Upload },
           {
-            id: 'task_center', label: 'All Tasks', icon: FileText,
+            id: 'task_center', label: 'All Tasks', icon: ClipboardList,
             children: [
-              { id: 'my_tasks', label: 'My Tasks', icon: FileText },
+              { id: 'my_tasks', label: 'My Tasks', icon: UserRoundCheck },
               { id: 'waiting_for_mina', label: 'Waiting for Mina', icon: Clock },
-              { id: 'waiting_for_marwa', label: 'Waiting for Marwa', icon: FileText },
-              { id: 'rejected_reopened', label: 'Rejected', icon: Clock },
-              { id: 'approved_by_me', label: 'Approved', icon: CheckSquare },
+              { id: 'waiting_for_marwa', label: 'Waiting for Marwa', icon: Send },
+              { id: 'rejected_reopened', label: 'Rejected', icon: CircleX },
+              { id: 'approved_by_me', label: 'Approved', icon: Check },
               { id: 'archived_tasks', label: 'Archived', icon: Archive },
             ]
           }
@@ -126,16 +144,16 @@ export function Sidebar({
       case 'reviewer':
         return [
           ...commonTop,
-          { id: 'create_task', label: 'Create Task', icon: CheckSquare },
+          { id: 'create_task', label: 'Upload Task', icon: Upload },
           {
-            id: 'task_center', label: 'All Tasks', icon: FileText,
+            id: 'task_center', label: 'All Tasks', icon: ClipboardList,
             children: [
-              { id: 'all_tasks', label: 'All Tasks', icon: FileText },
-              { id: 'review_queue', label: 'Needs Full Review', icon: Clock },
-              { id: 'quick_look_queue', label: 'Needs Quick Look', icon: Clock },
-              { id: 'ad_queue', label: 'Needs Marwa Action', icon: FileText },
-              { id: 'approved_by_me', label: 'Approved', icon: CheckSquare },
-              { id: 'rejected_reopened', label: 'Rejected', icon: FileText },
+              { id: 'all_tasks', label: 'All Tasks', icon: ClipboardList },
+              { id: 'review_queue', label: 'Needs Full Review', icon: FilePenLine },
+              { id: 'quick_look_queue', label: 'Needs Quick Look', icon: FileText },
+              { id: 'ad_queue', label: 'Needs Marwa Action', icon: Send },
+              { id: 'approved_by_me', label: 'Approved', icon: Check },
+              { id: 'rejected_reopened', label: 'Rejected', icon: CircleX },
               { id: 'archived_tasks', label: 'Archived', icon: Archive },
             ]
           }
@@ -144,12 +162,12 @@ export function Sidebar({
         return [
           ...commonTop,
           {
-            id: 'task_center', label: 'All Tasks', icon: FileText,
+            id: 'task_center', label: 'All Tasks', icon: ClipboardList,
             children: [
-              { id: 'all_tasks', label: 'All Tasks', icon: FileText },
-              { id: 'ad_queue', label: 'Needs Your Action', icon: Clock },
-              { id: 'approved_by_me', label: 'Approved', icon: CheckSquare },
-              { id: 'rejected_reopened', label: 'Rejected', icon: FileText },
+              { id: 'all_tasks', label: 'All Tasks', icon: ClipboardList },
+              { id: 'ad_queue', label: 'Needs Your Action', icon: FilePenLine },
+              { id: 'approved_by_me', label: 'Approved', icon: Check },
+              { id: 'rejected_reopened', label: 'Rejected', icon: CircleX },
               { id: 'archived_tasks', label: 'Archived', icon: Archive },
             ]
           }
@@ -158,13 +176,13 @@ export function Sidebar({
         return [
           ...commonTop,
           {
-            id: 'task_center', label: 'All Tasks', icon: FileText,
+            id: 'task_center', label: 'All Tasks', icon: ClipboardList,
             children: [
-              { id: 'all_tasks', label: 'All Tasks', icon: FileText },
+              { id: 'all_tasks', label: 'All Tasks', icon: ClipboardList },
               { id: 'waiting_for_mina', label: 'Waiting for Mina', icon: Clock },
-              { id: 'waiting_for_marwa', label: 'Waiting for Marwa', icon: FileText },
-              { id: 'rejected_reopened', label: 'Rejected', icon: FileText },
-              { id: 'approved_by_me', label: 'Approved', icon: CheckSquare },
+              { id: 'waiting_for_marwa', label: 'Waiting for Marwa', icon: Send },
+              { id: 'rejected_reopened', label: 'Rejected', icon: CircleX },
+              { id: 'approved_by_me', label: 'Approved', icon: Check },
               { id: 'archived_tasks', label: 'Archived', icon: Archive },
             ]
           }

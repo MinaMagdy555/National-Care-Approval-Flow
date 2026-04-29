@@ -1,19 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ExternalLink, FileWarning, Image as ImageIcon } from 'lucide-react';
-import { Task, TaskVersion, UploadedTaskFile } from '../lib/types';
-
-export function getTaskFiles(version?: TaskVersion): UploadedTaskFile[] {
-  if (!version) return [];
-  if (version.files && version.files.length > 0) return version.files;
-
-  return [{
-    id: version.id,
-    name: 'Uploaded file',
-    type: version.fileUrl.includes('images.unsplash.com') ? 'image/jpeg' : '',
-    size: 0,
-    url: version.fileUrl,
-  }];
-}
+import { ExternalLink, FileText, FileWarning, Film, Image as ImageIcon } from 'lucide-react';
+import { Task, UploadedTaskFile } from '../lib/types';
+import { getTaskFiles, isStoredPreviewUrl, isStoredTaskThumbnail } from '../lib/previewUtils';
 
 export function getFileKind(file?: Pick<UploadedTaskFile, 'type' | 'name' | 'url'>): 'image' | 'video' | 'pdf' | 'file' {
   if (!file) return 'file';
@@ -45,6 +33,32 @@ function MissingSharedFile({ compact = false }: { compact?: boolean }) {
         <p className="max-w-sm text-xs font-semibold text-slate-400">
           This task was migrated before its file was uploaded to shared storage.
         </p>
+      )}
+    </div>
+  );
+}
+
+function LightweightFilePlaceholder({
+  file,
+  compact = false,
+}: {
+  file?: Pick<UploadedTaskFile, 'name' | 'type' | 'url'>;
+  compact?: boolean;
+}) {
+  const kind = getFileKind(file);
+  const Icon = kind === 'video' ? Film : kind === 'pdf' ? FileText : kind === 'image' ? ImageIcon : FileWarning;
+  const label = kind === 'file' ? 'File' : kind.toUpperCase();
+
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-gradient-to-br from-slate-50 to-slate-200 p-2 text-center text-slate-500">
+      <div className={compact ? 'rounded-md bg-white/80 p-1.5 shadow-sm' : 'rounded-lg bg-white/80 p-2 shadow-sm'}>
+        <Icon className={compact ? 'h-4 w-4' : 'h-6 w-6'} />
+      </div>
+      <span className={compact ? 'text-[9px] font-black uppercase tracking-wide' : 'text-[10px] font-black uppercase tracking-wide'}>
+        {label} Preview
+      </span>
+      {file?.name && !compact && (
+        <span className="max-w-[90%] truncate text-[10px] font-bold text-slate-400">{file.name}</span>
       )}
     </div>
   );
@@ -121,46 +135,28 @@ export function FileContentThumbnail({
   alt: string;
   className?: string;
 }) {
-  const kind = getFileKind(file);
-
-  if (!file || isLocalOnlyFileUrl(file.url)) {
+  if (!file) {
     return <MissingSharedFile compact />;
   }
 
-  if (kind === 'image') {
+  if (isStoredPreviewUrl(file)) {
     return (
       <img
-        src={file.url}
+        src={file.previewUrl}
         alt={alt}
         loading="lazy"
         decoding="async"
+        fetchPriority="low"
         className={className || 'h-full w-full object-cover'}
       />
     );
   }
 
-  if (kind === 'video') {
-    return (
-      <video
-        src={`${file.url}#t=0.1`}
-        className={className || 'h-full w-full object-cover'}
-        muted
-        playsInline
-        preload="metadata"
-      />
-    );
+  if (isLocalOnlyFileUrl(file.url)) {
+    return <MissingSharedFile compact />;
   }
 
-  if (kind === 'pdf') {
-    return <PdfCanvasPreview file={file} compact />;
-  }
-
-  return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-slate-100 text-slate-400">
-      <ImageIcon className="h-5 w-5" />
-      <span className="max-w-[80px] truncate text-[10px] font-black uppercase">FILE</span>
-    </div>
-  );
+  return <LightweightFilePlaceholder file={file} compact />;
 }
 
 export function TaskThumbnail({ task }: { task: Task }) {
@@ -170,8 +166,18 @@ export function TaskThumbnail({ task }: { task: Task }) {
     return <MissingSharedFile compact />;
   }
 
-  if (task.thumbnailUrl && (!file || getFileKind(file) === 'image')) {
-    return <FileContentThumbnail file={{ ...(file || { id: task.id, name: task.name, type: 'image/jpeg', size: 0 }), url: task.thumbnailUrl }} alt={task.name} />;
+  if (isStoredTaskThumbnail(task)) {
+    const previewFile = file || { id: task.id, name: task.name, type: 'image/jpeg', size: 0, url: task.thumbnailUrl };
+    return (
+      <FileContentThumbnail
+        file={{
+          ...previewFile,
+          previewUrl: task.thumbnailUrl,
+          previewStoragePath: task.thumbnailStoragePath,
+        }}
+        alt={task.name}
+      />
+    );
   }
 
   return <FileContentThumbnail file={file} alt={task.name} />;

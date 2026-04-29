@@ -12,6 +12,7 @@ import {
   upsertSupabaseNotifications,
   upsertSupabaseTask,
 } from './supabaseDb';
+import { addLowResPreviewsToFiles } from './previewUtils';
 
 const REVIEWER_WAITING_STATUSES: TaskStatus[] = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'];
 const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
@@ -118,6 +119,7 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
     versions,
     comments: Array.isArray(task.comments) ? task.comments : [],
     thumbnailUrl: task.thumbnailUrl || '',
+    thumbnailStoragePath: task.thumbnailStoragePath,
     archivedAt: task.archivedAt ?? null,
     archivedReason: task.archivedReason ?? null,
     createdAt: task.createdAt || now,
@@ -139,12 +141,13 @@ function reviveTaskFiles(tasks: Task[]): Task[] {
         fileUrl: files?.[0]?.url || version.fileUrl,
       };
     });
-    const thumbnailFile = versions[0]?.files?.find(file => file.type.startsWith('image/'));
+    const thumbnailFile = versions[0]?.files?.find(file => file.previewUrl && file.previewStoragePath);
 
     return normalizeMinaCreatedTask({
       ...task,
       versions,
-      thumbnailUrl: thumbnailFile?.url || task.thumbnailUrl,
+      thumbnailUrl: thumbnailFile?.previewUrl || task.thumbnailUrl,
+      thumbnailStoragePath: thumbnailFile?.previewStoragePath || task.thumbnailStoragePath,
     });
   }) as Task[];
 }
@@ -158,7 +161,16 @@ function sortNotificationsByCreatedAt(notifications: Notification[]) {
 }
 
 function taskSyncKey(task: Task) {
-  return `${task.id}:${task.updatedAt}:${task.status}:${task.archivedAt || ''}`;
+  const previewKey = task.versions
+    .flatMap(version => version.files || [])
+    .map(file => file.previewStoragePath || '')
+    .join('|');
+  const commentImageKey = (task.comments || [])
+    .flatMap(comment => comment.sections)
+    .map(section => section.imageStoragePath || '')
+    .join('|');
+
+  return `${task.id}:${task.updatedAt}:${task.status}:${task.archivedAt || ''}:${task.thumbnailStoragePath || ''}:${previewKey}:${commentImageKey}`;
 }
 
 function notificationSyncKey(notification: Notification) {
@@ -214,19 +226,21 @@ async function uploadMigratedTaskFiles(task: Task): Promise<Task> {
     if (!version.files || version.files.length === 0) return version;
 
     const uploadedFiles = await uploadTaskFiles(task.id, version.files);
+    const previewedFiles = await addLowResPreviewsToFiles(task.id, uploadedFiles, version.files);
 
     return {
       ...version,
-      files: uploadedFiles,
-      fileUrl: uploadedFiles[0]?.url || version.fileUrl,
+      files: previewedFiles,
+      fileUrl: previewedFiles[0]?.url || version.fileUrl,
     };
   }));
-  const newestImageFile = versions[0]?.files?.find(file => file.type.startsWith('image/'));
+  const newestPreviewFile = versions[0]?.files?.find(file => file.previewUrl && file.previewStoragePath);
 
   return {
     ...task,
     versions,
-    thumbnailUrl: newestImageFile?.url || task.thumbnailUrl,
+    thumbnailUrl: newestPreviewFile?.previewUrl || task.thumbnailUrl,
+    thumbnailStoragePath: newestPreviewFile?.previewStoragePath || task.thumbnailStoragePath,
   };
 }
 
@@ -251,6 +265,7 @@ interface AppContextType extends AppState {
   addTaskComment: (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => void;
   addTaskVersion: (taskId: string, version: TaskVersion) => void;
   replaceTaskVersionFiles: (taskId: string, versionId: string, files: UploadedTaskFile[]) => void;
+  updateTaskMediaPreviews: (taskId: string, updates: { versions: TaskVersion[]; comments?: TaskComment[]; thumbnailUrl: string; thumbnailStoragePath?: string }) => void;
   addTask: (task: Task) => void;
   addNotification: (notification: Omit<Notification, 'id' | 'createdAt' | 'read'>) => void;
   markNotificationAsRead: (id: string) => void;
@@ -737,6 +752,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (t.id !== taskId) return t;
 
       const thumbnailFile = version.files?.find(file => file.type.startsWith('image/'));
+      const previewFile = version.files?.find(file => file.previewUrl && file.previewStoragePath);
 
       return {
         ...t,
@@ -745,7 +761,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         status: nextStatus,
         currentOwnerRole: nextOwnerRole,
         currentOwnerUserId: null,
-        thumbnailUrl: thumbnailFile?.url || '',
+        thumbnailUrl: previewFile?.previewUrl || thumbnailFile?.previewUrl || '',
+        thumbnailStoragePath: previewFile?.previewStoragePath || thumbnailFile?.previewStoragePath,
         updatedAt: new Date().toISOString(),
       };
     }));
@@ -762,16 +779,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
               ...version,
               files,
               fileUrl: files[0]?.url || version.fileUrl,
-            }
-          : version
+          }
+        : version
       ));
-      const thumbnailFile = versions[0]?.files?.find(file => file.type.startsWith('image/'));
+      const thumbnailFile = versions[0]?.files?.find(file => file.previewUrl && file.previewStoragePath);
 
       return {
         ...task,
         versions,
-        thumbnailUrl: thumbnailFile?.url || task.thumbnailUrl,
+        thumbnailUrl: thumbnailFile?.previewUrl || task.thumbnailUrl,
+        thumbnailStoragePath: thumbnailFile?.previewStoragePath || task.thumbnailStoragePath,
         updatedAt: new Date().toISOString(),
+      };
+    }));
+  };
+
+  const updateTaskMediaPreviews = (taskId: string, updates: { versions: TaskVersion[]; comments?: TaskComment[]; thumbnailUrl: string; thumbnailStoragePath?: string }) => {
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(task => {
+      if (task.id !== taskId) return task;
+
+      return {
+        ...task,
+        versions: updates.versions,
+        comments: updates.comments ?? task.comments,
+        thumbnailUrl: updates.thumbnailUrl,
+        thumbnailStoragePath: updates.thumbnailStoragePath,
       };
     }));
   };
@@ -814,6 +847,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addTaskComment,
       addTaskVersion,
       replaceTaskVersionFiles,
+      updateTaskMediaPreviews,
       addTask,
       addNotification,
       markNotificationAsRead,

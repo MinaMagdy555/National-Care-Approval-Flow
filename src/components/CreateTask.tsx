@@ -7,6 +7,7 @@ import { CustomSelect } from './CustomSelect';
 import { uploadTaskFiles } from '../lib/supabaseDb';
 import { sanitizeHandledBy } from '../lib/handlerUtils';
 import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText, uploadLimitLabel } from '../lib/uploadLimits';
+import { addLowResPreviewsToFiles } from '../lib/previewUtils';
 
 const FORM_SELECT_BUTTON_CLASS = 'rounded-xl border-slate-300 px-4 py-3 text-sm font-bold text-slate-900 shadow-none hover:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500';
 
@@ -103,12 +104,13 @@ export function CreateTask() {
     let uploadedFiles: UploadedTaskFile[];
     try {
       uploadedFiles = await uploadTaskFiles(newTaskId, localFiles);
+      uploadedFiles = await addLowResPreviewsToFiles(newTaskId, uploadedFiles, localFiles);
     } catch (error) {
       console.error('Failed to upload task files', error);
       setFileError(error instanceof Error ? error.message : 'Could not upload files. Please try again.');
       return;
     }
-    const thumbnailFile = uploadedFiles.find(file => file.type.startsWith('image/'));
+    const thumbnailFile = uploadedFiles.find(file => file.previewUrl && file.previewStoragePath);
 
     const newTaskStatus = isMinaCreatedTask
       ? 'sent_to_art_director'
@@ -141,7 +143,8 @@ export function CreateTask() {
           submissionNote: "Initial submission",
         }
       ],
-      thumbnailUrl: thumbnailFile?.url || '',
+      thumbnailUrl: thumbnailFile?.previewUrl || '',
+      thumbnailStoragePath: thumbnailFile?.previewStoragePath,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

@@ -42,6 +42,8 @@ export interface UploadedTaskFile {
   size: number;
   url: string;
   storagePath?: string;
+  previewUrl?: string;
+  previewStoragePath?: string;
   blob?: Blob;
 }
 
@@ -69,6 +71,7 @@ export interface TaskCommentSection {
   note: string;
   imageName?: string;
   imageUrl?: string;
+  imageStoragePath?: string;
 }
 
 export interface TaskComment {
@@ -97,6 +100,7 @@ export interface Task {
   versions: TaskVersion[];
   comments?: TaskComment[];
   thumbnailUrl: string;
+  thumbnailStoragePath?: string;
   archivedAt?: string | null;
   archivedReason?: string | null;
   createdAt: string;
