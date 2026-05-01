@@ -519,6 +519,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'approval_tasks' }, payload => {
+        if (payload.eventType === 'DELETE') {
+          const row = payload.old as { id?: string } | null;
+          if (row?.id) {
+            setTasks(prev => prev.filter(task => task.id !== row.id));
+          }
+          return;
+        }
+
         const row = payload.new as { payload?: Task } | null;
         const task = row?.payload;
         if (!task) return;
@@ -529,6 +537,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'approval_notifications' }, payload => {
+        if (payload.eventType === 'DELETE') {
+          const row = payload.old as { id?: string } | null;
+          if (row?.id) {
+            setNotifications(prev => prev.filter(notification => notification.id !== row.id));
+          }
+          return;
+        }
+
         const row = payload.new as { payload?: Notification } | null;
         const notification = row?.payload;
         if (!notification) return;

@@ -29,13 +29,13 @@ function SummaryCard({
     <button
       type="button"
       onClick={onClick}
-      className={`group relative min-w-0 overflow-hidden rounded-xl border bg-white text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:rounded-2xl ${borderClassName} ${className}`}
+      className={`group relative flex min-h-32 min-w-0 overflow-hidden rounded-xl border bg-white text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:min-h-40 sm:rounded-2xl ${borderClassName} ${className}`}
     >
-      <div className="absolute right-0 top-0 p-3 opacity-10 transition-opacity group-hover:opacity-20 sm:p-4">
+      <div className="absolute right-0 top-0 p-3 opacity-10 transition-opacity group-hover:opacity-20 sm:p-5">
         <Icon className={`h-10 w-10 sm:h-16 sm:w-16 ${iconClassName}`} />
       </div>
-      <div className="relative z-10 flex min-h-[4.75rem] flex-col justify-between p-3 sm:min-h-32 sm:p-4">
-        <span className={`mb-2 text-[13px] font-bold leading-tight sm:mb-4 sm:text-sm ${textClassName}`}>{label}</span>
+      <div className="relative z-10 flex w-full flex-col justify-between p-4 sm:p-5">
+        <span className={`max-w-[72%] text-sm font-bold leading-tight sm:text-base ${textClassName}`}>{label}</span>
         <span className={`text-2xl font-black leading-none sm:text-3xl ${textClassName}`}>{value}</span>
       </div>
     </button>
@@ -66,10 +66,10 @@ function DueSummaryCard({
     <button
       type="button"
       onClick={onClick}
-      className={`group relative min-w-0 overflow-hidden rounded-xl border p-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:rounded-2xl sm:p-5 ${toneClass}`}
+      className={`group relative flex min-h-32 min-w-0 flex-col justify-between overflow-hidden rounded-xl border p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:min-h-40 sm:rounded-2xl sm:p-5 ${toneClass}`}
     >
-      <div className="mb-1 flex items-center justify-between gap-2 sm:mb-2">
-        <span className="min-w-0 text-[13px] font-bold leading-tight sm:text-sm">{label}</span>
+      <div className="flex items-start justify-between gap-3">
+        <span className="min-w-0 text-sm font-bold leading-tight sm:text-base">{label}</span>
         <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider sm:px-2 sm:text-[10px] ${badgeClass}`}>{badge}</span>
       </div>
       <div className="flex items-baseline gap-1.5">
@@ -133,6 +133,7 @@ export function Dashboard({
   const rejectedCount = returned.length;
   const dueTodayCount = envTasks.filter(isDueToday).length;
   const dueThisWeekCount = envTasks.filter(isDueThisWeek).length;
+  const hasStatusCards = isMemberOrLeader || currentUser.role === 'reviewer' || currentUser.role === 'art_director';
 
   return (
     <div className="mx-auto max-w-7xl space-y-5 px-4 pb-6 pt-0 sm:space-y-8 sm:px-6 sm:py-6 lg:space-y-12 lg:px-8">
@@ -141,9 +142,11 @@ export function Dashboard({
         <p className="text-sm font-medium text-slate-500 sm:text-base">Here's an overview of the current workspace.</p>
       </div>
 
-      <div className={`grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-2 ${isMemberOrLeader ? 'xl:grid-cols-4' : 'xl:grid-cols-5'}`}>
-        {isMemberOrLeader ? (
-          <>
+      <div className="space-y-3 sm:space-y-4">
+        {hasStatusCards && (
+          <div className={`grid auto-rows-fr grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 ${isMemberOrLeader ? 'xl:grid-cols-4' : currentUser.role === 'reviewer' ? 'xl:grid-cols-5' : 'xl:grid-cols-3'}`}>
+            {isMemberOrLeader ? (
+              <>
             <SummaryCard
               label={`Waiting for ${minaName}`}
               value={waitingForMina.length}
@@ -180,23 +183,9 @@ export function Dashboard({
               iconClassName="text-emerald-600"
               onClick={() => onNavigate('approved_by_me')}
             />
-            <DueSummaryCard
-              label="Due Today"
-              value={dueTodayCount}
-              tone="rose"
-              badge="Urgent"
-              onClick={() => onNavigate('due_today')}
-            />
-            <DueSummaryCard
-              label="This Week"
-              value={dueThisWeekCount}
-              tone="orange"
-              badge="Upcoming"
-              onClick={() => onNavigate('due_this_week')}
-            />
-          </>
-        ) : currentUser.role === 'reviewer' ? (
-          <>
+              </>
+            ) : currentUser.role === 'reviewer' ? (
+              <>
             <SummaryCard
               label="Needs Full Review"
               value={needsFullReviewCount}
@@ -222,7 +211,6 @@ export function Dashboard({
               textClassName="text-slate-800"
               borderClassName="border-slate-200"
               iconClassName="text-slate-600"
-              className="col-span-2 md:col-span-1"
               onClick={() => onNavigate('ad_queue')}
             />
             <SummaryCard
@@ -243,23 +231,9 @@ export function Dashboard({
               iconClassName="text-emerald-600"
               onClick={() => onNavigate('approved_by_me')}
             />
-            <DueSummaryCard
-              label="Due Today"
-              value={dueTodayCount}
-              tone="rose"
-              badge="Urgent"
-              onClick={() => onNavigate('due_today')}
-            />
-            <DueSummaryCard
-              label="This Week"
-              value={dueThisWeekCount}
-              tone="orange"
-              badge="Upcoming"
-              onClick={() => onNavigate('due_this_week')}
-            />
-          </>
-        ) : currentUser.role === 'art_director' ? (
-          <>
+              </>
+            ) : currentUser.role === 'art_director' ? (
+              <>
             <SummaryCard
               label="Needs Your Action"
               value={needsAction.length}
@@ -267,7 +241,6 @@ export function Dashboard({
               textClassName="text-amber-800"
               borderClassName="border-amber-100"
               iconClassName="text-amber-600"
-              className="col-span-2 md:col-span-1"
               onClick={() => onNavigate('ad_queue')}
             />
             <SummaryCard
@@ -288,26 +261,12 @@ export function Dashboard({
               iconClassName="text-emerald-600"
               onClick={() => onNavigate('approved_by_me')}
             />
-            <DueSummaryCard
-              label="Due Today"
-              value={dueTodayCount}
-              tone="rose"
-              badge="Urgent"
-              onClick={() => onNavigate('due_today')}
-            />
-            <DueSummaryCard
-              label="This Week"
-              value={dueThisWeekCount}
-              tone="orange"
-              badge="Upcoming"
-              onClick={() => onNavigate('due_this_week')}
-            />
-          </>
-        ) : null}
-      </div>
+              </>
+            ) : null}
+          </div>
+        )}
 
-      {!isMemberOrLeader && currentUser.role !== 'reviewer' && currentUser.role !== 'art_director' && (
-        <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-2">
+        <div className="grid auto-rows-fr grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
           <DueSummaryCard
             label="Due Today"
             value={dueTodayCount}
@@ -323,7 +282,7 @@ export function Dashboard({
             onClick={() => onNavigate('due_this_week')}
           />
         </div>
-      )}
+      </div>
 
       {needsAction.length > 0 && (
         <section>
