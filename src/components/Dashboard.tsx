@@ -144,7 +144,7 @@ export function Dashboard({
 
       <div className="space-y-3 sm:space-y-4">
         {hasStatusCards && (
-          <div className={`grid auto-rows-fr grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 ${isMemberOrLeader ? 'xl:grid-cols-4' : currentUser.role === 'reviewer' ? 'xl:grid-cols-5' : 'xl:grid-cols-3'}`}>
+          <div className={`grid auto-rows-fr grid-cols-2 gap-3 sm:gap-4 ${isMemberOrLeader ? 'xl:grid-cols-4' : currentUser.role === 'reviewer' ? 'xl:grid-cols-5' : 'xl:grid-cols-3'}`}>
             {isMemberOrLeader ? (
               <>
             <SummaryCard
@@ -211,6 +211,7 @@ export function Dashboard({
               textClassName="text-slate-800"
               borderClassName="border-slate-200"
               iconClassName="text-slate-600"
+              className="col-span-2 xl:col-span-1"
               onClick={() => onNavigate('ad_queue')}
             />
             <SummaryCard
@@ -220,6 +221,7 @@ export function Dashboard({
               textClassName="text-rose-800"
               borderClassName="border-rose-100"
               iconClassName="text-rose-600"
+              className="order-5 xl:order-none"
               onClick={() => onNavigate('rejected_reopened')}
             />
             <SummaryCard
@@ -229,6 +231,7 @@ export function Dashboard({
               textClassName="text-emerald-800"
               borderClassName="border-emerald-100"
               iconClassName="text-emerald-600"
+              className="order-4 xl:order-none"
               onClick={() => onNavigate('approved_by_me')}
             />
               </>
@@ -266,7 +269,7 @@ export function Dashboard({
           </div>
         )}
 
-        <div className="grid auto-rows-fr grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
+        <div className="grid auto-rows-fr grid-cols-2 gap-3 sm:gap-4">
           <DueSummaryCard
             label="Due Today"
             value={dueTodayCount}
