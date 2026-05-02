@@ -66,7 +66,7 @@ function DueSummaryCard({
     <button
       type="button"
       onClick={onClick}
-      className={`group relative flex h-24 min-w-0 flex-col justify-between overflow-hidden rounded-xl border p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:h-28 sm:rounded-2xl ${toneClass}`}
+      className={`group relative flex h-28 min-w-0 flex-col justify-between overflow-hidden rounded-xl border p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:h-32 sm:rounded-2xl ${toneClass}`}
     >
       <div className="flex items-start justify-between gap-3">
         <span className="min-w-0 text-sm font-bold leading-tight sm:text-base">{label}</span>
