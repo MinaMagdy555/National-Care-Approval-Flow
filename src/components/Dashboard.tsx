@@ -72,9 +72,8 @@ function DueSummaryCard({
         <span className="min-w-0 text-sm font-bold leading-tight sm:text-base">{label}</span>
         <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider sm:px-2 sm:text-[10px] ${badgeClass}`}>{badge}</span>
       </div>
-      <div className="flex items-baseline gap-1.5">
+      <div className="flex items-baseline">
         <span className="text-2xl font-black leading-none sm:text-3xl">{value}</span>
-        <span className="text-sm font-semibold">Tasks</span>
       </div>
     </button>
   );
