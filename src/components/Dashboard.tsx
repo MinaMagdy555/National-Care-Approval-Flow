@@ -29,12 +29,12 @@ function SummaryCard({
     <button
       type="button"
       onClick={onClick}
-      className={`group relative flex min-h-32 min-w-0 overflow-hidden rounded-xl border bg-white text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:min-h-40 sm:rounded-2xl ${borderClassName} ${className}`}
+      className={`group relative flex h-28 min-w-0 overflow-hidden rounded-xl border bg-white text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:h-32 sm:rounded-2xl ${borderClassName} ${className}`}
     >
-      <div className="absolute right-0 top-0 p-3 opacity-10 transition-opacity group-hover:opacity-20 sm:p-5">
-        <Icon className={`h-10 w-10 sm:h-16 sm:w-16 ${iconClassName}`} />
+      <div className="absolute right-0 top-0 p-3 opacity-10 transition-opacity group-hover:opacity-20 sm:p-4">
+        <Icon className={`h-9 w-9 sm:h-12 sm:w-12 ${iconClassName}`} />
       </div>
-      <div className="relative z-10 flex w-full flex-col justify-between p-4 sm:p-5">
+      <div className="relative z-10 flex w-full flex-col justify-between p-4">
         <span className={`max-w-[72%] text-sm font-bold leading-tight sm:text-base ${textClassName}`}>{label}</span>
         <span className={`text-2xl font-black leading-none sm:text-3xl ${textClassName}`}>{value}</span>
       </div>
@@ -66,7 +66,7 @@ function DueSummaryCard({
     <button
       type="button"
       onClick={onClick}
-      className={`group relative flex min-h-32 min-w-0 flex-col justify-between overflow-hidden rounded-xl border p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:min-h-40 sm:rounded-2xl sm:p-5 ${toneClass}`}
+      className={`group relative flex h-24 min-w-0 flex-col justify-between overflow-hidden rounded-xl border p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:h-28 sm:rounded-2xl ${toneClass}`}
     >
       <div className="flex items-start justify-between gap-3">
         <span className="min-w-0 text-sm font-bold leading-tight sm:text-base">{label}</span>
