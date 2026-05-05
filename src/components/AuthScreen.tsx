@@ -4,7 +4,6 @@ import { useAppStore } from '../lib/store';
 import { Role } from '../lib/types';
 import { userRoleLabels } from '../lib/mockData';
 import { CustomSelect } from './CustomSelect';
-import { isGoogleAuthEnabled } from '../lib/supabaseClient';
 
 const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
   { value: 'team_member', label: 'Team Member' },
@@ -231,12 +230,12 @@ export function AuthScreen() {
           <button
             type="button"
             onClick={handleGoogle}
-            disabled={isSubmitting || !isGoogleAuthEnabled}
+            disabled={isSubmitting}
             className={SECONDARY_BUTTON_CLASS}
-            title={isGoogleAuthEnabled ? 'Continue with Google' : 'Enable Google in Supabase and set VITE_ENABLE_GOOGLE_AUTH=true'}
+            title="Continue with Google"
           >
             <Mail className="h-4 w-4" />
-            {isGoogleAuthEnabled ? 'Continue with Google' : 'Google not enabled'}
+            Continue with Google
           </button>
           <button
             type="button"

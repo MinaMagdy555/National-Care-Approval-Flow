@@ -5,7 +5,7 @@ import { initialUsers, initialTasks } from './mockData';
 import { clearAppState, loadAppState } from './localDb';
 import { shouldAutoArchiveTask } from './archiveUtils';
 import { sanitizeHandledBy } from './handlerUtils';
-import { isGoogleAuthEnabled, isSupabaseConfigured, supabase } from './supabaseClient';
+import { isSupabaseConfigured, supabase } from './supabaseClient';
 import {
   approveUserProfile,
   ensureCurrentUserProfile,
@@ -828,12 +828,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const signInWithGoogle = async (name: string, requestedRole: Role): Promise<AuthActionResult> => {
     if (!supabase) return { ok: false, message: 'Supabase is not configured.' };
-    if (!isGoogleAuthEnabled) {
-      return {
-        ok: false,
-        message: 'Google sign-in is not enabled for this local app yet. Use email/password, or set VITE_ENABLE_GOOGLE_AUTH="true" after enabling Google in Supabase Auth providers.',
-      };
-    }
 
     window.localStorage.setItem(GOOGLE_SIGNUP_REQUEST_STORAGE_KEY, JSON.stringify({
       name: name.trim(),
@@ -872,7 +866,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       clearStoredGoogleSignupRequest();
       return {
         ok: false,
-        message: 'Could not verify Google sign-in. Make sure Google is enabled in Supabase Auth providers and http://localhost:3000 is an allowed redirect URL.',
+        message: 'Could not verify Google sign-in. Make sure Google is enabled in Supabase Auth providers and this site URL is an allowed redirect URL.',
       };
     }
 
