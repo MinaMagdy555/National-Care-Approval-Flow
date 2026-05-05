@@ -869,7 +869,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         };
       }
     } catch {
-      // Browser/CORS handling may hide the provider redirect. Continue to Supabase when explicit Google auth is enabled.
+      clearStoredGoogleSignupRequest();
+      return {
+        ok: false,
+        message: 'Could not verify Google sign-in. Make sure Google is enabled in Supabase Auth providers and http://localhost:3000 is an allowed redirect URL.',
+      };
     }
 
     window.location.assign(data.url);
