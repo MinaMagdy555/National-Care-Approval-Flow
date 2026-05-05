@@ -6,6 +6,7 @@ function cleanEnvValue(value: string | undefined) {
 
 const supabaseUrl = cleanEnvValue(import.meta.env.VITE_SUPABASE_URL);
 const supabaseAnonKey = cleanEnvValue(import.meta.env.VITE_SUPABASE_ANON_KEY);
+const googleAuthEnabled = cleanEnvValue(import.meta.env.VITE_ENABLE_GOOGLE_AUTH);
 
 function isValidUrl(value: string | undefined) {
   if (!value) return false;
@@ -18,12 +19,19 @@ function isValidUrl(value: string | undefined) {
 }
 
 export const isSupabaseConfigured = Boolean(isValidUrl(supabaseUrl) && supabaseAnonKey);
+export const isGoogleAuthEnabled = googleAuthEnabled === 'true';
 
 export const supabase = (() => {
   if (!isSupabaseConfigured) return null;
 
   try {
-    return createClient(supabaseUrl!, supabaseAnonKey!);
+    return createClient(supabaseUrl!, supabaseAnonKey!, {
+      auth: {
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        persistSession: true,
+      },
+    });
   } catch (error) {
     console.error('Invalid Supabase configuration', error);
     return null;

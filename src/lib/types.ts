@@ -29,11 +29,42 @@ export type TaskStatus =
 
 export interface User {
   id: string;
+  email?: string;
   name: string;
   role: Role;
   avatar?: string;
   jobTitle?: string;
+  requestedRole?: Role;
+  approvalStatus?: AccountApprovalStatus;
+  isAdmin?: boolean;
+  legacyId?: string | null;
 }
+
+export type AccountApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+export interface AccountProfile {
+  id: string;
+  email: string;
+  name: string;
+  role: Role;
+  requestedRole: Role;
+  approvalStatus: AccountApprovalStatus;
+  isAdmin: boolean;
+  legacyId?: string | null;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AuthStatus =
+  | 'loading'
+  | 'configuration_missing'
+  | 'signed_out'
+  | 'pending_confirmation'
+  | 'pending_approval'
+  | 'rejected'
+  | 'approved';
 
 export interface UploadedTaskFile {
   id: string;

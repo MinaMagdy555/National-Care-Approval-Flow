@@ -1,13 +1,22 @@
 import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
-import { User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile } from './types';
+import type { User as SupabaseAuthUser } from '@supabase/supabase-js';
+import { AccountProfile, AuthStatus, User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile } from './types';
 import { initialUsers, initialTasks } from './mockData';
-import { clearAppState, loadAppState, saveAppState } from './localDb';
+import { clearAppState, loadAppState } from './localDb';
 import { shouldAutoArchiveTask } from './archiveUtils';
-import { DINA_ID, MARWA_ID, MINA_ID, sanitizeHandledBy } from './handlerUtils';
-import { isSupabaseConfigured, supabase } from './supabaseClient';
+import { sanitizeHandledBy } from './handlerUtils';
+import { isGoogleAuthEnabled, isSupabaseConfigured, supabase } from './supabaseClient';
 import {
+  approveUserProfile,
+  ensureCurrentUserProfile,
+  fetchCurrentUserProfile,
+  fetchUserProfiles,
   fetchSupabaseNotifications,
   fetchSupabaseTasks,
+  migrateLegacyUserData,
+  profileToUser,
+  rejectUserProfile,
+  updatePendingProfileRequest,
   uploadTaskFiles,
   upsertSupabaseNotifications,
   upsertSupabaseTask,
@@ -15,22 +24,27 @@ import {
 import { addLowResPreviewsToFiles, getTaskFiles } from './previewUtils';
 
 const REVIEWER_WAITING_STATUSES: TaskStatus[] = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'];
-const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
-const REGISTERED_USERS_STORAGE_KEY = 'national-care-registered-users';
-const REGISTERED_PASSWORDS_STORAGE_KEY = 'national-care-registered-passwords';
+const GOOGLE_SIGNUP_REQUEST_STORAGE_KEY = 'national-care-google-signup-request';
 const SHARED_DATA_CHANNEL = 'approval-flow-shared-data';
 const SHARED_DATA_EVENT = 'state-change';
 const SHARED_DATA_POLL_INTERVAL_MS = 2500;
-const PROFILE_PASSWORDS: Record<string, string> = {
-  user_1: '1',
-  user_3: '2',
-  user_2: '3',
-  user_4: '4',
-  user_5: '5',
-  user_6: '6',
+const GUEST_USER: User = {
+  id: 'guest',
+  name: 'Guest',
+  role: 'team_member',
+  jobTitle: 'Not signed in',
 };
 
-type StoredUser = User & { password?: string };
+type AuthActionResult = {
+  ok: boolean;
+  message?: string;
+  needsEmailConfirmation?: boolean;
+};
+
+type GoogleSignupRequest = {
+  name: string;
+  requestedRole: Role;
+};
 
 type SharedDataPayload =
   | { type: 'task_upsert'; task: Task }
@@ -38,51 +52,60 @@ type SharedDataPayload =
 
 type SharedDataMessage = SharedDataPayload & { originClientId: string };
 
-function getStoredUsers(): StoredUser[] {
-  if (typeof window === 'undefined') return [];
-
-  try {
-    const users = JSON.parse(window.localStorage.getItem(REGISTERED_USERS_STORAGE_KEY) || '[]') as unknown;
-    return Array.isArray(users) ? users.filter(user => user && typeof user === 'object' && 'id' in user && 'name' in user) as StoredUser[] : [];
-  } catch {
-    return [];
-  }
-}
-
-function getStoredPasswords(): Record<string, string> {
-  if (typeof window === 'undefined') return {};
-
-  try {
-    const passwords = JSON.parse(window.localStorage.getItem(REGISTERED_PASSWORDS_STORAGE_KEY) || '{}') as unknown;
-    return passwords && typeof passwords === 'object' && !Array.isArray(passwords) ? passwords as Record<string, string> : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveRegisteredProfiles(users: User[], passwords: Record<string, string>) {
-  window.localStorage.setItem(REGISTERED_USERS_STORAGE_KEY, JSON.stringify(users));
-  window.localStorage.setItem(REGISTERED_PASSWORDS_STORAGE_KEY, JSON.stringify(passwords));
-}
-
-function getAllInitialUsers() {
-  return [...initialUsers, ...getStoredUsers().map(({ password, ...user }) => user)];
-}
-
-function getInitialCurrentUser() {
-  const storedUserId = typeof window !== 'undefined' ? window.localStorage.getItem(CURRENT_USER_STORAGE_KEY) : null;
-  const users = getAllInitialUsers();
-  return users.find(user => user.id === storedUserId) || users.find(u => u.role === 'reviewer') || users[0];
-}
-
 function createClientId() {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `client_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
-function normalizeMinaCreatedTask(task: Task): Task {
-  if (task.createdBy !== MINA_ID || !REVIEWER_WAITING_STATUSES.includes(task.status)) {
+function getProfileDisplayName(authUser: SupabaseAuthUser) {
+  const metadata = authUser.user_metadata || {};
+  const name = typeof metadata.name === 'string' ? metadata.name : typeof metadata.full_name === 'string' ? metadata.full_name : '';
+  return name.trim() || authUser.email?.split('@')[0] || 'New user';
+}
+
+function getStoredGoogleSignupRequest(): GoogleSignupRequest | null {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(GOOGLE_SIGNUP_REQUEST_STORAGE_KEY) || 'null') as Partial<GoogleSignupRequest> | null;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      name: typeof parsed.name === 'string' ? parsed.name : '',
+      requestedRole: parsed.requestedRole || 'team_member',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clearStoredGoogleSignupRequest() {
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem(GOOGLE_SIGNUP_REQUEST_STORAGE_KEY);
+  }
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') return error.message;
+  return fallback;
+}
+
+function isLegacyUserId(userId: string) {
+  return /^user_\d+$/.test(userId);
+}
+
+function getUserIdsByRole(users: User[], roles: Role[]) {
+  return users.filter(user => roles.includes(user.role) && !isLegacyUserId(user.id)).map(user => user.id);
+}
+
+function isReviewerCreatedTask(task: Task, users: Record<string, User>) {
+  const creatorRole = users[task.createdBy]?.role || initialUsers.find(user => user.id === task.createdBy)?.role;
+  return creatorRole === 'reviewer' || creatorRole === 'admin';
+}
+
+function normalizeReviewerCreatedTask(task: Task, users: Record<string, User>): Task {
+  if (!isReviewerCreatedTask(task, users) || !REVIEWER_WAITING_STATUSES.includes(task.status)) {
     return task;
   }
 
@@ -109,8 +132,8 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
     taskType: task.taskType || 'others',
     reviewMode: task.reviewMode || 'full_review',
     environment: task.environment || 'production',
-    createdBy: task.createdBy || MINA_ID,
-    handledBy: sanitizeHandledBy(Array.isArray(task.handledBy) ? task.handledBy : [task.createdBy || MINA_ID]),
+    createdBy: task.createdBy || initialUsers[0]?.id || 'unknown_user',
+    handledBy: sanitizeHandledBy(Array.isArray(task.handledBy) ? task.handledBy : [task.createdBy || initialUsers[0]?.id || 'unknown_user']),
     status: task.status || 'submitted',
     currentOwnerRole: task.currentOwnerRole ?? null,
     currentOwnerUserId: task.currentOwnerUserId ?? null,
@@ -127,7 +150,7 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
   };
 }
 
-function reviveTaskFiles(tasks: Task[]): Task[] {
+function reviveTaskFiles(tasks: Task[], users: Record<string, User> = {}): Task[] {
   return tasks.map(task => coerceTask(task)).filter(Boolean).map(task => {
     const versions = task.versions.map(version => {
       const files = version.files?.map(file => ({
@@ -143,12 +166,12 @@ function reviveTaskFiles(tasks: Task[]): Task[] {
     });
     const thumbnailFile = versions[0]?.files?.find(file => file.previewUrl && file.previewStoragePath);
 
-    return normalizeMinaCreatedTask({
+    return normalizeReviewerCreatedTask({
       ...task,
       versions,
       thumbnailUrl: thumbnailFile?.previewUrl || task.thumbnailUrl,
       thumbnailStoragePath: thumbnailFile?.previewStoragePath || task.thumbnailStoragePath,
-    });
+    }, users);
   }) as Task[];
 }
 
@@ -280,6 +303,10 @@ async function uploadMigratedTaskFiles(task: Task): Promise<Task> {
 
 interface AppState {
   currentUser: User;
+  authStatus: AuthStatus;
+  authProfile: AccountProfile | null;
+  authError: string | null;
+  accountProfiles: AccountProfile[];
   environment: Environment;
   tasks: Task[];
   users: Record<string, User>;
@@ -292,7 +319,6 @@ interface AppState {
 }
 
 interface AppContextType extends AppState {
-  setCurrentUser: (user: User) => void;
   setEnvironment: (env: Environment) => void;
   updateTaskStatus: (taskId: string, newStatus: TaskStatus, newOwnerRole: Role | null) => void;
   updateTaskPriority: (taskId: string, priority: Priority, deadline: string | null) => void;
@@ -303,10 +329,13 @@ interface AppContextType extends AppState {
   addTask: (task: Task) => void;
   addNotification: (notification: Omit<Notification, 'id' | 'createdAt' | 'read'>) => void;
   markNotificationAsRead: (id: string) => void;
-  loginWithPassword: (userId: string, password: string) => boolean;
-  logout: () => void;
-  registerProfile: (name: string, password: string, role: Role) => boolean;
-  deleteCurrentProfile: () => boolean;
+  loginWithPassword: (email: string, password: string) => Promise<AuthActionResult>;
+  signInWithGoogle: (name: string, requestedRole: Role) => Promise<AuthActionResult>;
+  registerProfile: (name: string, email: string, password: string, requestedRole: Role) => Promise<AuthActionResult>;
+  logout: () => Promise<void>;
+  updatePendingProfile: (name: string, requestedRole: Role) => Promise<AuthActionResult>;
+  approveAccount: (profileId: string, role: Role, legacyId: string | null) => Promise<AuthActionResult>;
+  rejectAccount: (profileId: string) => Promise<AuthActionResult>;
   archiveTask: (taskId: string, reason?: string) => void;
   unarchiveTask: (taskId: string) => void;
   migrateLocalDataToSupabase: () => Promise<void>;
@@ -323,13 +352,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const pendingTaskBroadcastIdsRef = useRef<Set<string>>(new Set());
   const pendingNotificationBroadcastIdsRef = useRef<Set<string>>(new Set());
   const queuedSharedDataMessagesRef = useRef<SharedDataMessage[]>([]);
-  const [userList, setUserList] = useState<User[]>(getAllInitialUsers);
+  const [accountProfiles, setAccountProfiles] = useState<AccountProfile[]>([]);
+  const [authProfile, setAuthProfile] = useState<AccountProfile | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>(isSupabaseConfigured ? 'loading' : 'configuration_missing');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [userList, setUserList] = useState<User[]>(initialUsers);
   const usersObj = userList.reduce((acc, user) => {
     acc[user.id] = user;
     return acc;
   }, {} as Record<string, User>);
 
-  const [currentUserState, setCurrentUserState] = useState<User>(getInitialCurrentUser);
+  const [currentUserState, setCurrentUserState] = useState<User>(GUEST_USER);
   const [environment, setEnvironment] = useState<Environment>('production');
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -387,13 +420,156 @@ export function AppProvider({ children }: { children: ReactNode }) {
     pendingNotificationBroadcastIdsRef.current.add(notificationId);
   };
 
-  const setCurrentUser = (user: User) => {
-    setCurrentUserState(user);
-    window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, user.id);
+  const refreshProfiles = async () => {
+    const profiles = await fetchUserProfiles();
+    const profileUsers = profiles
+      .filter(profile => profile.approvalStatus === 'approved')
+      .map(profileToUser);
+
+    setAccountProfiles(profiles);
+    setUserList([...initialUsers, ...profileUsers]);
+    return profiles;
+  };
+
+  const applyApprovedProfile = async (profile: AccountProfile) => {
+    const profiles = await refreshProfiles();
+    const approvedUser = profileToUser(profile);
+    setAuthProfile(profile);
+    setCurrentUserState(approvedUser);
+    setAuthStatus('approved');
+    setAuthError(null);
+
+    if (!profiles.some(item => item.id === profile.id)) {
+      setUserList(prev => [...prev, approvedUser]);
+    }
+  };
+
+  const resetWorkspaceState = () => {
+    hasLoadedPersistedState.current = false;
+    pendingTaskBroadcastIdsRef.current.clear();
+    pendingNotificationBroadcastIdsRef.current.clear();
+    queuedSharedDataMessagesRef.current = [];
+    setTasks(initialTasks);
+    setNotifications([]);
+    setLocalMigrationState(null);
+    setPersistenceError(null);
   };
 
   useEffect(() => {
-    if (!hasLoadedPersistedState.current || !isSupabaseConfigured) return;
+    if (!isSupabaseConfigured || !supabase) {
+      setAuthStatus('configuration_missing');
+      return;
+    }
+
+    let isMounted = true;
+
+    const applyAuthUser = async (authUser: SupabaseAuthUser | null) => {
+      if (!isMounted) return;
+
+      if (!authUser) {
+        setAuthProfile(null);
+        setCurrentUserState(GUEST_USER);
+        setUserList(initialUsers);
+        setAccountProfiles([]);
+        setAuthStatus('signed_out');
+        setAuthError(null);
+        resetWorkspaceState();
+        return;
+      }
+
+      try {
+        let profile: AccountProfile | null = null;
+        let profileReadError: unknown = null;
+
+        try {
+          profile = await fetchCurrentUserProfile(authUser.id);
+        } catch (error) {
+          profileReadError = error;
+          console.warn('Initial profile read failed; trying profile repair', error);
+        }
+
+        if (!profile) {
+          try {
+            await ensureCurrentUserProfile();
+            profile = await fetchCurrentUserProfile(authUser.id);
+          } catch (error) {
+            console.warn('Could not auto-create authenticated user profile', error);
+            if (profileReadError) throw profileReadError;
+          }
+        }
+        const storedGoogleRequest = getStoredGoogleSignupRequest();
+
+        if (profile && profile.approvalStatus !== 'approved' && storedGoogleRequest) {
+          profile = await updatePendingProfileRequest(
+            authUser.id,
+            storedGoogleRequest.name.trim() || profile.name || getProfileDisplayName(authUser),
+            storedGoogleRequest.requestedRole || profile.requestedRole,
+          );
+          clearStoredGoogleSignupRequest();
+        }
+
+        if (!profile) {
+          setAuthProfile(null);
+          setCurrentUserState({
+            ...GUEST_USER,
+            id: authUser.id,
+            email: authUser.email,
+            name: getProfileDisplayName(authUser),
+          });
+          setAuthStatus('pending_approval');
+          setAuthError('Your account exists, but its app profile has not been created yet. Re-run the Supabase SQL setup if this keeps happening.');
+          resetWorkspaceState();
+          return;
+        }
+
+        setAuthProfile(profile);
+        setCurrentUserState(profileToUser(profile));
+        setUserList([...initialUsers, ...(profile.approvalStatus === 'approved' ? [profileToUser(profile)] : [])]);
+        setAuthError(null);
+
+        if (profile.approvalStatus === 'approved') {
+          await applyApprovedProfile(profile);
+          return;
+        }
+
+        resetWorkspaceState();
+        setAuthStatus(profile.approvalStatus === 'rejected' ? 'rejected' : 'pending_approval');
+      } catch (error) {
+        console.error('Failed to load authenticated profile', error);
+        setAuthError(getErrorMessage(error, 'Could not load your account profile.'));
+        setAuthStatus('signed_out');
+        resetWorkspaceState();
+      }
+    };
+
+    supabase.auth.getUser()
+      .then(({ data, error }) => {
+        if (error && error.name !== 'AuthSessionMissingError') {
+          throw error;
+        }
+        return applyAuthUser(data.user);
+      })
+      .catch(error => {
+        console.error('Failed to restore Supabase auth session', error);
+        if (!isMounted) return;
+        setAuthError(getErrorMessage(error, 'Could not restore your sign-in session.'));
+        setAuthStatus('signed_out');
+      });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      window.setTimeout(() => {
+        void applyAuthUser(session?.user ?? null);
+      }, 0);
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (authStatus !== 'approved' || !hasLoadedPersistedState.current || !isSupabaseConfigured) return;
 
     const autoArchiveTasks = tasks.filter(task => shouldAutoArchiveTask(task));
     if (autoArchiveTasks.length === 0) return;
@@ -408,47 +584,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         : task
     )));
-  }, [tasks]);
+  }, [tasks, authStatus]);
 
   useEffect(() => {
+    if (authStatus !== 'approved') return;
+
     let isMounted = true;
+    hasLoadedPersistedState.current = false;
 
-    const loadState = isSupabaseConfigured
-      ? Promise.all([fetchSupabaseTasks(), fetchSupabaseNotifications(), loadAppState()]).then(([loadedTasks, loadedNotifications, localState]) => {
-          if (localState) {
-            const localTasks = Array.isArray(localState.tasks) ? reviveTaskFiles(localState.tasks) : [];
-            const localNotifications = Array.isArray(localState.notifications) ? localState.notifications : [];
-            const supabaseTaskIds = new Set(loadedTasks.map(task => task.id));
-            const supabaseNotificationIds = new Set(loadedNotifications.map(notification => notification.id));
-            const localOnlyTasks = localTasks.filter(task => !supabaseTaskIds.has(task.id));
-            const localOnlyNotifications = localNotifications.filter(notification => notification?.id && !supabaseNotificationIds.has(notification.id));
-
-            if (localOnlyTasks.length > 0 || localOnlyNotifications.length > 0) {
-              setLocalMigrationState({
-                tasks: localOnlyTasks,
-                notifications: localOnlyNotifications,
-              });
-            }
-          }
-
-          return {
-            tasks: loadedTasks,
-            notifications: loadedNotifications,
-          };
-        })
-      : loadAppState();
-
-    loadState
-      .then(state => {
+    Promise.all([fetchSupabaseTasks(), fetchSupabaseNotifications(), loadAppState()])
+      .then(([loadedTasks, loadedNotifications, localState]) => {
         if (!isMounted) return;
-        if (state) {
-          setTasks(reviveTaskFiles(Array.isArray(state.tasks) ? state.tasks : []));
-          setNotifications(Array.isArray(state.notifications) ? state.notifications.filter(notification => notification?.id) : []);
+
+        if (localState) {
+          const localTasks = Array.isArray(localState.tasks) ? reviveTaskFiles(localState.tasks, usersObj) : [];
+          const localNotifications = Array.isArray(localState.notifications) ? localState.notifications : [];
+          const supabaseTaskIds = new Set(loadedTasks.map(task => task.id));
+          const supabaseNotificationIds = new Set(loadedNotifications.map(notification => notification.id));
+          const localOnlyTasks = localTasks.filter(task => !supabaseTaskIds.has(task.id));
+          const localOnlyNotifications = localNotifications.filter(notification => notification?.id && !supabaseNotificationIds.has(notification.id));
+
+          if (localOnlyTasks.length > 0 || localOnlyNotifications.length > 0) {
+            setLocalMigrationState({
+              tasks: localOnlyTasks,
+              notifications: localOnlyNotifications,
+            });
+          }
         }
+
+        setTasks(reviveTaskFiles(loadedTasks, usersObj));
+        setNotifications(loadedNotifications.filter(notification => notification?.id));
       })
       .catch(error => {
         console.error('Failed to load persisted app state', error);
-        setPersistenceError(error instanceof Error ? error.message : 'Failed to load persisted app state.');
+        setPersistenceError(getErrorMessage(error, 'Failed to load persisted app state.'));
       })
       .finally(() => {
         if (isMounted) hasLoadedPersistedState.current = true;
@@ -457,10 +626,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [authStatus, currentUser.id]);
 
   useEffect(() => {
-    if (!hasLoadedPersistedState.current) return;
+    if (authStatus !== 'approved' || !hasLoadedPersistedState.current || !isSupabaseConfigured) return;
 
     const pendingTaskIds = Array.from(pendingTaskBroadcastIdsRef.current);
     const pendingNotificationIds = Array.from(pendingNotificationBroadcastIdsRef.current);
@@ -476,12 +645,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (notification) sendSharedDataMessage({ type: 'notification_upsert', notification });
     });
 
-    const saveState = isSupabaseConfigured
-      ? Promise.all([
-          ...tasks.map(task => upsertSupabaseTask(task)),
-          upsertSupabaseNotifications(notifications),
-        ])
-      : saveAppState({ tasks, notifications });
+    const saveState = Promise.all([
+      ...tasks.map(task => upsertSupabaseTask(task)),
+      upsertSupabaseNotifications(notifications),
+    ]);
 
     saveState
       .then(() => {
@@ -489,12 +656,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       })
       .catch(error => {
         console.error('Failed to save app state', error);
-        setPersistenceError(error instanceof Error ? error.message : 'Failed to save app state.');
+        setPersistenceError(getErrorMessage(error, 'Failed to save app state.'));
       });
-  }, [tasks, notifications]);
+  }, [tasks, notifications, authStatus]);
 
   useEffect(() => {
-    if (!isSupabaseConfigured || !supabase) return;
+    if (authStatus !== 'approved' || !isSupabaseConfigured || !supabase) return;
 
     const channel = supabase
       .channel(SHARED_DATA_CHANNEL, {
@@ -507,7 +674,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!message || message.originClientId === clientIdRef.current) return;
 
         if (message.type === 'task_upsert') {
-          const revivedTask = reviveTaskFiles([message.task])[0];
+          const revivedTask = reviveTaskFiles([message.task], usersObj)[0];
           if (revivedTask) {
             setTasks(prev => mergeTaskIntoState(prev, revivedTask));
           }
@@ -532,7 +699,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!task) return;
 
         setTasks(prev => {
-          const revivedTask = reviveTaskFiles([task])[0];
+          const revivedTask = reviveTaskFiles([task], usersObj)[0];
           return revivedTask ? mergeTaskIntoState(prev, revivedTask) : prev;
         });
       })
@@ -565,10 +732,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       sharedDataChannelRef.current = null;
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [authStatus, currentUser.id]);
 
   useEffect(() => {
-    if (!isSupabaseConfigured) return;
+    if (authStatus !== 'approved' || !isSupabaseConfigured) return;
 
     let isMounted = true;
     let isPolling = false;
@@ -585,13 +752,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         if (!isMounted) return;
 
-        setTasks(prev => mergeTasksIntoState(prev, reviveTaskFiles(latestTasks)));
+        setTasks(prev => mergeTasksIntoState(prev, reviveTaskFiles(latestTasks, usersObj)));
         setNotifications(prev => mergeNotificationsIntoState(prev, latestNotifications.filter(notification => notification?.id)));
         setPersistenceError(null);
       } catch (error) {
         console.error('Failed to sync latest shared data', error);
         if (isMounted) {
-          setPersistenceError(error instanceof Error ? error.message : 'Failed to sync latest shared data.');
+          setPersistenceError(getErrorMessage(error, 'Failed to sync latest shared data.'));
         }
       } finally {
         isPolling = false;
@@ -611,7 +778,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       window.clearInterval(intervalId);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, []);
+  }, [authStatus, currentUser.id]);
 
   const addNotification = (notif: Omit<Notification, 'id' | 'createdAt' | 'read'>) => {
     const notification: Notification = {
@@ -639,54 +806,190 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
   };
 
-  const loginWithPassword = (userId: string, password: string) => {
-    const storedPasswords = getStoredPasswords();
-    if ((PROFILE_PASSWORDS[userId] || storedPasswords[userId]) !== password.trim()) return false;
-
-    const user = userList.find(item => item.id === userId);
-    if (!user) return false;
-
-    setCurrentUser(user);
-    return true;
-  };
-
-  const logout = () => {
-    window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
-    setCurrentUserState(userList.find(u => u.role === 'reviewer') || userList[0]);
-  };
-
-  const registerProfile = (name: string, password: string, role: Role) => {
-    const trimmedName = name.trim();
+  const loginWithPassword = async (email: string, password: string): Promise<AuthActionResult> => {
+    if (!supabase) return { ok: false, message: 'Supabase is not configured.' };
+    const trimmedEmail = email.trim().toLowerCase();
     const trimmedPassword = password.trim();
-    if (!trimmedName || !trimmedPassword) return false;
+    if (!trimmedEmail || !trimmedPassword) {
+      return { ok: false, message: 'Enter your email and password.' };
+    }
 
-    const newUser: User = {
-      id: `custom_${Date.now()}`,
-      name: trimmedName,
-      role,
-      jobTitle: role === 'team_member' ? 'Team Member' : role.replaceAll('_', ' '),
-    };
-    const nextUserList = [...userList, newUser];
-    const nextPasswords = { ...getStoredPasswords(), [newUser.id]: trimmedPassword };
+    const { error } = await supabase.auth.signInWithPassword({
+      email: trimmedEmail,
+      password: trimmedPassword,
+    });
 
-    setUserList(nextUserList);
-    saveRegisteredProfiles(nextUserList.filter(user => user.id.startsWith('custom_')), nextPasswords);
-    setCurrentUser(newUser);
-    return true;
+    if (error) {
+      return { ok: false, message: error.message || 'Could not sign in.' };
+    }
+
+    return { ok: true };
   };
 
-  const deleteCurrentProfile = () => {
-    if (!currentUser.id.startsWith('custom_')) return false;
+  const signInWithGoogle = async (name: string, requestedRole: Role): Promise<AuthActionResult> => {
+    if (!supabase) return { ok: false, message: 'Supabase is not configured.' };
+    if (!isGoogleAuthEnabled) {
+      return {
+        ok: false,
+        message: 'Google sign-in is not enabled for this local app yet. Use email/password, or set VITE_ENABLE_GOOGLE_AUTH="true" after enabling Google in Supabase Auth providers.',
+      };
+    }
 
-    const nextUserList = userList.filter(user => user.id !== currentUser.id);
-    const nextPasswords = getStoredPasswords();
-    delete nextPasswords[currentUser.id];
+    window.localStorage.setItem(GOOGLE_SIGNUP_REQUEST_STORAGE_KEY, JSON.stringify({
+      name: name.trim(),
+      requestedRole,
+    } satisfies GoogleSignupRequest));
 
-    setUserList(nextUserList);
-    saveRegisteredProfiles(nextUserList.filter(user => user.id.startsWith('custom_')), nextPasswords);
-    window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
-    setCurrentUserState(nextUserList.find(u => u.role === 'reviewer') || nextUserList[0]);
-    return true;
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}${window.location.pathname}`,
+        skipBrowserRedirect: true,
+      },
+    });
+
+    if (error) {
+      clearStoredGoogleSignupRequest();
+      return { ok: false, message: error.message || 'Could not start Google sign-in.' };
+    }
+
+    if (!data.url) {
+      clearStoredGoogleSignupRequest();
+      return { ok: false, message: 'Supabase did not return a Google sign-in URL.' };
+    }
+
+    try {
+      const response = await fetch(data.url, { redirect: 'manual' });
+      if (response.status >= 400) {
+        const body = await response.json().catch(() => null) as { msg?: string; message?: string; error_description?: string } | null;
+        clearStoredGoogleSignupRequest();
+        return {
+          ok: false,
+          message: body?.msg || body?.message || body?.error_description || 'Google sign-in is not enabled in Supabase Auth providers.',
+        };
+      }
+    } catch {
+      // Browser/CORS handling may hide the provider redirect. Continue to Supabase when explicit Google auth is enabled.
+    }
+
+    window.location.assign(data.url);
+    return { ok: true };
+  };
+
+  const registerProfile = async (name: string, email: string, password: string, requestedRole: Role): Promise<AuthActionResult> => {
+    if (!supabase) return { ok: false, message: 'Supabase is not configured.' };
+    const trimmedName = name.trim();
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedPassword = password.trim();
+
+    if (!trimmedName || !trimmedEmail || !trimmedPassword) {
+      return { ok: false, message: 'Enter your name, email, and password.' };
+    }
+
+    if (trimmedPassword.length < 8) {
+      return { ok: false, message: 'Use at least 8 characters for the password.' };
+    }
+
+    const { data, error } = await supabase.auth.signUp({
+      email: trimmedEmail,
+      password: trimmedPassword,
+      options: {
+        data: {
+          name: trimmedName,
+          requested_role: requestedRole,
+        },
+        emailRedirectTo: `${window.location.origin}${window.location.pathname}`,
+      },
+    });
+
+    if (error) {
+      return { ok: false, message: error.message || 'Could not create the account.' };
+    }
+
+    if (!data.session) {
+      setAuthStatus('pending_confirmation');
+      setAuthError(null);
+      return {
+        ok: true,
+        needsEmailConfirmation: true,
+        message: 'Account created. Check your email to confirm it, then sign in.',
+      };
+    }
+
+    return { ok: true, message: 'Account created. It will open after Mina/admin approves it.' };
+  };
+
+  const logout = async () => {
+    if (supabase) {
+      await supabase.auth.signOut({ scope: 'local' });
+    }
+    clearStoredGoogleSignupRequest();
+    setAuthProfile(null);
+    setCurrentUserState(GUEST_USER);
+    setUserList(initialUsers);
+    setAccountProfiles([]);
+    setAuthStatus(isSupabaseConfigured ? 'signed_out' : 'configuration_missing');
+    resetWorkspaceState();
+  };
+
+  const updatePendingProfile = async (name: string, requestedRole: Role): Promise<AuthActionResult> => {
+    if (!authProfile) return { ok: false, message: 'No account profile is loaded.' };
+    try {
+      const profile = await updatePendingProfileRequest(authProfile.id, name, requestedRole);
+      setAuthProfile(profile);
+      setCurrentUserState(profileToUser(profile));
+      return { ok: true, message: 'Your request was updated.' };
+    } catch (error) {
+      return { ok: false, message: getErrorMessage(error, 'Could not update your request.') };
+    }
+  };
+
+  const approveAccount = async (profileId: string, role: Role, legacyId: string | null): Promise<AuthActionResult> => {
+    if (!currentUser.isAdmin) return { ok: false, message: 'Only admins can approve accounts.' };
+
+    try {
+      const approvedProfile = await approveUserProfile(profileId, role, legacyId, currentUser.id);
+      const migration = legacyId ? await migrateLegacyUserData(legacyId, profileId) : { tasksUpdated: 0, notificationsUpdated: 0 };
+      const profiles = await refreshProfiles();
+      setAccountProfiles(profiles);
+
+      if (authProfile?.id === approvedProfile.id) {
+        await applyApprovedProfile(approvedProfile);
+      }
+
+      if (migration.tasksUpdated > 0 || migration.notificationsUpdated > 0) {
+        const [latestTasks, latestNotifications] = await Promise.all([fetchSupabaseTasks(), fetchSupabaseNotifications()]);
+        setTasks(reviveTaskFiles(latestTasks, usersObj));
+        setNotifications(latestNotifications.filter(notification => notification?.id));
+      }
+
+      return {
+        ok: true,
+        message: legacyId
+          ? `Approved and migrated ${migration.tasksUpdated} task(s), ${migration.notificationsUpdated} notification(s).`
+          : 'Account approved.',
+      };
+    } catch (error) {
+      return { ok: false, message: getErrorMessage(error, 'Could not approve the account.') };
+    }
+  };
+
+  const rejectAccount = async (profileId: string): Promise<AuthActionResult> => {
+    if (!currentUser.isAdmin) return { ok: false, message: 'Only admins can reject accounts.' };
+
+    try {
+      const profile = await rejectUserProfile(profileId, currentUser.id);
+      const profiles = await refreshProfiles();
+      setAccountProfiles(profiles);
+      if (authProfile?.id === profile.id) {
+        setAuthProfile(profile);
+        setCurrentUserState(profileToUser(profile));
+        setAuthStatus('rejected');
+      }
+      return { ok: true, message: 'Account rejected.' };
+    } catch (error) {
+      return { ok: false, message: getErrorMessage(error, 'Could not reject the account.') };
+    }
   };
 
   const archiveTask = (taskId: string, reason = 'Archived manually') => {
@@ -706,7 +1009,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const migrateLocalDataToSupabase = async () => {
-    if (!isSupabaseConfigured || !localMigrationState || isMigratingLocalData) return;
+    if (authStatus !== 'approved' || !isSupabaseConfigured || !localMigrationState || isMigratingLocalData) return;
 
     setIsMigratingLocalData(true);
     setPersistenceError(null);
@@ -731,7 +1034,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await clearAppState();
     } catch (error) {
       console.error('Failed to migrate local data to Supabase', error);
-      setPersistenceError(error instanceof Error ? error.message : 'Failed to migrate local data.');
+      setPersistenceError(getErrorMessage(error, 'Failed to migrate local data.'));
     } finally {
       setIsMigratingLocalData(false);
     }
@@ -745,14 +1048,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const taskIndex = tasks.findIndex(t => t.id === taskId);
     if (taskIndex !== -1) {
       const task = tasks[taskIndex];
+      const reviewerIds = getUserIdsByRole(userList, ['reviewer', 'admin']);
+      const artDirectorIds = getUserIdsByRole(userList, ['art_director']);
+      const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
       if (newStatus === 'approved_by_art_director' && task.status !== newStatus) {
-        addNotifications([MARWA_ID, DINA_ID, MINA_ID, task.createdBy, ...task.handledBy], taskId, `Marwa approved "${task.name}".`);
+        addNotifications([...artDirectorIds, ...teamLeaderIds, ...reviewerIds, task.createdBy, ...task.handledBy], taskId, `Art director approved "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_reviewer' && task.status !== newStatus) {
-        addNotifications([MARWA_ID, DINA_ID, task.createdBy], taskId, `Mina requested changes on "${task.name}".`);
+        addNotifications([...artDirectorIds, ...teamLeaderIds, task.createdBy], taskId, `Reviewer requested changes on "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_art_director' && task.status !== newStatus) {
-        addNotifications([DINA_ID, MINA_ID, task.createdBy], taskId, `Marwa rejected "${task.name}" and requested changes.`);
+        addNotifications([...teamLeaderIds, ...reviewerIds, task.createdBy], taskId, `Art director rejected "${task.name}" and requested changes.`);
       } else if ((newStatus === 'reviewer_approved' || newStatus === 'sent_to_art_director') && task.status !== newStatus) {
-        addNotifications([MARWA_ID, DINA_ID], taskId, `Mina sent "${task.name}" to Marwa for approval.`);
+        addNotifications([...artDirectorIds, ...teamLeaderIds], taskId, `Reviewer sent "${task.name}" to art director for approval.`);
       }
     }
 
@@ -776,7 +1082,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const addTask = (task: Task) => {
-    const normalizedTask = normalizeMinaCreatedTask(task);
+    const normalizedTask = normalizeReviewerCreatedTask(task, usersObj);
     queueTaskBroadcast(normalizedTask.id);
     setTasks(prev => [normalizedTask, ...prev]);
   };
@@ -785,7 +1091,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
 
-    const sendToMarwa = task.createdBy === MINA_ID || task.status === 'changes_requested_by_art_director' || task.reviewMode === 'direct_to_ad';
+    const sendToMarwa = isReviewerCreatedTask(task, usersObj) || task.status === 'changes_requested_by_art_director' || task.reviewMode === 'direct_to_ad';
     const nextStatus: TaskStatus = sendToMarwa
       ? 'sent_to_art_director'
       : task.reviewMode === 'quick_look'
@@ -793,7 +1099,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         : 'waiting_reviewer_full_review';
     const nextOwnerRole: Role = sendToMarwa ? 'art_director' : 'reviewer';
     const creatorName = usersObj[task.createdBy]?.name || 'Someone';
-    const recipients = (sendToMarwa ? [MARWA_ID, DINA_ID, MINA_ID] : [MINA_ID, DINA_ID]).filter(userId => userId !== task.createdBy);
+    const reviewerIds = getUserIdsByRole(userList, ['reviewer', 'admin']);
+    const artDirectorIds = getUserIdsByRole(userList, ['art_director']);
+    const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
+    const recipients = (sendToMarwa
+      ? [...artDirectorIds, ...teamLeaderIds, ...reviewerIds]
+      : [...reviewerIds, ...teamLeaderIds]
+    ).filter(userId => userId !== task.createdBy);
 
     addNotifications(recipients, taskId, `${creatorName} uploaded V${version.versionNumber} for "${task.name}".`);
 
@@ -889,6 +1201,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   return (
     <AppContext.Provider value={{
       currentUser,
+      authStatus,
+      authProfile,
+      authError,
+      accountProfiles,
       environment,
       tasks,
       users: usersObj,
@@ -898,7 +1214,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       persistenceError,
       localMigrationCount: (localMigrationState?.tasks.length || 0) + (localMigrationState?.notifications.length || 0),
       isMigratingLocalData,
-      setCurrentUser,
       setEnvironment,
       updateTaskStatus,
       updateTaskPriority,
@@ -910,9 +1225,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addNotification,
       markNotificationAsRead,
       loginWithPassword,
-      logout,
+      signInWithGoogle,
       registerProfile,
-      deleteCurrentProfile,
+      logout,
+      updatePendingProfile,
+      approveAccount,
+      rejectAccount,
       archiveTask,
       unarchiveTask,
       migrateLocalDataToSupabase,

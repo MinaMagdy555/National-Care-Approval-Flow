@@ -2,7 +2,6 @@ import React, { useState, useRef } from 'react';
 import { useAppStore } from '../lib/store';
 import { Upload, X, File, Image as ImageIcon, FileVideo, CheckCircle2 } from 'lucide-react';
 import { Task, ReviewMode, Priority, TaskType, UploadedTaskFile } from '../lib/types';
-import { initialUsers } from '../lib/mockData';
 import { CustomSelect } from './CustomSelect';
 import { uploadTaskFiles } from '../lib/supabaseDb';
 import { sanitizeHandledBy } from '../lib/handlerUtils';
@@ -12,7 +11,7 @@ import { addLowResPreviewsToFiles } from '../lib/previewUtils';
 const FORM_SELECT_BUTTON_CLASS = 'rounded-xl border-slate-300 px-4 py-3 text-sm font-bold text-slate-900 shadow-none hover:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500';
 
 export function CreateTask() {
-  const { currentUser, environment, addTask, addNotification } = useAppStore();
+  const { currentUser, userList, users, environment, addTask, addNotification } = useAppStore();
   const [taskName, setTaskName] = useState('');
   const [createdBy, setCreatedBy] = useState('');
   const [taskType, setTaskType] = useState<TaskType>('video');
@@ -22,18 +21,19 @@ export function CreateTask() {
   const [fileError, setFileError] = useState('');
   const [isSuccess, setIsSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const canChooseCreator = currentUser.id === 'user_1';
+  const realUsers = userList.filter(user => !user.id.startsWith('user_'));
+  const canChooseCreator = currentUser.role === 'reviewer' || currentUser.role === 'admin' || Boolean(currentUser.isAdmin);
   const selectedCreatorId = canChooseCreator ? createdBy : currentUser.id;
-  const isMinaCreatedTask = selectedCreatorId === 'user_1';
-  const creatorOptions = [
-    { value: 'user_1', label: 'Mina' },
-    { value: 'user_4', label: 'Mariam' },
-    { value: 'user_5', label: 'Noreen' },
-    { value: 'user_6', label: 'Yomna' },
-  ];
+  const selectedCreatorRole = users[selectedCreatorId]?.role || currentUser.role;
+  const isReviewerCreatedTask = selectedCreatorRole === 'reviewer' || selectedCreatorRole === 'admin';
+  const creatorOptions = realUsers
+    .filter(user => ['team_member', 'reviewer', 'admin'].includes(user.role))
+    .map(user => ({ value: user.id, label: user.name }));
   const handlerOptions = [
     { value: '', label: 'No second handler' },
-    ...creatorOptions.filter(option => option.value !== selectedCreatorId),
+    ...realUsers
+      .filter(user => ['team_member', 'reviewer', 'admin'].includes(user.role) && user.id !== selectedCreatorId)
+      .map(user => ({ value: user.id, label: user.name })),
   ];
   const taskTypeOptions = [
     { value: 'video', label: 'Video' },
@@ -91,7 +91,7 @@ export function CreateTask() {
     e.preventDefault();
     if (!taskName || !selectedCreatorId || files.length === 0) return;
 
-    const creator = initialUsers.find(u => u.id === selectedCreatorId);
+    const creator = users[selectedCreatorId];
     const newTaskId = Math.random().toString(36).substring(7);
     const localFiles: UploadedTaskFile[] = files.map(file => ({
       id: Math.random().toString(36).substring(7),
@@ -112,7 +112,7 @@ export function CreateTask() {
     }
     const thumbnailFile = uploadedFiles.find(file => file.previewUrl && file.previewStoragePath);
 
-    const newTaskStatus = isMinaCreatedTask
+    const newTaskStatus = isReviewerCreatedTask
       ? 'sent_to_art_director'
       : reviewMode === 'quick_look'
         ? 'waiting_reviewer_quick_look'
@@ -123,12 +123,12 @@ export function CreateTask() {
       code: `TSK-2026-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`,
       name: taskName,
       taskType,
-      reviewMode: isMinaCreatedTask ? 'direct_to_ad' : reviewMode,
+      reviewMode: isReviewerCreatedTask ? 'direct_to_ad' : reviewMode,
       environment,
       createdBy: selectedCreatorId,
       handledBy: sanitizeHandledBy([selectedCreatorId, canChooseCreator ? additionalHandlerId : '']),
       status: newTaskStatus,
-      currentOwnerRole: isMinaCreatedTask ? 'art_director' : 'reviewer',
+      currentOwnerRole: isReviewerCreatedTask ? 'art_director' : 'reviewer',
       currentOwnerUserId: null,
       priority: isReviewer ? priority : 'not_set',
       deadlineText: isReviewer ? deadline : null,
@@ -151,9 +151,9 @@ export function CreateTask() {
 
     addTask(newTask);
 
-    const notificationRecipients = selectedCreatorId === 'user_1'
-      ? ['user_3', 'user_2']
-      : ['user_1', 'user_3'];
+    const notificationRecipients = isReviewerCreatedTask
+      ? realUsers.filter(user => user.role === 'team_leader' || user.role === 'art_director').map(user => user.id)
+      : realUsers.filter(user => user.role === 'team_leader' || user.role === 'reviewer' || user.role === 'admin').map(user => user.id);
 
     Array.from(new Set(notificationRecipients)).forEach(userId => {
       addNotification({

@@ -6,11 +6,12 @@ import { TaskDetail } from './components/TaskDetail';
 import { ReviewQueue } from './components/ReviewQueue';
 import { NotificationsList } from './components/Notifications';
 import { CreateTask } from './components/CreateTask';
+import { AuthScreen } from './components/AuthScreen';
+import { AdminAccounts } from './components/AdminAccounts';
 import { isDueThisWeek, isDueToday } from './lib/deadlineUtils';
 import { isTaskArchived } from './lib/archiveUtils';
 import { Menu } from 'lucide-react';
 
-const FULL_WORKSPACE_VIEWERS = ['user_1', 'user_2', 'user_3'];
 let notificationAudioContext: AudioContext | null = null;
 
 type AppRoute = {
@@ -90,7 +91,7 @@ async function playNotificationSound() {
   }
 }
 
-function AppContent() {
+function WorkspaceContent() {
   const initialRoute = getRouteFromUrl();
   const [currentView, setView] = useState(initialRoute.view);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(initialRoute.taskId);
@@ -187,7 +188,7 @@ function AppContent() {
     setIsSidebarOpen(false);
   };
 
-  const canViewFullWorkspace = FULL_WORKSPACE_VIEWERS.includes(currentUser.id);
+  const canViewFullWorkspace = Boolean(currentUser.isAdmin) || ['reviewer', 'art_director', 'team_leader', 'admin'].includes(currentUser.role);
   const envTasks = tasks.filter(t => t.environment === environment);
   const activeEnvTasks = envTasks.filter(task => !isTaskArchived(task));
   const archivedEnvTasks = envTasks.filter(isTaskArchived);
@@ -204,6 +205,8 @@ function AppContent() {
         return <Dashboard onOpenTask={handleOpenTask} onNavigate={handleNavigate} />;
       case 'notifications':
         return <NotificationsList onOpenTask={handleOpenTask} />;
+      case 'account_admin':
+        return <AdminAccounts />;
       case 'create_task':
         return <CreateTask />;
       case 'review_queue': {
@@ -216,7 +219,7 @@ function AppContent() {
       }
       case 'ad_queue': {
         const needsAd = visibleEnvTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director'));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsAd} title="Needs Marwa Action" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsAd} title="Needs Art Director Action" />;
       }
       case 'due_today': {
         const dueToday = visibleEnvTasks.filter(isDueToday);
@@ -228,11 +231,11 @@ function AppContent() {
       }
       case 'waiting_for_mina': {
         const waitingForMina = visibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMina} title="Waiting for Mina" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMina} title="Waiting for Reviewer" />;
       }
       case 'waiting_for_marwa': {
         const waitingForMarwa = visibleEnvTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMarwa} title="Waiting for Marwa" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMarwa} title="Waiting for Art Director" />;
       }
       case 'approved_by_me': {
         const approved = visibleEnvTasks.filter(t => t.status === 'approved_by_art_director');
@@ -325,6 +328,16 @@ function AppContent() {
   );
 }
 
+function AppContent() {
+  const { authStatus } = useAppStore();
+
+  if (authStatus !== 'approved') {
+    return <AuthScreen />;
+  }
+
+  return <WorkspaceContent />;
+}
+
 class AppErrorBoundary extends React.Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null };
 
@@ -340,6 +353,7 @@ class AppErrorBoundary extends React.Component<{ children: ReactNode }, { error:
     window.localStorage.removeItem('national-care-current-user-id');
     window.localStorage.removeItem('national-care-registered-users');
     window.localStorage.removeItem('national-care-registered-passwords');
+    window.localStorage.removeItem('national-care-google-signup-request');
 
     if ('indexedDB' in window) {
       await new Promise<void>(resolve => {

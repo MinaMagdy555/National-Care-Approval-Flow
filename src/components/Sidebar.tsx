@@ -14,15 +14,13 @@ import {
   LayoutDashboard,
   LogOut,
   Send,
+  ShieldCheck,
   Upload,
-  UserPlus,
   UserRoundCheck,
   X,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { userRoleLabels } from '../lib/mockData';
-import { CustomSelect } from './CustomSelect';
-import { Role } from '../lib/types';
 
 type MenuItem = {
   id: string;
@@ -42,15 +40,8 @@ export function Sidebar({
   isOpen: boolean;
   onClose: () => void;
 }) {
-  const { currentUser, userList, notifications, loginWithPassword, logout, registerProfile, deleteCurrentProfile } = useAppStore();
+  const { currentUser, notifications, logout } = useAppStore();
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
-  const [isAuthOpen, setIsAuthOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [loginUserId, setLoginUserId] = useState(currentUser.id);
-  const [password, setPassword] = useState('');
-  const [registerName, setRegisterName] = useState('');
-  const [registerRole, setRegisterRole] = useState<Role>('team_member');
-  const [loginError, setLoginError] = useState('');
 
   const unreadCount = notifications ? notifications.filter(n => n.userId === currentUser.id && !n.read).length : 0;
 
@@ -84,44 +75,11 @@ export function Sidebar({
     onClose();
   };
 
-  const handleLogin = (event: React.FormEvent) => {
-    event.preventDefault();
-    const success = loginWithPassword(loginUserId, password);
-    if (!success) {
-      setLoginError('Wrong password for this profile.');
-      return;
-    }
-
-    setPassword('');
-    setLoginError('');
-    setIsAuthOpen(false);
-    onClose();
-  };
-
-  const handleRegister = (event: React.FormEvent) => {
-    event.preventDefault();
-    const success = registerProfile(registerName, password, registerRole);
-    if (!success) {
-      setLoginError('Enter a name and password.');
-      return;
-    }
-
-    setRegisterName('');
-    setPassword('');
-    setLoginError('');
-    setIsAuthOpen(false);
-    onClose();
-  };
-
-  const handleDeleteCurrentProfile = () => {
-    const success = deleteCurrentProfile();
-    setLoginError(success ? '' : 'Built-in profiles cannot be deleted.');
-  };
-
   const getMenuForRole = (): MenuItem[] => {
     const commonTop = [
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { id: 'notifications', label: `Notifications${unreadCount > 0 ? ` (${unreadCount})` : ''}`, icon: Bell },
+      ...(currentUser.isAdmin ? [{ id: 'account_admin', label: 'Account Approvals', icon: ShieldCheck }] : []),
     ];
 
     switch (currentUser.role) {
@@ -133,8 +91,8 @@ export function Sidebar({
             id: 'task_center', label: 'All Tasks', icon: ClipboardList,
             children: [
               { id: 'my_tasks', label: 'My Tasks', icon: UserRoundCheck },
-              { id: 'waiting_for_mina', label: 'Waiting for Mina', icon: Clock },
-              { id: 'waiting_for_marwa', label: 'Waiting for Marwa', icon: Send },
+              { id: 'waiting_for_mina', label: 'Waiting for Reviewer', icon: Clock },
+              { id: 'waiting_for_marwa', label: 'Waiting for Art Director', icon: Send },
               { id: 'rejected_reopened', label: 'Rejected', icon: CircleX },
               { id: 'approved_by_me', label: 'Approved', icon: Check },
               { id: 'archived_tasks', label: 'Archived', icon: Archive },
@@ -151,7 +109,7 @@ export function Sidebar({
               { id: 'all_tasks', label: 'All Tasks', icon: ClipboardList },
               { id: 'review_queue', label: 'Needs Full Review', icon: FilePenLine },
               { id: 'quick_look_queue', label: 'Needs Quick Look', icon: FileText },
-              { id: 'ad_queue', label: 'Needs Marwa Action', icon: Send },
+              { id: 'ad_queue', label: 'Needs Art Director', icon: Send },
               { id: 'approved_by_me', label: 'Approved', icon: Check },
               { id: 'rejected_reopened', label: 'Rejected', icon: CircleX },
               { id: 'archived_tasks', label: 'Archived', icon: Archive },
@@ -173,22 +131,21 @@ export function Sidebar({
           }
         ];
       case 'team_leader':
+      case 'admin':
         return [
           ...commonTop,
           {
             id: 'task_center', label: 'All Tasks', icon: ClipboardList,
             children: [
               { id: 'all_tasks', label: 'All Tasks', icon: ClipboardList },
-              { id: 'waiting_for_mina', label: 'Waiting for Mina', icon: Clock },
-              { id: 'waiting_for_marwa', label: 'Waiting for Marwa', icon: Send },
+              { id: 'waiting_for_mina', label: 'Waiting for Reviewer', icon: Clock },
+              { id: 'waiting_for_marwa', label: 'Waiting for Art Director', icon: Send },
               { id: 'rejected_reopened', label: 'Rejected', icon: CircleX },
               { id: 'approved_by_me', label: 'Approved', icon: Check },
               { id: 'archived_tasks', label: 'Archived', icon: Archive },
             ]
           }
         ];
-      case 'admin':
-        return [];
       default:
         return [];
     }
@@ -309,141 +266,20 @@ export function Sidebar({
               <p className="text-[10px] text-slate-400 leading-tight mt-0.5">{currentUser.jobTitle || userRoleLabels[currentUser.role]}</p>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 gap-2">
             <button
               type="button"
               onClick={() => {
-                setLoginUserId(currentUser.id);
-                setPassword('');
-                setLoginError('');
-                setAuthMode('login');
-                setIsAuthOpen(true);
+                void logout();
+                onClose();
               }}
               className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-white transition-colors hover:bg-white/10"
             >
-              <LogOut className="h-3.5 w-3.5" /> Logout
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setLoginUserId(currentUser.id);
-                setRegisterName('');
-                setPassword('');
-                setLoginError('');
-                setAuthMode('register');
-                setIsAuthOpen(true);
-              }}
-              className="inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-black text-slate-400 transition-colors hover:bg-white/5 hover:text-white"
-            >
-              <UserPlus className="h-3.5 w-3.5" /> Sign Up
+              <LogOut className="h-3.5 w-3.5" /> Sign Out
             </button>
           </div>
         </div>
       </aside>
-
-      {isAuthOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-              <div>
-                <h2 className="text-lg font-black text-slate-900">{authMode === 'login' ? 'Account' : 'Register'}</h2>
-                <p className="text-xs font-semibold text-slate-500">
-                  {authMode === 'login' ? 'Switch profile or log out from this device.' : 'Create a temporary local profile.'}
-                </p>
-              </div>
-              <button type="button" onClick={() => setIsAuthOpen(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-900">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            {authMode === 'login' ? (
-              <form onSubmit={handleLogin} className="space-y-4 p-5">
-                <div>
-                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Profile</label>
-                  <CustomSelect
-                    value={loginUserId}
-                    onChange={setLoginUserId}
-                    options={userList.map(user => ({ value: user.id, label: user.name }))}
-                    buttonClassName="rounded-xl border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 shadow-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Password</label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={event => setPassword(event.target.value)}
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-                    autoFocus
-                  />
-                </div>
-                {loginError && <p className="text-sm font-bold text-rose-600">{loginError}</p>}
-                <div className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">
-                  Mina: 1, Dina: 2, Marwa: 3, Mariam: 4, Noreen: 5, Yomna: 6.
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPassword('');
-                      setLoginError('');
-                      setAuthMode('register');
-                    }}
-                    className="rounded-xl border border-slate-200 px-4 py-3 font-black text-slate-600 transition-colors hover:bg-slate-50"
-                  >
-                    Register
-                  </button>
-                  <button type="submit" className="rounded-xl bg-indigo-600 px-4 py-3 font-black text-white transition-colors hover:bg-indigo-700">
-                    Login
-                  </button>
-                </div>
-                <button type="button" onClick={handleDeleteCurrentProfile} className="w-full rounded-xl border border-rose-200 px-4 py-2.5 text-sm font-black text-rose-600 transition-colors hover:bg-rose-50">
-                  Delete Current Registered Profile
-                </button>
-              </form>
-            ) : (
-              <form onSubmit={handleRegister} className="space-y-4 p-5">
-                <div>
-                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Name</label>
-                  <input
-                    type="text"
-                    value={registerName}
-                    onChange={event => setRegisterName(event.target.value)}
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-                    autoFocus
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Role</label>
-                  <CustomSelect
-                    value={registerRole}
-                    onChange={value => setRegisterRole(value as Role)}
-                    options={[
-                      { value: 'team_member', label: 'Team Member' },
-                      { value: 'reviewer', label: 'Reviewer' },
-                      { value: 'art_director', label: 'Art Director' },
-                      { value: 'team_leader', label: 'Team Leader' },
-                    ]}
-                    buttonClassName="rounded-xl border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 shadow-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Password</label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={event => setPassword(event.target.value)}
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-                {loginError && <p className="text-sm font-bold text-rose-600">{loginError}</p>}
-                <button type="submit" className="w-full rounded-xl bg-indigo-600 px-4 py-3 font-black text-white transition-colors hover:bg-indigo-700">
-                  Register
-                </button>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
     </>
   );
 }

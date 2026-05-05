@@ -9,6 +9,8 @@ function cleanEnvValue(value: string | undefined) {
 
 const supabaseUrl = cleanEnvValue(process.env.VITE_SUPABASE_URL);
 const supabaseAnonKey = cleanEnvValue(process.env.VITE_SUPABASE_ANON_KEY);
+const adminEmail = cleanEnvValue(process.env.VITE_ADMIN_EMAIL);
+const googleAuthEnabled = cleanEnvValue(process.env.VITE_ENABLE_GOOGLE_AUTH);
 
 function fail(message: string): never {
   console.error(`FAIL ${message}`);
@@ -40,6 +42,14 @@ if (supabaseAnonKey.startsWith('sb_secret_')) {
 
 if (!supabaseAnonKey.startsWith('sb_publishable_') && !supabaseAnonKey.startsWith('eyJ')) {
   fail('VITE_SUPABASE_ANON_KEY does not look like a Supabase publishable or anon public key.');
+}
+
+if (adminEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail)) {
+  fail('VITE_ADMIN_EMAIL must be an email address when provided.');
+}
+
+if (googleAuthEnabled && !['true', 'false'].includes(googleAuthEnabled)) {
+  fail('VITE_ENABLE_GOOGLE_AUTH must be "true" or "false" when provided.');
 }
 
 console.log('PASS Environment variables are valid for a browser Supabase client.');

@@ -28,11 +28,6 @@ type ReviewNoteSection = {
   localPreviewUrl?: string;
 };
 
-const MINA_ID = 'user_1';
-const MARWA_ID = 'user_2';
-const DINA_ID = 'user_3';
-const INTERNAL_REVIEW_VIEWERS = [MINA_ID, MARWA_ID, DINA_ID];
-
 export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => void }) {
   const { tasks, currentUser, users, updateTaskStatus, updateTaskPriority, addTaskComment, addTaskVersion, replaceTaskVersionFiles, updateTaskMediaPreviews, archiveTask, unarchiveTask } = useAppStore();
   const task = tasks.find(t => t.id === taskId);
@@ -58,7 +53,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const previewOptimizationAttemptedRef = useRef<Set<string>>(new Set());
   const updateTaskMediaPreviewsRef = useRef(updateTaskMediaPreviews);
 
-  const canViewFullWorkspace = INTERNAL_REVIEW_VIEWERS.includes(currentUser.id);
+  const canViewFullWorkspace = Boolean(currentUser.isAdmin) || ['reviewer', 'art_director', 'team_leader', 'admin'].includes(currentUser.role);
 
   useEffect(() => {
     setSelectedVersionIndex(0);
@@ -101,7 +96,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
   const statusInfo = getStatusInfo(task, currentUser.role);
   const nextAction = getNextActionLabel(task, currentUser.role);
-  const creator = initialUsers.find(u => u.id === task.createdBy)?.name || 'Unknown';
+  const creator = users[task.createdBy]?.name || initialUsers.find(u => u.id === task.createdBy)?.name || 'Unknown';
   const handledByNames = task.handledBy
     .filter(isAssignableHandler)
     .map(id => users[id]?.name || initialUsers.find(u => u.id === id)?.name)
@@ -118,12 +113,16 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
   const canResubmitVersion = isSelfCreatedTask && ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(task.status);
   const isInternalReviewTask = !isDetailedReviewType;
-  const canViewInternalReviewNotes = INTERNAL_REVIEW_VIEWERS.includes(currentUser.id);
-  const isInternalMinaComment = (comment: { authorId: string; action: string }) => (
-    isInternalReviewTask && comment.authorId === MINA_ID && comment.action === 'sent_to_marwa'
+  const canViewInternalReviewNotes = canViewFullWorkspace;
+  const isReviewerCommentAuthor = (authorId: string) => {
+    const role = users[authorId]?.role || initialUsers.find(user => user.id === authorId)?.role;
+    return role === 'reviewer' || role === 'admin';
+  };
+  const isInternalReviewerComment = (comment: { authorId: string; action: string }) => (
+    isInternalReviewTask && isReviewerCommentAuthor(comment.authorId) && comment.action === 'sent_to_marwa'
   );
-  const visibleComments = (task.comments || []).filter(comment => !isInternalMinaComment(comment) || canViewInternalReviewNotes);
-  const minaForwardableComments = (task.comments || []).filter(comment => isInternalMinaComment(comment));
+  const visibleComments = (task.comments || []).filter(comment => !isInternalReviewerComment(comment) || canViewInternalReviewNotes);
+  const minaForwardableComments = (task.comments || []).filter(comment => isInternalReviewerComment(comment));
   const minaForwardableFeedback = minaForwardableComments.flatMap(comment => {
     const items: Array<{
       id: string;
@@ -413,7 +412,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
     const forwardedSections: TaskCommentSection[] = selectedMinaFeedback.map(item => ({
       id: Math.random().toString(36).substring(7),
-      note: item.note ? `Mina note: ${item.note}` : 'Mina attached this screen for edits.',
+      note: item.note ? `Reviewer note: ${item.note}` : 'Reviewer attached this screen for edits.',
       imageName: item.imageName,
       imageUrl: item.imageUrl,
       imageStoragePath: item.imageStoragePath,
@@ -426,7 +425,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       addTaskComment(task.id, {
         authorId: currentUser.id,
         action: 'marwa_rejection',
-        message: message || 'Forwarded selected notes from Mina.',
+        message: message || 'Forwarded selected notes from reviewer.',
         sections: [...forwardedSections, ...marwaSections],
       });
       updateTaskStatus(task.id, 'changes_requested_by_art_director', 'team_member');
@@ -751,8 +750,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 }}
                 className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-sm transition-all focus:ring-4 focus:ring-indigo-100"
               >
-                {task.status === 'waiting_reviewer_full_review' ? 'Approve & Send to Marwa' : 
-                 task.status === 'waiting_reviewer_quick_look' ? 'Quick Look Done & Send to Marwa' : 'Send to Marwa'}
+                {task.status === 'waiting_reviewer_full_review' ? 'Approve & Send to Art Director' : 
+                 task.status === 'waiting_reviewer_quick_look' ? 'Quick Look Done & Send to Art Director' : 'Send to Art Director'}
               </button>
               {isDetailedReviewType && task.status !== 'draft' && (
                 <form onSubmit={handleRequestChanges} className="space-y-3 rounded-2xl border border-rose-100 bg-rose-50/40 p-3">
@@ -776,7 +775,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
           {currentUser.role === 'reviewer' && task.status === 'sent_to_art_director' && (
             <div className="text-sm font-medium text-gray-500 flex items-center gap-2 justify-center py-2">
-              <Check className="w-4 h-4" /> Sent to Marwa
+              <Check className="w-4 h-4" /> Sent to Art Director
             </div>
           )}
 
@@ -869,7 +868,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               <h3 className="mb-4 text-[11px] font-black uppercase tracking-wider text-slate-400">Comments</h3>
               <div className="space-y-3">
                 {visibleComments.map(comment => {
-                  const author = initialUsers.find(user => user.id === comment.authorId);
+                  const author = users[comment.authorId] || initialUsers.find(user => user.id === comment.authorId);
                   return (
                     <div key={comment.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                       <div className="mb-3 flex items-start justify-between gap-3">
@@ -933,7 +932,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
         <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-slate-200">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h3 className="text-lg font-black text-slate-900">Approve & Send to Marwa</h3>
+              <h3 className="text-lg font-black text-slate-900">Approve & Send to Art Director</h3>
               <button onClick={() => { setActionError(''); setModal(null); }} className="text-slate-400 hover:text-indigo-600 transition-colors"><X className="w-5 h-5"/></button>
             </div>
             <form onSubmit={handleSendToAD} className="p-6 space-y-5">
@@ -970,7 +969,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               {actionError && <p className="text-sm font-bold text-rose-600">{actionError}</p>}
               <div className="pt-2">
                 <button type="submit" disabled={isSavingAction} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">
-                  {isSavingAction ? 'Saving...' : 'Send to Marwa'}
+                  {isSavingAction ? 'Saving...' : 'Send to Art Director'}
                 </button>
               </div>
             </form>
@@ -999,7 +998,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               {minaForwardableFeedback.length > 0 && (
                 <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <div>
-                    <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-500">Mina's Internal Notes</h4>
+                    <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-500">Reviewer Internal Notes</h4>
                     <p className="mt-1 text-xs font-semibold text-slate-500">Select what should be sent to the task creator.</p>
                   </div>
                   <div className="space-y-2">
@@ -1031,7 +1030,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                                 }}
                                 className="mt-2 h-20 w-28 overflow-hidden rounded-lg border border-slate-200 bg-white"
                               >
-                                <img src={item.imageUrl} alt={item.imageName || 'Mina note screen'} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                                <img src={item.imageUrl} alt={item.imageName || 'Reviewer note screen'} loading="lazy" decoding="async" className="h-full w-full object-cover" />
                               </button>
                             )}
                           </div>
@@ -1042,8 +1041,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 </div>
               )}
               <div>
-                <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Marwa's Comment</label>
-                <textarea value={adRejectComment} onChange={event => setAdRejectComment(event.target.value)} rows={3} placeholder="Write new feedback, or select Mina's notes above, or do both..." className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-rose-500 outline-none"></textarea>
+                <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Art Director Comment</label>
+                <textarea value={adRejectComment} onChange={event => setAdRejectComment(event.target.value)} rows={3} placeholder="Write new feedback, or select reviewer notes above, or do both..." className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-rose-500 outline-none"></textarea>
               </div>
               {renderADRejectNotes()}
               {actionError && <p className="text-sm font-bold text-rose-600">{actionError}</p>}

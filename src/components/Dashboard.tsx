@@ -2,7 +2,6 @@ import React from 'react';
 import { useAppStore } from '../lib/store';
 import { TaskCard } from './TaskCard';
 import { AlertCircle, Clock, CheckCircle2, History, LucideIcon, XCircle } from 'lucide-react';
-import { initialUsers } from '../lib/mockData';
 import { isDueThisWeek, isDueToday } from '../lib/deadlineUtils';
 import { isTaskArchived } from '../lib/archiveUtils';
 
@@ -86,11 +85,11 @@ export function Dashboard({
   onOpenTask: (id: string) => void;
   onNavigate: (view: string) => void;
 }) {
-  const { tasks, currentUser, environment } = useAppStore();
+  const { tasks, currentUser, environment, userList } = useAppStore();
 
   const envTasks = tasks.filter(t => t.environment === environment && !isTaskArchived(t));
-  const minaName = initialUsers.find(u => u.role === 'reviewer')?.name.split(' ')[0] || 'Mina';
-  const marwaName = initialUsers.find(u => u.role === 'art_director')?.name.split(' ')[0] || 'Marwa';
+  const reviewerName = userList.find(u => u.role === 'reviewer' || u.role === 'admin')?.name.split(' ')[0] || 'Reviewer';
+  const artDirectorName = userList.find(u => u.role === 'art_director')?.name.split(' ')[0] || 'Art director';
   const isMemberOrLeader = currentUser.role === 'team_member' || currentUser.role === 'team_leader';
 
   let needsAction = [];
@@ -147,7 +146,7 @@ export function Dashboard({
             {isMemberOrLeader ? (
               <>
             <SummaryCard
-              label={`Waiting for ${minaName}`}
+              label={`Waiting for ${reviewerName}`}
               value={waitingForMina.length}
               icon={AlertCircle}
               textClassName="text-amber-800"
@@ -156,7 +155,7 @@ export function Dashboard({
               onClick={() => onNavigate('waiting_for_mina')}
             />
             <SummaryCard
-              label={`Waiting for ${marwaName}`}
+              label={`Waiting for ${artDirectorName}`}
               value={waitingForMarwa.length}
               icon={History}
               textClassName="text-slate-800"
@@ -204,7 +203,7 @@ export function Dashboard({
               onClick={() => onNavigate('quick_look_queue')}
             />
             <SummaryCard
-              label={`Waiting for ${marwaName}`}
+              label={`Waiting for ${artDirectorName}`}
               value={waitingMarwaCount}
               icon={History}
               textClassName="text-slate-800"
