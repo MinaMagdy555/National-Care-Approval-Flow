@@ -15,7 +15,8 @@ const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
 
 const INPUT_CLASS = 'w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500';
 const SELECT_CLASS = 'rounded-xl border-slate-300 px-3 py-2.5 text-sm font-bold text-slate-900 shadow-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500';
-const PRIMARY_BUTTON_CLASS = 'flex w-full appearance-none items-center justify-center gap-2 rounded-xl border-0 bg-indigo-600 px-4 py-3 font-black text-white shadow-none outline-none ring-0 transition-colors hover:bg-indigo-700 focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-indigo-300';
+const PRIMARY_BUTTON_CLASS = 'flex w-full select-none appearance-none items-center justify-center gap-2 rounded-xl border-0 bg-indigo-600 px-4 py-3 font-black text-white shadow-none outline-none ring-0 transition-colors hover:bg-indigo-700 focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-indigo-300';
+const SECONDARY_BUTTON_CLASS = 'flex w-full select-none items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-3 font-black text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400 disabled:opacity-100';
 
 export function AuthScreen() {
   const {
@@ -137,7 +138,7 @@ export function AuthScreen() {
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="w-full rounded-xl border border-slate-200 px-4 py-3 font-black text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                className="w-full select-none rounded-xl border border-slate-200 px-4 py-3 font-black text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Update Request
               </button>
@@ -146,7 +147,7 @@ export function AuthScreen() {
           <button
             type="button"
             onClick={() => void logout()}
-            className="mt-3 w-full rounded-xl bg-slate-900 px-4 py-3 font-black text-white transition-colors hover:bg-slate-800"
+            className="mt-3 w-full select-none rounded-xl bg-slate-900 px-4 py-3 font-black text-white transition-colors hover:bg-slate-800"
           >
             Sign Out
           </button>
@@ -231,7 +232,7 @@ export function AuthScreen() {
             type="button"
             onClick={handleGoogle}
             disabled={isSubmitting || !isGoogleAuthEnabled}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-3 font-black text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            className={SECONDARY_BUTTON_CLASS}
             title={isGoogleAuthEnabled ? 'Continue with Google' : 'Enable Google in Supabase and set VITE_ENABLE_GOOGLE_AUTH=true'}
           >
             <Mail className="h-4 w-4" />
@@ -244,7 +245,7 @@ export function AuthScreen() {
               setPassword('');
               setMode(mode === 'login' ? 'register' : 'login');
             }}
-            className="w-full rounded-xl px-4 py-2 text-sm font-black text-indigo-700 transition-colors hover:bg-indigo-50"
+            className="w-full select-none rounded-xl px-4 py-2 text-sm font-black text-indigo-700 transition-colors hover:bg-indigo-50"
           >
             {mode === 'login' ? 'Create a new account' : 'Already have an account? Sign in'}
           </button>
