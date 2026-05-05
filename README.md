@@ -55,7 +55,12 @@ Vercel will deploy from `main` automatically after each push.
 4. In [supabase.sql](supabase.sql), change `mina@example.com` in `app_private.settings.bootstrap_admin_email` to Mina's real email.
 5. In Supabase, open **SQL Editor** and run the SQL from [supabase.sql](supabase.sql).
 6. In **Authentication > Providers > Email**, keep email confirmation enabled.
-7. Optional Google sign-in: in **Authentication > Providers > Google**, enable Google, add the Google client ID/secret, and add `http://localhost:3000` plus your deployed app URL to the allowed redirect URLs.
+7. Optional Google sign-in setup:
+   - In Google Cloud, create an OAuth Client ID with application type **Web application**.
+   - In Google Cloud **Authorized JavaScript origins**, add `http://localhost:3000` and your deployed app origin.
+   - In Google Cloud **Authorized redirect URIs**, add your Supabase callback URL: `https://<project-ref>.supabase.co/auth/v1/callback`.
+   - In Supabase **Authentication > Providers > Google**, turn Google on, paste the Google client ID/secret, and save.
+   - In Supabase **Authentication > URL Configuration**, set the Site URL to your deployed app URL and add redirect URLs for `http://localhost:3000/**` plus your deployed app URL.
 8. Create Mina's account with the same email from step 4. After email confirmation, Mina is auto-approved as admin/reviewer.
 9. Other users can register with email/password or Google. Mina/admin approves them in **Account Approvals** and can map old `user_1` through `user_6` data during approval.
 

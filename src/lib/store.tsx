@@ -28,6 +28,7 @@ const GOOGLE_SIGNUP_REQUEST_STORAGE_KEY = 'national-care-google-signup-request';
 const SHARED_DATA_CHANNEL = 'approval-flow-shared-data';
 const SHARED_DATA_EVENT = 'state-change';
 const SHARED_DATA_POLL_INTERVAL_MS = 2500;
+const GOOGLE_PROVIDER_SETUP_MESSAGE = 'Google sign-in is disabled in Supabase. Open Supabase > Authentication > Providers > Google, turn Google on, add the Google Client ID and Secret, then save. Also confirm this site is allowed in Authentication > URL Configuration.';
 const GUEST_USER: User = {
   id: 'guest',
   name: 'Guest',
@@ -89,6 +90,17 @@ function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message) return error.message;
   if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') return error.message;
   return fallback;
+}
+
+function getGoogleAuthErrorMessage(message: string | undefined) {
+  const trimmedMessage = message?.trim();
+  const normalizedMessage = trimmedMessage?.toLowerCase() || '';
+
+  if (normalizedMessage.includes('provider is not enabled') || normalizedMessage.includes('unsupported provider')) {
+    return GOOGLE_PROVIDER_SETUP_MESSAGE;
+  }
+
+  return trimmedMessage || 'Could not start Google sign-in.';
 }
 
 function isLegacyUserId(userId: string) {
@@ -844,7 +856,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     if (error) {
       clearStoredGoogleSignupRequest();
-      return { ok: false, message: error.message || 'Could not start Google sign-in.' };
+      return { ok: false, message: getGoogleAuthErrorMessage(error.message) };
     }
 
     if (!data.url) {
@@ -859,7 +871,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         clearStoredGoogleSignupRequest();
         return {
           ok: false,
-          message: body?.msg || body?.message || body?.error_description || 'Google sign-in is not enabled in Supabase Auth providers.',
+          message: getGoogleAuthErrorMessage(body?.msg || body?.message || body?.error_description),
         };
       }
     } catch {
