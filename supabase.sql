@@ -326,8 +326,8 @@ revoke all on public.approval_notifications from anon;
 
 grant usage on schema public to anon, authenticated;
 grant select, update on public.user_profiles to authenticated;
-grant select, insert, update, delete on public.approval_tasks to authenticated;
-grant select, insert, update, delete on public.approval_notifications to authenticated;
+grant select, insert, update, delete on public.approval_tasks to anon, authenticated;
+grant select, insert, update, delete on public.approval_notifications to anon, authenticated;
 grant usage on schema app_private to anon, authenticated;
 grant execute on all functions in schema app_private to anon, authenticated;
 grant execute on function public.ensure_current_user_profile() to authenticated;
@@ -379,18 +379,20 @@ drop policy if exists "Allow public app reads notifications" on public.approval_
 drop policy if exists "Allow public app writes notifications" on public.approval_notifications;
 drop policy if exists "Approved users can use tasks" on public.approval_tasks;
 drop policy if exists "Approved users can use notifications" on public.approval_notifications;
+drop policy if exists "Demo users can share tasks" on public.approval_tasks;
+drop policy if exists "Demo users can share notifications" on public.approval_notifications;
 
-create policy "Approved users can use tasks"
+create policy "Demo users can share tasks"
 on public.approval_tasks for all
-to authenticated
-using (app_private.is_approved_user())
-with check (app_private.is_approved_user());
+to anon, authenticated
+using (true)
+with check (true);
 
-create policy "Approved users can use notifications"
+create policy "Demo users can share notifications"
 on public.approval_notifications for all
-to authenticated
-using (app_private.is_approved_user())
-with check (app_private.is_approved_user());
+to anon, authenticated
+using (true)
+with check (true);
 
 drop policy if exists "Allow public task file reads" on storage.objects;
 drop policy if exists "Allow public task file writes" on storage.objects;
@@ -398,27 +400,31 @@ drop policy if exists "Public task file reads" on storage.objects;
 drop policy if exists "Approved users can upload task files" on storage.objects;
 drop policy if exists "Approved users can update task files" on storage.objects;
 drop policy if exists "Approved users can delete task files" on storage.objects;
+drop policy if exists "Demo users can read task files" on storage.objects;
+drop policy if exists "Demo users can upload task files" on storage.objects;
+drop policy if exists "Demo users can update task files" on storage.objects;
+drop policy if exists "Demo users can delete task files" on storage.objects;
 
-create policy "Public task file reads"
+create policy "Demo users can read task files"
 on storage.objects for select
 to anon, authenticated
 using (bucket_id = 'task-files');
 
-create policy "Approved users can upload task files"
+create policy "Demo users can upload task files"
 on storage.objects for insert
-to authenticated
-with check (bucket_id = 'task-files' and app_private.is_approved_user());
+to anon, authenticated
+with check (bucket_id = 'task-files');
 
-create policy "Approved users can update task files"
+create policy "Demo users can update task files"
 on storage.objects for update
-to authenticated
-using (bucket_id = 'task-files' and app_private.is_approved_user())
-with check (bucket_id = 'task-files' and app_private.is_approved_user());
+to anon, authenticated
+using (bucket_id = 'task-files')
+with check (bucket_id = 'task-files');
 
-create policy "Approved users can delete task files"
+create policy "Demo users can delete task files"
 on storage.objects for delete
-to authenticated
-using (bucket_id = 'task-files' and app_private.is_approved_user());
+to anon, authenticated
+using (bucket_id = 'task-files');
 
 do $$
 begin

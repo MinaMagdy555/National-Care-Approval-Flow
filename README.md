@@ -30,6 +30,11 @@ The app uses fake local accounts. No email confirmation, external provider, or a
 | Mariam | `Password 4` |
 | Noreen | `Password 5` |
 | Yomna | `Password 6` |
+| Ahmed Fawzy | `Password 7` |
+
+## Shared Data
+
+To share the same tasks between devices, keep `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `.env.local`, then run `supabase.sql` in the Supabase SQL Editor for that project. The fake accounts use the public anon key, so the SQL includes demo RLS policies for `approval_tasks`, `approval_notifications`, and the `task-files` bucket.
 
 ## Host on GitHub Pages
 

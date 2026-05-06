@@ -1,1 +1,1 @@
-console.log('PASS Demo login uses local data. No auth provider environment variables are required.');
+console.log('PASS Demo login uses fake accounts. No auth provider environment variables are required.');
