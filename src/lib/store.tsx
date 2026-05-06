@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { AccountProfile, AuthStatus, User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile } from './types';
-import { demoAccounts, initialUsers, initialTasks } from './mockData';
+import { demoAccounts, guestTasks, initialUsers, initialTasks } from './mockData';
 import { clearAppState, loadAppState, saveAppState } from './localDb';
 import { shouldAutoArchiveTask } from './archiveUtils';
 import { sanitizeHandledBy } from './handlerUtils';
@@ -80,6 +80,37 @@ function getStoredDemoUser() {
   if (typeof window === 'undefined') return GUEST_USER;
   const storedUserId = window.localStorage.getItem(CURRENT_USER_STORAGE_KEY);
   return demoAccounts.find(account => account.user.id === storedUserId)?.user || GUEST_USER;
+}
+
+function createDemoSeedTasks(): Task[] {
+  const ownerByTaskId: Record<string, string> = {
+    guest_seed_waiting_reviewer: 'user_4',
+    guest_seed_waiting_ad: 'user_5',
+    guest_seed_returned: 'user_6',
+    guest_seed_approved: 'user_4',
+  };
+
+  return guestTasks.map(task => {
+    const ownerId = ownerByTaskId[task.id] || 'user_4';
+
+    return {
+      ...task,
+      createdBy: ownerId,
+      handledBy: task.handledBy.map(userId => userId === 'guest' ? ownerId : userId),
+      currentOwnerUserId: task.currentOwnerUserId === 'guest' ? ownerId : task.currentOwnerUserId,
+      versions: task.versions.map(version => ({
+        ...version,
+        submittedBy: version.submittedBy === 'guest' ? ownerId : version.submittedBy,
+      })),
+    };
+  });
+}
+
+function mergeDemoSeedTasks(tasks: Task[], users: Record<string, User>) {
+  const existingIds = new Set(tasks.map(task => task.id));
+  const missingSeedTasks = createDemoSeedTasks().filter(task => !existingIds.has(task.id));
+
+  return sortTasksByUpdate(reviveTaskFiles([...tasks, ...missingSeedTasks], users));
 }
 
 function isLegacyUserId(userId: string) {
@@ -429,7 +460,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .then(localState => {
         if (!isMounted) return;
 
-        setTasks(Array.isArray(localState?.tasks) ? reviveTaskFiles(localState.tasks, usersObj) : initialTasks);
+        const localTasks = Array.isArray(localState?.tasks) ? localState.tasks : initialTasks;
+        setTasks(mergeDemoSeedTasks(localTasks, usersObj));
         setNotifications(Array.isArray(localState?.notifications) ? localState.notifications.filter(notification => notification?.id) : []);
         setLocalMigrationState(null);
         setPersistenceError(null);

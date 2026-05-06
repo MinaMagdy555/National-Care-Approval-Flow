@@ -2,6 +2,7 @@ import React from 'react';
 import { useAppStore } from '../lib/store';
 import { TaskCard } from './TaskCard';
 import { AlertCircle, Clock, CheckCircle2, History, LucideIcon, XCircle } from 'lucide-react';
+import { initialUsers } from '../lib/mockData';
 import { isDueThisWeek, isDueToday } from '../lib/deadlineUtils';
 import { isTaskArchived } from '../lib/archiveUtils';
 
@@ -71,8 +72,9 @@ function DueSummaryCard({
         <span className="min-w-0 text-sm font-bold leading-tight sm:text-base">{label}</span>
         <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider sm:px-2 sm:text-[10px] ${badgeClass}`}>{badge}</span>
       </div>
-      <div className="flex items-baseline">
+      <div className="flex items-baseline gap-1.5">
         <span className="text-2xl font-black leading-none sm:text-3xl">{value}</span>
+        <span className="text-sm font-semibold">Tasks</span>
       </div>
     </button>
   );
@@ -85,11 +87,11 @@ export function Dashboard({
   onOpenTask: (id: string) => void;
   onNavigate: (view: string) => void;
 }) {
-  const { tasks, currentUser, environment, userList } = useAppStore();
+  const { tasks, currentUser, environment } = useAppStore();
 
   const envTasks = tasks.filter(t => t.environment === environment && !isTaskArchived(t));
-  const reviewerName = userList.find(u => u.role === 'reviewer' || u.role === 'admin')?.name.split(' ')[0] || 'Reviewer';
-  const artDirectorName = userList.find(u => u.role === 'art_director')?.name.split(' ')[0] || 'Art director';
+  const minaName = initialUsers.find(u => u.role === 'reviewer')?.name.split(' ')[0] || 'Mina';
+  const marwaName = initialUsers.find(u => u.role === 'art_director')?.name.split(' ')[0] || 'Marwa';
   const isMemberOrLeader = currentUser.role === 'team_member' || currentUser.role === 'team_leader';
 
   let needsAction = [];
@@ -146,7 +148,7 @@ export function Dashboard({
             {isMemberOrLeader ? (
               <>
             <SummaryCard
-              label={`Waiting for ${reviewerName}`}
+              label={`Waiting for ${minaName}`}
               value={waitingForMina.length}
               icon={AlertCircle}
               textClassName="text-amber-800"
@@ -155,7 +157,7 @@ export function Dashboard({
               onClick={() => onNavigate('waiting_for_mina')}
             />
             <SummaryCard
-              label={`Waiting for ${artDirectorName}`}
+              label={`Waiting for ${marwaName}`}
               value={waitingForMarwa.length}
               icon={History}
               textClassName="text-slate-800"
@@ -203,7 +205,7 @@ export function Dashboard({
               onClick={() => onNavigate('quick_look_queue')}
             />
             <SummaryCard
-              label={`Waiting for ${artDirectorName}`}
+              label={`Waiting for ${marwaName}`}
               value={waitingMarwaCount}
               icon={History}
               textClassName="text-slate-800"
