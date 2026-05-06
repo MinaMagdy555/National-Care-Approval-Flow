@@ -16,7 +16,7 @@ import { addLowResPreviewsToFiles, getTaskFiles } from './previewUtils';
 
 const REVIEWER_WAITING_STATUSES: TaskStatus[] = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'];
 const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
-const USE_SHARED_SUPABASE_DATA = false;
+const USE_SHARED_SUPABASE_DATA = true;
 const SHARED_DATA_CHANNEL = 'approval-flow-shared-data';
 const SHARED_DATA_EVENT = 'state-change';
 const SHARED_DATA_POLL_INTERVAL_MS = 2500;
