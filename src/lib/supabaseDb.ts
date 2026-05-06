@@ -420,6 +420,30 @@ export async function fetchSupabaseTasks(): Promise<Task[]> {
   return ((data || []) as TaskRow[]).map(row => row.payload);
 }
 
+export async function deleteSupabaseGuestSeedData(): Promise<void> {
+  const client = ensureSupabase();
+  const { error: notificationTaskError } = await client
+    .from('approval_notifications')
+    .delete()
+    .like('task_id', 'guest_seed_%');
+
+  if (notificationTaskError) throw notificationTaskError;
+
+  const { error: notificationIdError } = await client
+    .from('approval_notifications')
+    .delete()
+    .like('id', 'guest_seed_%');
+
+  if (notificationIdError) throw notificationIdError;
+
+  const { error: taskError } = await client
+    .from('approval_tasks')
+    .delete()
+    .like('id', 'guest_seed_%');
+
+  if (taskError) throw taskError;
+}
+
 export async function upsertSupabaseTask(task: Task): Promise<void> {
   const client = ensureSupabase();
   const sanitizedTask = stripFileBlobs(task);

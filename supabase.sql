@@ -316,6 +316,17 @@ set
   allowed_mime_types = array['image/png', 'image/jpeg', 'video/mp4', 'application/pdf']
 where id = 'task-files';
 
+delete from storage.objects
+where bucket_id = 'task-files'
+  and name like 'guest-seed/%';
+
+delete from public.approval_notifications
+where task_id like 'guest_seed_%'
+   or id like 'guest_seed_%';
+
+delete from public.approval_tasks
+where id like 'guest_seed_%';
+
 alter table public.user_profiles enable row level security;
 alter table public.approval_tasks enable row level security;
 alter table public.approval_notifications enable row level security;

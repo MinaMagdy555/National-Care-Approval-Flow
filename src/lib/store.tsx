@@ -1,11 +1,12 @@
 import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { AccountProfile, AuthStatus, User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile } from './types';
-import { demoAccounts, guestTasks, initialUsers, initialTasks } from './mockData';
+import { demoAccounts, initialUsers, initialTasks } from './mockData';
 import { clearAppState, loadAppState, saveAppState } from './localDb';
 import { shouldAutoArchiveTask } from './archiveUtils';
 import { sanitizeHandledBy } from './handlerUtils';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 import {
+  deleteSupabaseGuestSeedData,
   fetchSupabaseNotifications,
   fetchSupabaseTasks,
   uploadTaskFiles,
@@ -20,6 +21,7 @@ const USE_SHARED_SUPABASE_DATA = true;
 const SHARED_DATA_CHANNEL = 'approval-flow-shared-data';
 const SHARED_DATA_EVENT = 'state-change';
 const SHARED_DATA_POLL_INTERVAL_MS = 2500;
+const GUEST_SEED_ID_PREFIX = 'guest_seed_';
 const GUEST_USER: User = {
   id: 'guest',
   name: 'Guest',
@@ -99,35 +101,23 @@ function getStoredDemoUser() {
   return demoAccounts.find(account => account.user.id === storedUserId)?.user || GUEST_USER;
 }
 
-function createDemoSeedTasks(): Task[] {
-  const ownerByTaskId: Record<string, string> = {
-    guest_seed_waiting_reviewer: 'user_4',
-    guest_seed_waiting_ad: 'user_5',
-    guest_seed_returned: 'user_6',
-    guest_seed_approved: 'user_4',
-  };
-
-  return guestTasks.map(task => {
-    const ownerId = ownerByTaskId[task.id] || 'user_4';
-
-    return {
-      ...task,
-      createdBy: ownerId,
-      handledBy: task.handledBy.map(userId => userId === 'guest' ? ownerId : userId),
-      currentOwnerUserId: task.currentOwnerUserId === 'guest' ? ownerId : task.currentOwnerUserId,
-      versions: task.versions.map(version => ({
-        ...version,
-        submittedBy: version.submittedBy === 'guest' ? ownerId : version.submittedBy,
-      })),
-    };
-  });
+function isGuestSeedTask(task: Pick<Task, 'id' | 'code'> | null | undefined) {
+  return Boolean(task?.id?.startsWith(GUEST_SEED_ID_PREFIX) || task?.code?.startsWith('GST-'));
 }
 
-function mergeDemoSeedTasks(tasks: Task[], users: Record<string, User>) {
-  const existingIds = new Set(tasks.map(task => task.id));
-  const missingSeedTasks = createDemoSeedTasks().filter(task => !existingIds.has(task.id));
+function isGuestSeedNotification(notification: Notification | null | undefined) {
+  return Boolean(
+    notification?.id?.startsWith(GUEST_SEED_ID_PREFIX) ||
+    notification?.taskId?.startsWith(GUEST_SEED_ID_PREFIX)
+  );
+}
 
-  return sortTasksByUpdate(reviveTaskFiles([...tasks, ...missingSeedTasks], users));
+function removeGuestSeedNotifications(notifications: Notification[]) {
+  return notifications.filter(notification => notification?.id && !isGuestSeedNotification(notification));
+}
+
+function reviveWorkspaceTasks(tasks: Task[], users: Record<string, User>) {
+  return sortTasksByUpdate(reviveTaskFiles(tasks.filter(task => !isGuestSeedTask(task)), users));
 }
 
 function getUserIdsByRole(users: User[], roles: Role[]) {
@@ -474,8 +464,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!isMounted) return;
 
         const localTasks = Array.isArray(localState?.tasks) ? localState.tasks : initialTasks;
-        setTasks(mergeDemoSeedTasks(localTasks, usersObj));
-        setNotifications(Array.isArray(localState?.notifications) ? localState.notifications.filter(notification => notification?.id) : []);
+        setTasks(reviveWorkspaceTasks(localTasks, usersObj));
+        setNotifications(Array.isArray(localState?.notifications) ? removeGuestSeedNotifications(localState.notifications) : []);
         setLocalMigrationState(null);
         setPersistenceError(null);
       })
@@ -522,17 +512,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .then(([loadedTasks, loadedNotifications, localState]) => {
         if (!isMounted) return;
 
-        const sharedTasks = mergeDemoSeedTasks(loadedTasks, usersObj);
-        const sharedNotifications = loadedNotifications.filter(notification => notification?.id);
-        const localTasks = Array.isArray(localState?.tasks) ? reviveTaskFiles(localState.tasks, usersObj) : [];
+        const sharedTasks = reviveWorkspaceTasks(loadedTasks, usersObj);
+        const sharedNotifications = removeGuestSeedNotifications(loadedNotifications);
+        const localTasks = Array.isArray(localState?.tasks) ? reviveWorkspaceTasks(localState.tasks, usersObj) : [];
         const localNotifications = Array.isArray(localState?.notifications)
-          ? localState.notifications.filter(notification => notification?.id)
+          ? removeGuestSeedNotifications(localState.notifications)
           : [];
 
         setTasks(mergeTasksIntoState(sharedTasks, localTasks));
         setNotifications(mergeNotificationsIntoState(sharedNotifications, localNotifications));
         setLocalMigrationState(null);
         setPersistenceError(null);
+
+        void deleteSupabaseGuestSeedData().catch(error => {
+          console.error('Failed to delete guest seed data from Supabase', error);
+          if (isMounted) {
+            setPersistenceError(getSharedDataErrorMessage(error, 'Failed to delete guest demo tasks.'));
+          }
+        });
       })
       .catch(async error => {
         console.error('Failed to load persisted app state', error);
@@ -542,13 +539,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const localState = await loadAppState();
           if (!isMounted) return;
 
-          const localTasks = Array.isArray(localState?.tasks) ? localState.tasks : initialTasks;
+          const localTasks = reviveWorkspaceTasks(Array.isArray(localState?.tasks) ? localState.tasks : initialTasks, usersObj);
           const localNotifications = Array.isArray(localState?.notifications)
-            ? localState.notifications.filter(notification => notification?.id)
+            ? removeGuestSeedNotifications(localState.notifications)
             : [];
 
-          setTasks(mergeDemoSeedTasks(localTasks, usersObj));
+          setTasks(localTasks);
           setNotifications(localNotifications);
+          void saveAppState({ tasks: localTasks, notifications: localNotifications });
         } catch (localError) {
           console.error('Failed to load local fallback workspace', localError);
         }
@@ -623,7 +621,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!message || message.originClientId === clientIdRef.current) return;
 
         if (message.type === 'task_upsert') {
-          const revivedTask = reviveTaskFiles([message.task], usersObj)[0];
+          if (isGuestSeedTask(message.task)) {
+            setTasks(prev => prev.filter(task => task.id !== message.task.id));
+            return;
+          }
+
+          const revivedTask = reviveWorkspaceTasks([message.task], usersObj)[0];
           if (revivedTask) {
             setTasks(prev => mergeTaskIntoState(prev, revivedTask));
           }
@@ -631,6 +634,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
 
         if (message.type === 'notification_upsert') {
+          if (isGuestSeedNotification(message.notification)) {
+            setNotifications(prev => prev.filter(notification => notification.id !== message.notification.id));
+            return;
+          }
+
           setNotifications(prev => mergeNotificationIntoState(prev, message.notification));
         }
       })
@@ -646,9 +654,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const row = payload.new as { payload?: Task } | null;
         const task = row?.payload;
         if (!task) return;
+        if (isGuestSeedTask(task)) {
+          setTasks(prev => prev.filter(existingTask => existingTask.id !== task.id));
+          return;
+        }
 
         setTasks(prev => {
-          const revivedTask = reviveTaskFiles([task], usersObj)[0];
+          const revivedTask = reviveWorkspaceTasks([task], usersObj)[0];
           return revivedTask ? mergeTaskIntoState(prev, revivedTask) : prev;
         });
       })
@@ -664,6 +676,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const row = payload.new as { payload?: Notification } | null;
         const notification = row?.payload;
         if (!notification) return;
+        if (isGuestSeedNotification(notification)) {
+          setNotifications(prev => prev.filter(existingNotification => existingNotification.id !== notification.id));
+          return;
+        }
 
         setNotifications(prev => mergeNotificationIntoState(prev, notification));
       })
@@ -701,8 +717,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         if (!isMounted) return;
 
-        setTasks(prev => mergeTasksIntoState(prev, reviveTaskFiles(latestTasks, usersObj)));
-        setNotifications(prev => mergeNotificationsIntoState(prev, latestNotifications.filter(notification => notification?.id)));
+        setTasks(prev => mergeTasksIntoState(prev.filter(task => !isGuestSeedTask(task)), reviveWorkspaceTasks(latestTasks, usersObj)));
+        setNotifications(prev => mergeNotificationsIntoState(removeGuestSeedNotifications(prev), removeGuestSeedNotifications(latestNotifications)));
         setPersistenceError(null);
       } catch (error) {
         console.error('Failed to sync latest shared data', error);
