@@ -59,11 +59,7 @@ export interface AccountProfile {
 
 export type AuthStatus =
   | 'loading'
-  | 'configuration_missing'
   | 'signed_out'
-  | 'pending_confirmation'
-  | 'pending_approval'
-  | 'rejected'
   | 'approved';
 
 export interface UploadedTaskFile {

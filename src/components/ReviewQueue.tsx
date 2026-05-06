@@ -21,7 +21,7 @@ function getDateInputValue(date: string) {
 }
 
 export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: string) => void, tasks: Task[], title: string }) {
-  const { currentUser } = useAppStore();
+  const { currentUser, users } = useAppStore();
   const [creatorFilter, setCreatorFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -56,7 +56,8 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
     return true;
   });
 
-  const uniqueCreators = Array.from(new Set(tasks.map(t => t.createdBy))).map(id => initialUsers.find(u => u.id === id)).filter(Boolean) as typeof initialUsers;
+  const getUserById = (id: string) => users[id] || (id === currentUser.id ? currentUser : undefined) || initialUsers.find(user => user.id === id);
+  const uniqueCreators = Array.from(new Set(tasks.map(t => t.createdBy))).map(getUserById).filter(Boolean) as Array<NonNullable<ReturnType<typeof getUserById>>>;
   const uniqueTypes = Array.from(new Set(tasks.map(t => t.taskType)));
 
   const creatorOptions = [
@@ -212,7 +213,7 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
             )}
             {filteredTasks.map(task => {
               const statusInfo = getStatusInfo(task, currentUser.role);
-              const creator = initialUsers.find(u => u.id === task.createdBy);
+              const creator = getUserById(task.createdBy);
               const version = task.versions.length > 0 ? task.versions[0].versionNumber : 1;
               const isDemo = task.environment === 'demo';
 

@@ -7,12 +7,12 @@ import { initialUsers } from '../lib/mockData';
 import { TaskThumbnail } from './FilePreview';
 
 export function TaskCard({ task, onClick }: { task: Task; onClick: (id: string) => void; key?: string | number }) {
-  const { currentUser } = useAppStore();
+  const { currentUser, users } = useAppStore();
   const statusInfo = getStatusInfo(task, currentUser.role);
   const nextAction = getNextActionLabel(task, currentUser.role);
 
-  const creator = initialUsers.find(u => u.id === task.createdBy)?.name || 'Unknown';
-  const handledByNames = task.handledBy.map(id => initialUsers.find(u => u.id === id)?.name).filter(Boolean).join(' + ');
+  const creator = users[task.createdBy]?.name || (task.createdBy === currentUser.id ? currentUser.name : initialUsers.find(u => u.id === task.createdBy)?.name) || 'Unknown';
+  const handledByNames = task.handledBy.map(id => users[id]?.name || initialUsers.find(u => u.id === id)?.name).filter(Boolean).join(' + ');
 
   const version = task.versions.length > 0 ? task.versions[0].versionNumber : 1;
 

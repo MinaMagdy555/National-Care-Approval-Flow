@@ -12,9 +12,9 @@ import {
   FilePenLine,
   FileText,
   LayoutDashboard,
+  LogIn,
   LogOut,
   Send,
-  ShieldCheck,
   Upload,
   UserRoundCheck,
   X,
@@ -40,8 +40,9 @@ export function Sidebar({
   isOpen: boolean;
   onClose: () => void;
 }) {
-  const { currentUser, notifications, logout } = useAppStore();
+  const { currentUser, notifications, logout, authStatus } = useAppStore();
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
+  const isSignedIn = authStatus === 'approved';
 
   const unreadCount = notifications ? notifications.filter(n => n.userId === currentUser.id && !n.read).length : 0;
 
@@ -79,7 +80,6 @@ export function Sidebar({
     const commonTop = [
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { id: 'notifications', label: `Notifications${unreadCount > 0 ? ` (${unreadCount})` : ''}`, icon: Bell },
-      ...(currentUser.isAdmin ? [{ id: 'account_admin', label: 'Account Approvals', icon: ShieldCheck }] : []),
     ];
 
     switch (currentUser.role) {
@@ -270,12 +270,17 @@ export function Sidebar({
             <button
               type="button"
               onClick={() => {
-                void logout();
+                if (isSignedIn) {
+                  void logout();
+                } else {
+                  handleNavigate('sign_in');
+                }
                 onClose();
               }}
               className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-white transition-colors hover:bg-white/10"
             >
-              <LogOut className="h-3.5 w-3.5" /> Sign Out
+              {isSignedIn ? <LogOut className="h-3.5 w-3.5" /> : <LogIn className="h-3.5 w-3.5" />}
+              {isSignedIn ? 'Leave Account' : 'Demo Accounts'}
             </button>
           </div>
         </div>

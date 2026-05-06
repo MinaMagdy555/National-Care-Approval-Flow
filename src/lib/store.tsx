@@ -1,22 +1,13 @@
 import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
-import type { User as SupabaseAuthUser } from '@supabase/supabase-js';
 import { AccountProfile, AuthStatus, User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile } from './types';
-import { initialUsers, initialTasks } from './mockData';
-import { clearAppState, loadAppState } from './localDb';
+import { demoAccounts, initialUsers, initialTasks } from './mockData';
+import { clearAppState, loadAppState, saveAppState } from './localDb';
 import { shouldAutoArchiveTask } from './archiveUtils';
 import { sanitizeHandledBy } from './handlerUtils';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 import {
-  approveUserProfile,
-  ensureCurrentUserProfile,
-  fetchCurrentUserProfile,
-  fetchUserProfiles,
   fetchSupabaseNotifications,
   fetchSupabaseTasks,
-  migrateLegacyUserData,
-  profileToUser,
-  rejectUserProfile,
-  updatePendingProfileRequest,
   uploadTaskFiles,
   upsertSupabaseNotifications,
   upsertSupabaseTask,
@@ -24,11 +15,11 @@ import {
 import { addLowResPreviewsToFiles, getTaskFiles } from './previewUtils';
 
 const REVIEWER_WAITING_STATUSES: TaskStatus[] = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'];
-const GOOGLE_SIGNUP_REQUEST_STORAGE_KEY = 'national-care-google-signup-request';
+const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
+const USE_SHARED_SUPABASE_DATA = false;
 const SHARED_DATA_CHANNEL = 'approval-flow-shared-data';
 const SHARED_DATA_EVENT = 'state-change';
 const SHARED_DATA_POLL_INTERVAL_MS = 2500;
-const GOOGLE_PROVIDER_SETUP_MESSAGE = 'Google sign-in is disabled in Supabase. Open Supabase > Authentication > Providers > Google, turn Google on, add the Google Client ID and Secret, then save. Also confirm this site is allowed in Authentication > URL Configuration.';
 const GUEST_USER: User = {
   id: 'guest',
   name: 'Guest',
@@ -36,15 +27,14 @@ const GUEST_USER: User = {
   jobTitle: 'Not signed in',
 };
 
+function isLocalWorkspaceStatus(status: AuthStatus) {
+  return !USE_SHARED_SUPABASE_DATA && status === 'approved';
+}
+
 type AuthActionResult = {
   ok: boolean;
   message?: string;
   needsEmailConfirmation?: boolean;
-};
-
-type GoogleSignupRequest = {
-  name: string;
-  requestedRole: Role;
 };
 
 type SharedDataPayload =
@@ -59,48 +49,37 @@ function createClientId() {
     : `client_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
-function getProfileDisplayName(authUser: SupabaseAuthUser) {
-  const metadata = authUser.user_metadata || {};
-  const name = typeof metadata.name === 'string' ? metadata.name : typeof metadata.full_name === 'string' ? metadata.full_name : '';
-  return name.trim() || authUser.email?.split('@')[0] || 'New user';
-}
-
-function getStoredGoogleSignupRequest(): GoogleSignupRequest | null {
-  if (typeof window === 'undefined') return null;
-
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(GOOGLE_SIGNUP_REQUEST_STORAGE_KEY) || 'null') as Partial<GoogleSignupRequest> | null;
-    if (!parsed || typeof parsed !== 'object') return null;
-    return {
-      name: typeof parsed.name === 'string' ? parsed.name : '',
-      requestedRole: parsed.requestedRole || 'team_member',
-    };
-  } catch {
-    return null;
-  }
-}
-
-function clearStoredGoogleSignupRequest() {
-  if (typeof window !== 'undefined') {
-    window.localStorage.removeItem(GOOGLE_SIGNUP_REQUEST_STORAGE_KEY);
-  }
-}
-
 function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message) return error.message;
   if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') return error.message;
   return fallback;
 }
 
-function getGoogleAuthErrorMessage(message: string | undefined) {
-  const trimmedMessage = message?.trim();
-  const normalizedMessage = trimmedMessage?.toLowerCase() || '';
+function normalizeCredentialValue(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
 
-  if (normalizedMessage.includes('provider is not enabled') || normalizedMessage.includes('unsupported provider')) {
-    return GOOGLE_PROVIDER_SETUP_MESSAGE;
-  }
+function findDemoAccount(identifier: string, password: string) {
+  const normalizedIdentifier = normalizeCredentialValue(identifier);
+  const normalizedPassword = normalizeCredentialValue(password);
 
-  return trimmedMessage || 'Could not start Google sign-in.';
+  return demoAccounts.find(account => {
+    const user = account.user;
+    const acceptedNames = [
+      user.id,
+      user.name,
+      user.name.split(/\s+/)[0],
+      user.email || '',
+    ].filter(Boolean).map(normalizeCredentialValue);
+
+    return acceptedNames.includes(normalizedIdentifier) && normalizeCredentialValue(account.password) === normalizedPassword;
+  }) || null;
+}
+
+function getStoredDemoUser() {
+  if (typeof window === 'undefined') return GUEST_USER;
+  const storedUserId = window.localStorage.getItem(CURRENT_USER_STORAGE_KEY);
+  return demoAccounts.find(account => account.user.id === storedUserId)?.user || GUEST_USER;
 }
 
 function isLegacyUserId(userId: string) {
@@ -108,7 +87,9 @@ function isLegacyUserId(userId: string) {
 }
 
 function getUserIdsByRole(users: User[], roles: Role[]) {
-  return users.filter(user => roles.includes(user.role) && !isLegacyUserId(user.id)).map(user => user.id);
+  return users
+    .filter(user => roles.includes(user.role) && (!USE_SHARED_SUPABASE_DATA || !isLegacyUserId(user.id)))
+    .map(user => user.id);
 }
 
 function isReviewerCreatedTask(task: Task, users: Record<string, User>) {
@@ -341,13 +322,8 @@ interface AppContextType extends AppState {
   addTask: (task: Task) => void;
   addNotification: (notification: Omit<Notification, 'id' | 'createdAt' | 'read'>) => void;
   markNotificationAsRead: (id: string) => void;
-  loginWithPassword: (email: string, password: string) => Promise<AuthActionResult>;
-  signInWithGoogle: (name: string, requestedRole: Role) => Promise<AuthActionResult>;
-  registerProfile: (name: string, email: string, password: string, requestedRole: Role) => Promise<AuthActionResult>;
+  loginWithPassword: (identifier: string, password: string) => Promise<AuthActionResult>;
   logout: () => Promise<void>;
-  updatePendingProfile: (name: string, requestedRole: Role) => Promise<AuthActionResult>;
-  approveAccount: (profileId: string, role: Role, legacyId: string | null) => Promise<AuthActionResult>;
-  rejectAccount: (profileId: string) => Promise<AuthActionResult>;
   archiveTask: (taskId: string, reason?: string) => void;
   unarchiveTask: (taskId: string) => void;
   migrateLocalDataToSupabase: () => Promise<void>;
@@ -357,6 +333,7 @@ interface AppContextType extends AppState {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: ReactNode }) {
+  const initialDemoUser = getStoredDemoUser();
   const hasLoadedPersistedState = useRef(false);
   const clientIdRef = useRef(createClientId());
   const sharedDataChannelRef = useRef<ReturnType<NonNullable<typeof supabase>['channel']> | null>(null);
@@ -366,7 +343,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const queuedSharedDataMessagesRef = useRef<SharedDataMessage[]>([]);
   const [accountProfiles, setAccountProfiles] = useState<AccountProfile[]>([]);
   const [authProfile, setAuthProfile] = useState<AccountProfile | null>(null);
-  const [authStatus, setAuthStatus] = useState<AuthStatus>(isSupabaseConfigured ? 'loading' : 'configuration_missing');
+  const [authStatus, setAuthStatus] = useState<AuthStatus>(initialDemoUser.id === GUEST_USER.id ? 'signed_out' : 'approved');
   const [authError, setAuthError] = useState<string | null>(null);
   const [userList, setUserList] = useState<User[]>(initialUsers);
   const usersObj = userList.reduce((acc, user) => {
@@ -374,7 +351,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return acc;
   }, {} as Record<string, User>);
 
-  const [currentUserState, setCurrentUserState] = useState<User>(GUEST_USER);
+  const [currentUserState, setCurrentUserState] = useState<User>(initialDemoUser);
   const [environment, setEnvironment] = useState<Environment>('production');
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -432,156 +409,48 @@ export function AppProvider({ children }: { children: ReactNode }) {
     pendingNotificationBroadcastIdsRef.current.add(notificationId);
   };
 
-  const refreshProfiles = async () => {
-    const profiles = await fetchUserProfiles();
-    const profileUsers = profiles
-      .filter(profile => profile.approvalStatus === 'approved')
-      .map(profileToUser);
-
-    setAccountProfiles(profiles);
-    setUserList([...initialUsers, ...profileUsers]);
-    return profiles;
-  };
-
-  const applyApprovedProfile = async (profile: AccountProfile) => {
-    const profiles = await refreshProfiles();
-    const approvedUser = profileToUser(profile);
-    setAuthProfile(profile);
-    setCurrentUserState(approvedUser);
-    setAuthStatus('approved');
-    setAuthError(null);
-
-    if (!profiles.some(item => item.id === profile.id)) {
-      setUserList(prev => [...prev, approvedUser]);
-    }
-  };
-
-  const resetWorkspaceState = () => {
-    hasLoadedPersistedState.current = false;
-    pendingTaskBroadcastIdsRef.current.clear();
-    pendingNotificationBroadcastIdsRef.current.clear();
-    queuedSharedDataMessagesRef.current = [];
-    setTasks(initialTasks);
-    setNotifications([]);
-    setLocalMigrationState(null);
-    setPersistenceError(null);
-  };
-
   useEffect(() => {
-    if (!isSupabaseConfigured || !supabase) {
-      setAuthStatus('configuration_missing');
-      return;
-    }
-
-    let isMounted = true;
-
-    const applyAuthUser = async (authUser: SupabaseAuthUser | null) => {
-      if (!isMounted) return;
-
-      if (!authUser) {
-        setAuthProfile(null);
-        setCurrentUserState(GUEST_USER);
-        setUserList(initialUsers);
-        setAccountProfiles([]);
-        setAuthStatus('signed_out');
-        setAuthError(null);
-        resetWorkspaceState();
-        return;
-      }
-
-      try {
-        let profile: AccountProfile | null = null;
-        let profileReadError: unknown = null;
-
-        try {
-          profile = await fetchCurrentUserProfile(authUser.id);
-        } catch (error) {
-          profileReadError = error;
-          console.warn('Initial profile read failed; trying profile repair', error);
-        }
-
-        if (!profile) {
-          try {
-            await ensureCurrentUserProfile();
-            profile = await fetchCurrentUserProfile(authUser.id);
-          } catch (error) {
-            console.warn('Could not auto-create authenticated user profile', error);
-            if (profileReadError) throw profileReadError;
-          }
-        }
-        const storedGoogleRequest = getStoredGoogleSignupRequest();
-
-        if (profile && profile.approvalStatus !== 'approved' && storedGoogleRequest) {
-          profile = await updatePendingProfileRequest(
-            authUser.id,
-            storedGoogleRequest.name.trim() || profile.name || getProfileDisplayName(authUser),
-            storedGoogleRequest.requestedRole || profile.requestedRole,
-          );
-          clearStoredGoogleSignupRequest();
-        }
-
-        if (!profile) {
-          setAuthProfile(null);
-          setCurrentUserState({
-            ...GUEST_USER,
-            id: authUser.id,
-            email: authUser.email,
-            name: getProfileDisplayName(authUser),
-          });
-          setAuthStatus('pending_approval');
-          setAuthError('Your account exists, but its app profile has not been created yet. Re-run the Supabase SQL setup if this keeps happening.');
-          resetWorkspaceState();
-          return;
-        }
-
-        setAuthProfile(profile);
-        setCurrentUserState(profileToUser(profile));
-        setUserList([...initialUsers, ...(profile.approvalStatus === 'approved' ? [profileToUser(profile)] : [])]);
-        setAuthError(null);
-
-        if (profile.approvalStatus === 'approved') {
-          await applyApprovedProfile(profile);
-          return;
-        }
-
-        resetWorkspaceState();
-        setAuthStatus(profile.approvalStatus === 'rejected' ? 'rejected' : 'pending_approval');
-      } catch (error) {
-        console.error('Failed to load authenticated profile', error);
-        setAuthError(getErrorMessage(error, 'Could not load your account profile.'));
-        setAuthStatus('signed_out');
-        resetWorkspaceState();
-      }
-    };
-
-    supabase.auth.getUser()
-      .then(({ data, error }) => {
-        if (error && error.name !== 'AuthSessionMissingError') {
-          throw error;
-        }
-        return applyAuthUser(data.user);
-      })
-      .catch(error => {
-        console.error('Failed to restore Supabase auth session', error);
-        if (!isMounted) return;
-        setAuthError(getErrorMessage(error, 'Could not restore your sign-in session.'));
-        setAuthStatus('signed_out');
-      });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      window.setTimeout(() => {
-        void applyAuthUser(session?.user ?? null);
-      }, 0);
-    });
-
-    return () => {
-      isMounted = false;
-      subscription.unsubscribe();
-    };
+    const storedDemoUser = getStoredDemoUser();
+    setCurrentUserState(storedDemoUser);
+    setUserList(initialUsers);
+    setAccountProfiles([]);
+    setAuthProfile(null);
+    setAuthStatus(storedDemoUser.id === GUEST_USER.id ? 'signed_out' : 'approved');
+    setAuthError(null);
   }, []);
 
   useEffect(() => {
-    if (authStatus !== 'approved' || !hasLoadedPersistedState.current || !isSupabaseConfigured) return;
+    if (!isLocalWorkspaceStatus(authStatus)) return;
+
+    let isMounted = true;
+    hasLoadedPersistedState.current = false;
+
+    loadAppState()
+      .then(localState => {
+        if (!isMounted) return;
+
+        setTasks(Array.isArray(localState?.tasks) ? reviveTaskFiles(localState.tasks, usersObj) : initialTasks);
+        setNotifications(Array.isArray(localState?.notifications) ? localState.notifications.filter(notification => notification?.id) : []);
+        setLocalMigrationState(null);
+        setPersistenceError(null);
+      })
+      .catch(error => {
+        console.error('Failed to load local demo workspace', error);
+        if (isMounted) {
+          setPersistenceError(getErrorMessage(error, 'Failed to load local demo workspace.'));
+        }
+      })
+      .finally(() => {
+        if (isMounted) hasLoadedPersistedState.current = true;
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [authStatus]);
+
+  useEffect(() => {
+    if (authStatus !== 'approved' || !hasLoadedPersistedState.current) return;
 
     const autoArchiveTasks = tasks.filter(task => shouldAutoArchiveTask(task));
     if (autoArchiveTasks.length === 0) return;
@@ -599,7 +468,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [tasks, authStatus]);
 
   useEffect(() => {
-    if (authStatus !== 'approved') return;
+    if (authStatus !== 'approved' || !USE_SHARED_SUPABASE_DATA) return;
 
     let isMounted = true;
     hasLoadedPersistedState.current = false;
@@ -641,7 +510,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [authStatus, currentUser.id]);
 
   useEffect(() => {
-    if (authStatus !== 'approved' || !hasLoadedPersistedState.current || !isSupabaseConfigured) return;
+    if (authStatus !== 'approved' || !hasLoadedPersistedState.current || !USE_SHARED_SUPABASE_DATA) return;
 
     const pendingTaskIds = Array.from(pendingTaskBroadcastIdsRef.current);
     const pendingNotificationIds = Array.from(pendingNotificationBroadcastIdsRef.current);
@@ -673,7 +542,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [tasks, notifications, authStatus]);
 
   useEffect(() => {
-    if (authStatus !== 'approved' || !isSupabaseConfigured || !supabase) return;
+    if (!isLocalWorkspaceStatus(authStatus) || !hasLoadedPersistedState.current) return;
+
+    saveAppState({ tasks, notifications })
+      .then(() => {
+        setPersistenceError(null);
+      })
+      .catch(error => {
+        console.error('Failed to save local demo workspace', error);
+        setPersistenceError(getErrorMessage(error, 'Failed to save local demo workspace.'));
+      });
+  }, [tasks, notifications, authStatus]);
+
+  useEffect(() => {
+    if (authStatus !== 'approved' || !USE_SHARED_SUPABASE_DATA || !isSupabaseConfigured || !supabase) return;
 
     const channel = supabase
       .channel(SHARED_DATA_CHANNEL, {
@@ -747,7 +629,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [authStatus, currentUser.id]);
 
   useEffect(() => {
-    if (authStatus !== 'approved' || !isSupabaseConfigured) return;
+    if (authStatus !== 'approved' || !USE_SHARED_SUPABASE_DATA || !isSupabaseConfigured) return;
 
     let isMounted = true;
     let isPolling = false;
@@ -818,188 +700,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
   };
 
-  const loginWithPassword = async (email: string, password: string): Promise<AuthActionResult> => {
-    if (!supabase) return { ok: false, message: 'Supabase is not configured.' };
-    const trimmedEmail = email.trim().toLowerCase();
-    const trimmedPassword = password.trim();
-    if (!trimmedEmail || !trimmedPassword) {
-      return { ok: false, message: 'Enter your email and password.' };
+  const loginWithPassword = async (identifier: string, password: string): Promise<AuthActionResult> => {
+    if (!identifier.trim() || !password.trim()) {
+      return { ok: false, message: 'Choose a demo account and enter its password.' };
     }
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email: trimmedEmail,
-      password: trimmedPassword,
-    });
-
-    if (error) {
-      return { ok: false, message: error.message || 'Could not sign in.' };
+    const account = findDemoAccount(identifier, password);
+    if (!account) {
+      return { ok: false, message: 'That demo account name or password does not match.' };
     }
 
+    window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, account.user.id);
+    setAuthProfile(null);
+    setCurrentUserState(account.user);
+    setUserList(initialUsers);
+    setAccountProfiles([]);
+    setAuthStatus('approved');
+    setAuthError(null);
     return { ok: true };
-  };
-
-  const signInWithGoogle = async (name: string, requestedRole: Role): Promise<AuthActionResult> => {
-    if (!supabase) return { ok: false, message: 'Supabase is not configured.' };
-
-    window.localStorage.setItem(GOOGLE_SIGNUP_REQUEST_STORAGE_KEY, JSON.stringify({
-      name: name.trim(),
-      requestedRole,
-    } satisfies GoogleSignupRequest));
-
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}${window.location.pathname}`,
-        skipBrowserRedirect: true,
-      },
-    });
-
-    if (error) {
-      clearStoredGoogleSignupRequest();
-      return { ok: false, message: getGoogleAuthErrorMessage(error.message) };
-    }
-
-    if (!data.url) {
-      clearStoredGoogleSignupRequest();
-      return { ok: false, message: 'Supabase did not return a Google sign-in URL.' };
-    }
-
-    try {
-      const response = await fetch(data.url, { redirect: 'manual' });
-      if (response.status >= 400) {
-        const body = await response.json().catch(() => null) as { msg?: string; message?: string; error_description?: string } | null;
-        clearStoredGoogleSignupRequest();
-        return {
-          ok: false,
-          message: getGoogleAuthErrorMessage(body?.msg || body?.message || body?.error_description),
-        };
-      }
-    } catch {
-      clearStoredGoogleSignupRequest();
-      return {
-        ok: false,
-        message: 'Could not verify Google sign-in. Make sure Google is enabled in Supabase Auth providers and this site URL is an allowed redirect URL.',
-      };
-    }
-
-    window.location.assign(data.url);
-    return { ok: true };
-  };
-
-  const registerProfile = async (name: string, email: string, password: string, requestedRole: Role): Promise<AuthActionResult> => {
-    if (!supabase) return { ok: false, message: 'Supabase is not configured.' };
-    const trimmedName = name.trim();
-    const trimmedEmail = email.trim().toLowerCase();
-    const trimmedPassword = password.trim();
-
-    if (!trimmedName || !trimmedEmail || !trimmedPassword) {
-      return { ok: false, message: 'Enter your name, email, and password.' };
-    }
-
-    if (trimmedPassword.length < 8) {
-      return { ok: false, message: 'Use at least 8 characters for the password.' };
-    }
-
-    const { data, error } = await supabase.auth.signUp({
-      email: trimmedEmail,
-      password: trimmedPassword,
-      options: {
-        data: {
-          name: trimmedName,
-          requested_role: requestedRole,
-        },
-        emailRedirectTo: `${window.location.origin}${window.location.pathname}`,
-      },
-    });
-
-    if (error) {
-      return { ok: false, message: error.message || 'Could not create the account.' };
-    }
-
-    if (!data.session) {
-      setAuthStatus('pending_confirmation');
-      setAuthError(null);
-      return {
-        ok: true,
-        needsEmailConfirmation: true,
-        message: 'Account created. Check your email to confirm it, then sign in.',
-      };
-    }
-
-    return { ok: true, message: 'Account created. It will open after Mina/admin approves it.' };
   };
 
   const logout = async () => {
-    if (supabase) {
-      await supabase.auth.signOut({ scope: 'local' });
-    }
-    clearStoredGoogleSignupRequest();
+    window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
+    hasLoadedPersistedState.current = false;
     setAuthProfile(null);
     setCurrentUserState(GUEST_USER);
     setUserList(initialUsers);
     setAccountProfiles([]);
-    setAuthStatus(isSupabaseConfigured ? 'signed_out' : 'configuration_missing');
-    resetWorkspaceState();
-  };
-
-  const updatePendingProfile = async (name: string, requestedRole: Role): Promise<AuthActionResult> => {
-    if (!authProfile) return { ok: false, message: 'No account profile is loaded.' };
-    try {
-      const profile = await updatePendingProfileRequest(authProfile.id, name, requestedRole);
-      setAuthProfile(profile);
-      setCurrentUserState(profileToUser(profile));
-      return { ok: true, message: 'Your request was updated.' };
-    } catch (error) {
-      return { ok: false, message: getErrorMessage(error, 'Could not update your request.') };
-    }
-  };
-
-  const approveAccount = async (profileId: string, role: Role, legacyId: string | null): Promise<AuthActionResult> => {
-    if (!currentUser.isAdmin) return { ok: false, message: 'Only admins can approve accounts.' };
-
-    try {
-      const approvedProfile = await approveUserProfile(profileId, role, legacyId, currentUser.id);
-      const migration = legacyId ? await migrateLegacyUserData(legacyId, profileId) : { tasksUpdated: 0, notificationsUpdated: 0 };
-      const profiles = await refreshProfiles();
-      setAccountProfiles(profiles);
-
-      if (authProfile?.id === approvedProfile.id) {
-        await applyApprovedProfile(approvedProfile);
-      }
-
-      if (migration.tasksUpdated > 0 || migration.notificationsUpdated > 0) {
-        const [latestTasks, latestNotifications] = await Promise.all([fetchSupabaseTasks(), fetchSupabaseNotifications()]);
-        setTasks(reviveTaskFiles(latestTasks, usersObj));
-        setNotifications(latestNotifications.filter(notification => notification?.id));
-      }
-
-      return {
-        ok: true,
-        message: legacyId
-          ? `Approved and migrated ${migration.tasksUpdated} task(s), ${migration.notificationsUpdated} notification(s).`
-          : 'Account approved.',
-      };
-    } catch (error) {
-      return { ok: false, message: getErrorMessage(error, 'Could not approve the account.') };
-    }
-  };
-
-  const rejectAccount = async (profileId: string): Promise<AuthActionResult> => {
-    if (!currentUser.isAdmin) return { ok: false, message: 'Only admins can reject accounts.' };
-
-    try {
-      const profile = await rejectUserProfile(profileId, currentUser.id);
-      const profiles = await refreshProfiles();
-      setAccountProfiles(profiles);
-      if (authProfile?.id === profile.id) {
-        setAuthProfile(profile);
-        setCurrentUserState(profileToUser(profile));
-        setAuthStatus('rejected');
-      }
-      return { ok: true, message: 'Account rejected.' };
-    } catch (error) {
-      return { ok: false, message: getErrorMessage(error, 'Could not reject the account.') };
-    }
+    setLocalMigrationState(null);
+    setPersistenceError(null);
+    setAuthStatus('signed_out');
+    setAuthError(null);
   };
 
   const archiveTask = (taskId: string, reason = 'Archived manually') => {
@@ -1019,7 +750,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const migrateLocalDataToSupabase = async () => {
-    if (authStatus !== 'approved' || !isSupabaseConfigured || !localMigrationState || isMigratingLocalData) return;
+    if (authStatus !== 'approved' || !USE_SHARED_SUPABASE_DATA || !isSupabaseConfigured || !localMigrationState || isMigratingLocalData) return;
 
     setIsMigratingLocalData(true);
     setPersistenceError(null);
@@ -1220,7 +951,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       users: usersObj,
       userList,
       notifications,
-      persistenceMode: isSupabaseConfigured ? 'supabase' : 'local',
+      persistenceMode: USE_SHARED_SUPABASE_DATA && authStatus === 'approved' && isSupabaseConfigured ? 'supabase' : 'local',
       persistenceError,
       localMigrationCount: (localMigrationState?.tasks.length || 0) + (localMigrationState?.notifications.length || 0),
       isMigratingLocalData,
@@ -1235,12 +966,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addNotification,
       markNotificationAsRead,
       loginWithPassword,
-      signInWithGoogle,
-      registerProfile,
       logout,
-      updatePendingProfile,
-      approveAccount,
-      rejectAccount,
       archiveTask,
       unarchiveTask,
       migrateLocalDataToSupabase,

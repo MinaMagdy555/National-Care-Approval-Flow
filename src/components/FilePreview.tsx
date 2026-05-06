@@ -163,10 +163,12 @@ export function FileContentThumbnail({
   file,
   alt,
   className = '',
+  allowLocalFile = false,
 }: {
   file?: UploadedTaskFile;
   alt: string;
   className?: string;
+  allowLocalFile?: boolean;
 }) {
   const previewUrl = file?.previewUrl || '';
   const [previewLoadFailed, setPreviewLoadFailed] = useState(false);
@@ -193,6 +195,17 @@ export function FileContentThumbnail({
     );
   }
 
+  if (allowLocalFile && isLocalOnlyFileUrl(file.url)) {
+    const kind = getFileKind(file);
+    if (kind === 'image') {
+      return <img src={file.url} alt={alt} className={className || 'h-full w-full object-cover'} />;
+    }
+    if (kind === 'video') {
+      return <video src={file.url} muted playsInline preload="metadata" className={className || 'h-full w-full object-cover'} />;
+    }
+    return <LightweightFilePlaceholder file={file} compact />;
+  }
+
   if (isLocalOnlyFileUrl(file.url)) {
     return <MissingSharedFile compact />;
   }
@@ -201,14 +214,15 @@ export function FileContentThumbnail({
 }
 
 export function TaskThumbnail({ task }: { task: Task }) {
-  const { updateTaskMediaPreviews } = useAppStore();
+  const { updateTaskMediaPreviews, persistenceMode } = useAppStore();
   const thumbnailRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(false);
   const updateTaskMediaPreviewsRef = useRef(updateTaskMediaPreviews);
   const [isVisible, setIsVisible] = useState(false);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
   const file = getTaskFiles(task.versions[0])[0];
-  const hasLocalOnlyFile = isLocalOnlyFileUrl(task.thumbnailUrl) || isLocalOnlyFileUrl(file?.url);
+  const allowLocalFiles = persistenceMode === 'local';
+  const hasLocalOnlyFile = !allowLocalFiles && (isLocalOnlyFileUrl(task.thumbnailUrl) || isLocalOnlyFileUrl(file?.url));
   const expectedPreview = !hasLocalOnlyFile ? getExpectedFilePreview(task.id, file) : null;
 
   useEffect(() => {
@@ -282,6 +296,7 @@ export function TaskThumbnail({ task }: { task: Task }) {
           previewStoragePath: task.thumbnailStoragePath,
         }}
         alt={task.name}
+        allowLocalFile={allowLocalFiles}
       />
     );
   } else if (file && expectedPreview) {
@@ -292,10 +307,11 @@ export function TaskThumbnail({ task }: { task: Task }) {
           ...expectedPreview,
         }}
         alt={task.name}
+        allowLocalFile={allowLocalFiles}
       />
     );
   } else {
-    content = <FileContentThumbnail file={file} alt={task.name} />;
+    content = <FileContentThumbnail file={file} alt={task.name} allowLocalFile={allowLocalFiles} />;
   }
 
   return (
@@ -317,13 +333,14 @@ export function FilePreview({
   file?: UploadedTaskFile;
   onImageClick?: (url: string) => void;
 }) {
+  const { persistenceMode } = useAppStore();
   const kind = getFileKind(file);
 
   if (!file) {
     return <div className="flex h-full w-full items-center justify-center text-sm font-bold text-slate-400">No file uploaded</div>;
   }
 
-  if (isLocalOnlyFileUrl(file.url)) {
+  if (persistenceMode === 'supabase' && isLocalOnlyFileUrl(file.url)) {
     return <MissingSharedFile />;
   }
 

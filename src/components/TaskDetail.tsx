@@ -96,7 +96,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
   const statusInfo = getStatusInfo(task, currentUser.role);
   const nextAction = getNextActionLabel(task, currentUser.role);
-  const creator = users[task.createdBy]?.name || initialUsers.find(u => u.id === task.createdBy)?.name || 'Unknown';
+  const creator = users[task.createdBy]?.name || (task.createdBy === currentUser.id ? currentUser.name : initialUsers.find(u => u.id === task.createdBy)?.name) || 'Unknown';
   const handledByNames = task.handledBy
     .filter(isAssignableHandler)
     .map(id => users[id]?.name || initialUsers.find(u => u.id === id)?.name)
@@ -868,7 +868,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               <h3 className="mb-4 text-[11px] font-black uppercase tracking-wider text-slate-400">Comments</h3>
               <div className="space-y-3">
                 {visibleComments.map(comment => {
-                  const author = users[comment.authorId] || initialUsers.find(user => user.id === comment.authorId);
+                  const author = users[comment.authorId] || (comment.authorId === currentUser.id ? currentUser : undefined) || initialUsers.find(user => user.id === comment.authorId);
                   return (
                     <div key={comment.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                       <div className="mb-3 flex items-start justify-between gap-3">

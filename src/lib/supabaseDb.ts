@@ -38,6 +38,13 @@ function ensureSupabase() {
   return supabase;
 }
 
+async function hasWritableSupabaseSession() {
+  if (!isSupabaseConfigured || !supabase) return false;
+
+  const { data, error } = await supabase.auth.getSession();
+  return !error && Boolean(data.session);
+}
+
 function stripFileBlobs(task: Task): Task {
   return {
     ...task,
@@ -331,7 +338,7 @@ export async function migrateLegacyUserData(legacyId: string, targetUserId: stri
 }
 
 export async function uploadTaskFiles(taskId: string, files: UploadedTaskFile[]): Promise<UploadedTaskFile[]> {
-  if (!isSupabaseConfigured || !supabase) return files;
+  if (!(await hasWritableSupabaseSession())) return files;
 
   const uploadedFiles: UploadedTaskFile[] = [];
 
@@ -371,7 +378,7 @@ export async function uploadTaskFiles(taskId: string, files: UploadedTaskFile[])
 }
 
 export async function uploadTaskPreviewImage(storagePath: string, previewBlob: Blob): Promise<{ url: string; storagePath: string }> {
-  if (!isSupabaseConfigured || !supabase) {
+  if (!(await hasWritableSupabaseSession())) {
     return {
       storagePath,
       url: URL.createObjectURL(previewBlob),

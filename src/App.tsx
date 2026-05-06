@@ -7,7 +7,6 @@ import { ReviewQueue } from './components/ReviewQueue';
 import { NotificationsList } from './components/Notifications';
 import { CreateTask } from './components/CreateTask';
 import { AuthScreen } from './components/AuthScreen';
-import { AdminAccounts } from './components/AdminAccounts';
 import { isDueThisWeek, isDueToday } from './lib/deadlineUtils';
 import { isTaskArchived } from './lib/archiveUtils';
 import { Menu } from 'lucide-react';
@@ -107,6 +106,7 @@ function WorkspaceContent() {
     isMigratingLocalData,
     migrateLocalDataToSupabase,
     dismissLocalMigration,
+    authStatus,
   } = useAppStore();
   const initialUnreadCountRef = useRef<number | null>(null);
   const unreadNotificationIdsRef = useRef<Set<string>>(new Set());
@@ -174,6 +174,12 @@ function WorkspaceContent() {
     });
   };
 
+  useEffect(() => {
+    if (authStatus === 'approved' && currentView === 'sign_in') {
+      navigateTo({ view: 'dashboard', taskId: null }, 'replace');
+    }
+  }, [authStatus, currentView]);
+
   const handleOpenTask = (id: string) => {
     navigateTo({ view: 'task_detail', taskId: id });
     setIsSidebarOpen(false);
@@ -205,8 +211,8 @@ function WorkspaceContent() {
         return <Dashboard onOpenTask={handleOpenTask} onNavigate={handleNavigate} />;
       case 'notifications':
         return <NotificationsList onOpenTask={handleOpenTask} />;
-      case 'account_admin':
-        return <AdminAccounts />;
+      case 'sign_in':
+        return <AuthScreen onContinueAsGuest={() => handleNavigate('dashboard')} />;
       case 'create_task':
         return <CreateTask />;
       case 'review_queue': {
@@ -331,7 +337,10 @@ function WorkspaceContent() {
 function AppContent() {
   const { authStatus } = useAppStore();
 
-  if (authStatus !== 'approved') {
+  if (
+    authStatus === 'loading' ||
+    authStatus === 'signed_out'
+  ) {
     return <AuthScreen />;
   }
 

@@ -91,7 +91,7 @@ export function CreateTask() {
     e.preventDefault();
     if (!taskName || !selectedCreatorId || files.length === 0) return;
 
-    const creator = users[selectedCreatorId];
+    const creator = users[selectedCreatorId] || (selectedCreatorId === currentUser.id ? currentUser : undefined);
     const newTaskId = Math.random().toString(36).substring(7);
     const localFiles: UploadedTaskFile[] = files.map(file => ({
       id: Math.random().toString(36).substring(7),
