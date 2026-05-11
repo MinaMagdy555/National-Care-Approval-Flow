@@ -10,7 +10,6 @@ import {
   fetchSupabaseNotifications,
   fetchSupabaseTasks,
   isSupabaseServiceRestrictedError,
-  setSupabaseSharedDataPaused,
   uploadTaskFiles,
   upsertSupabaseNotifications,
   upsertSupabaseTask,
@@ -69,7 +68,7 @@ function getSharedDataErrorMessage(error: unknown, fallback: string) {
   const isNetworkError = normalizedMessage.includes('failed to fetch') || normalizedMessage.includes('networkerror') || normalizedMessage.includes('network error');
 
   if (isSupabaseServiceRestrictedError(error)) {
-    return 'Supabase egress quota is exhausted, so this browser is using local data.';
+    return 'Supabase egress quota is exhausted. Shared tasks cannot load until the Supabase project is unblocked.';
   }
 
   if (isNetworkError) {
@@ -81,16 +80,6 @@ function getSharedDataErrorMessage(error: unknown, fallback: string) {
   }
 
   return message;
-}
-
-function shouldUseLocalFallbackForSharedDataError(error: unknown) {
-  const normalizedMessage = getErrorMessage(error, '').toLowerCase();
-  return (
-    isSupabaseServiceRestrictedError(error) ||
-    normalizedMessage.includes('failed to fetch') ||
-    normalizedMessage.includes('networkerror') ||
-    normalizedMessage.includes('network error')
-  );
 }
 
 function normalizeCredentialValue(value: string) {
@@ -360,7 +349,6 @@ interface AppState {
   notifications: Notification[];
   persistenceMode: 'supabase' | 'local';
   persistenceError: string | null;
-  sharedDataFallbackReason: string | null;
   localMigrationCount: number;
   isMigratingLocalData: boolean;
 }
@@ -392,6 +380,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const clientIdRef = useRef(createClientId());
   const sharedDataChannelRef = useRef<ReturnType<NonNullable<typeof supabase>['channel']> | null>(null);
   const isSharedDataChannelReadyRef = useRef(false);
+  const sharedDataLoadFailedRef = useRef(false);
   const pendingTaskBroadcastIdsRef = useRef<Set<string>>(new Set());
   const pendingNotificationBroadcastIdsRef = useRef<Set<string>>(new Set());
   const queuedSharedDataMessagesRef = useRef<SharedDataMessage[]>([]);
@@ -410,18 +399,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
-  const [sharedDataFallbackReason, setSharedDataFallbackReason] = useState<string | null>(null);
   const [localMigrationState, setLocalMigrationState] = useState<{ tasks: Task[]; notifications: Notification[] } | null>(null);
   const [isMigratingLocalData, setIsMigratingLocalData] = useState(false);
   const currentUser = currentUserState;
-  const isSharedWorkspaceActive = isSharedWorkspaceStatus(authStatus) && !sharedDataFallbackReason;
+  const isSharedWorkspaceActive = isSharedWorkspaceStatus(authStatus);
   const isLocalWorkspaceActive = authStatus === 'approved' && !isSharedWorkspaceActive;
-
-  const disableSharedWorkspace = (reason: string) => {
-    setSupabaseSharedDataPaused(true, reason);
-    setSharedDataFallbackReason(reason);
-    setPersistenceError(null);
-  };
 
   const sendSharedDataMessage = (message: SharedDataPayload) => {
     if (!isSharedWorkspaceActive || !isSupabaseConfigured || !supabase) return;
@@ -473,10 +455,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    setSupabaseSharedDataPaused(!isSharedWorkspaceActive, sharedDataFallbackReason);
-  }, [isSharedWorkspaceActive, sharedDataFallbackReason]);
-
-  useEffect(() => {
     const storedDemoUser = getStoredDemoUser();
     setCurrentUserState(storedDemoUser);
     setUserList(initialUsers);
@@ -490,6 +468,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!isLocalWorkspaceActive) return;
 
     let isMounted = true;
+    sharedDataLoadFailedRef.current = false;
     hasLoadedPersistedState.current = false;
 
     loadAppState()
@@ -539,62 +518,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!isSharedWorkspaceActive) return;
 
     let isMounted = true;
+    sharedDataLoadFailedRef.current = false;
     hasLoadedPersistedState.current = false;
 
-    Promise.all([fetchSupabaseTasks(), fetchSupabaseNotifications(), loadAppState()])
-      .then(([loadedTasks, loadedNotifications, localState]) => {
+    Promise.all([fetchSupabaseTasks(), fetchSupabaseNotifications()])
+      .then(([loadedTasks, loadedNotifications]) => {
         if (!isMounted) return;
 
         const sharedTasks = reviveWorkspaceTasks(loadedTasks, usersObj);
         const sharedNotifications = removeGuestSeedNotifications(loadedNotifications);
-        const localTasks = Array.isArray(localState?.tasks) ? reviveWorkspaceTasks(localState.tasks, usersObj) : [];
-        const localNotifications = Array.isArray(localState?.notifications)
-          ? removeGuestSeedNotifications(localState.notifications)
-          : [];
 
-        setTasks(mergeTasksIntoState(sharedTasks, localTasks));
-        setNotifications(mergeNotificationsIntoState(sharedNotifications, localNotifications));
+        sharedDataLoadFailedRef.current = false;
+        setTasks(sharedTasks);
+        setNotifications(sharedNotifications);
         setLocalMigrationState(null);
         setPersistenceError(null);
 
         void deleteSupabaseGuestSeedData().catch(error => {
           console.error('Failed to delete guest seed data from Supabase', error);
           if (isMounted) {
-            const message = getSharedDataErrorMessage(error, 'Failed to delete guest demo tasks.');
-            if (shouldUseLocalFallbackForSharedDataError(error)) {
-              disableSharedWorkspace(message);
-              return;
-            }
-            setPersistenceError(message);
+            setPersistenceError(getSharedDataErrorMessage(error, 'Failed to delete guest demo tasks.'));
           }
         });
       })
-      .catch(async error => {
+      .catch(error => {
         console.error('Failed to load persisted app state', error);
         if (!isMounted) return;
 
-        try {
-          const localState = await loadAppState();
-          if (!isMounted) return;
-
-          const localTasks = reviveWorkspaceTasks(Array.isArray(localState?.tasks) ? localState.tasks : initialTasks, usersObj);
-          const localNotifications = Array.isArray(localState?.notifications)
-            ? removeGuestSeedNotifications(localState.notifications)
-            : [];
-
-          setTasks(localTasks);
-          setNotifications(localNotifications);
-          void saveAppState({ tasks: localTasks, notifications: localNotifications });
-        } catch (localError) {
-          console.error('Failed to load local fallback workspace', localError);
-        }
-
-        const message = getSharedDataErrorMessage(error, 'Failed to load persisted app state.');
-        if (shouldUseLocalFallbackForSharedDataError(error)) {
-          disableSharedWorkspace(message);
-          return;
-        }
-        setPersistenceError(message);
+        sharedDataLoadFailedRef.current = true;
+        setLocalMigrationState(null);
+        setPersistenceError(getSharedDataErrorMessage(error, 'Failed to load persisted app state.'));
       })
       .finally(() => {
         if (isMounted) hasLoadedPersistedState.current = true;
@@ -606,7 +559,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [isSharedWorkspaceActive, currentUser.id]);
 
   useEffect(() => {
-    if (!isSharedWorkspaceActive || !hasLoadedPersistedState.current) return;
+    if (!isSharedWorkspaceActive || !hasLoadedPersistedState.current || sharedDataLoadFailedRef.current) return;
 
     const pendingTaskIds = Array.from(pendingTaskBroadcastIdsRef.current);
     const pendingNotificationIds = Array.from(pendingNotificationBroadcastIdsRef.current);
@@ -633,16 +586,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       })
       .catch(error => {
         console.error('Failed to save app state', error);
-        const message = getSharedDataErrorMessage(error, 'Failed to save app state.');
-        if (shouldUseLocalFallbackForSharedDataError(error)) {
-          disableSharedWorkspace(message);
-          void saveAppState({ tasks, notifications }).catch(localError => {
-            console.error('Failed to save local fallback workspace', localError);
-            setPersistenceError(getErrorMessage(localError, 'Failed to save local fallback workspace.'));
-          });
-          return;
-        }
-        setPersistenceError(message);
+        setPersistenceError(getSharedDataErrorMessage(error, 'Failed to save app state.'));
       });
   }, [tasks, notifications, isSharedWorkspaceActive]);
 
@@ -769,18 +713,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         if (!isMounted) return;
 
+        sharedDataLoadFailedRef.current = false;
         setTasks(prev => mergeTasksIntoState(prev.filter(task => !isGuestSeedTask(task)), reviveWorkspaceTasks(latestTasks, usersObj)));
         setNotifications(prev => mergeNotificationsIntoState(removeGuestSeedNotifications(prev), removeGuestSeedNotifications(latestNotifications)));
         setPersistenceError(null);
       } catch (error) {
         console.error('Failed to sync latest shared data', error);
         if (isMounted) {
-          const message = getSharedDataErrorMessage(error, 'Failed to sync latest shared data.');
-          if (shouldUseLocalFallbackForSharedDataError(error)) {
-            disableSharedWorkspace(message);
-            return;
-          }
-          setPersistenceError(message);
+          sharedDataLoadFailedRef.current = true;
+          setPersistenceError(getSharedDataErrorMessage(error, 'Failed to sync latest shared data.'));
         }
       } finally {
         isPolling = false;
@@ -903,12 +844,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await clearAppState();
     } catch (error) {
       console.error('Failed to migrate local data to Supabase', error);
-      const message = getSharedDataErrorMessage(error, 'Failed to migrate local data.');
-      if (shouldUseLocalFallbackForSharedDataError(error)) {
-        disableSharedWorkspace(message);
-      } else {
-        setPersistenceError(message);
-      }
+      setPersistenceError(getSharedDataErrorMessage(error, 'Failed to migrate local data.'));
     } finally {
       setIsMigratingLocalData(false);
     }
@@ -1086,7 +1022,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       notifications,
       persistenceMode: isSharedWorkspaceActive ? 'supabase' : 'local',
       persistenceError,
-      sharedDataFallbackReason,
       localMigrationCount: (localMigrationState?.tasks.length || 0) + (localMigrationState?.notifications.length || 0),
       isMigratingLocalData,
       setEnvironment,

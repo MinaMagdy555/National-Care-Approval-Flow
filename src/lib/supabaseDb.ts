@@ -5,8 +5,6 @@ import { uploadLimitHelpText } from './uploadLimits';
 const TASK_FILES_BUCKET = 'task-files';
 const ROLE_VALUES: Role[] = ['team_member', 'reviewer', 'art_director', 'team_leader', 'admin'];
 const APPROVAL_STATUS_VALUES: AccountApprovalStatus[] = ['pending', 'approved', 'rejected'];
-let isSupabaseSharedDataPaused = false;
-let supabaseSharedDataPauseReason: string | null = null;
 
 type TaskRow = {
   id: string;
@@ -52,24 +50,15 @@ export function isSupabaseServiceRestrictedError(error: unknown) {
   );
 }
 
-export function setSupabaseSharedDataPaused(isPaused: boolean, reason: string | null = null) {
-  isSupabaseSharedDataPaused = isPaused;
-  supabaseSharedDataPauseReason = isPaused ? reason : null;
-}
-
-function hasUsableSupabaseClient() {
-  return Boolean(isSupabaseConfigured && supabase && !isSupabaseSharedDataPaused);
-}
-
 function ensureSupabase() {
-  if (!isSupabaseConfigured || !supabase || isSupabaseSharedDataPaused) {
-    throw new Error(supabaseSharedDataPauseReason || 'Supabase is not configured.');
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
   }
   return supabase;
 }
 
 async function hasWritableSupabaseClient() {
-  return hasUsableSupabaseClient();
+  return Boolean(isSupabaseConfigured && supabase);
 }
 
 function stripFileBlobs(task: Task): Task {
@@ -385,8 +374,7 @@ export async function uploadTaskFiles(taskId: string, files: UploadedTaskFile[])
 
     if (error) {
       if (isSupabaseServiceRestrictedError(error)) {
-        setSupabaseSharedDataPaused(true, 'Supabase egress quota is exhausted, so this browser is using local data.');
-        return files;
+        throw new Error(`${file.name}: Supabase egress quota is exhausted. Shared uploads cannot continue until the Supabase project is unblocked.`);
       }
 
       const message = 'message' in error ? error.message : 'Upload failed.';
@@ -426,11 +414,7 @@ export async function uploadTaskPreviewImage(storagePath: string, previewBlob: B
 
   if (error) {
     if (isSupabaseServiceRestrictedError(error)) {
-      setSupabaseSharedDataPaused(true, 'Supabase egress quota is exhausted, so this browser is using local data.');
-      return {
-        storagePath,
-        url: URL.createObjectURL(previewBlob),
-      };
+      throw new Error(`${storagePath}: Supabase egress quota is exhausted. Shared uploads cannot continue until the Supabase project is unblocked.`);
     }
 
     const message = 'message' in error ? error.message : 'Preview upload failed.';
@@ -446,7 +430,7 @@ export async function uploadTaskPreviewImage(storagePath: string, previewBlob: B
 }
 
 export function getTaskFilePublicUrl(storagePath: string) {
-  if (!hasUsableSupabaseClient()) return '';
+  if (!isSupabaseConfigured || !supabase) return '';
 
   const { data } = supabase.storage.from(TASK_FILES_BUCKET).getPublicUrl(storagePath);
   return data.publicUrl;
