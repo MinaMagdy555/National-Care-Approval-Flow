@@ -38,6 +38,8 @@ To share the same tasks between devices, keep `VITE_SUPABASE_URL` and `VITE_SUPA
 
 If the Supabase project is unavailable or has exhausted its egress quota, the app stays in shared-data mode and shows the shared data error. You can force local-only mode for offline demos by setting `VITE_USE_SHARED_SUPABASE_DATA=false`.
 
+The app uses Supabase Realtime for live updates and only performs a slow background refresh, so shared data does not repeatedly download the whole workspace.
+
 ## Host on GitHub Pages
 
 This repo includes a GitHub Actions workflow that builds and deploys the app from `main`.

@@ -22,7 +22,7 @@ const SHARED_SUPABASE_FLAG = String(import.meta.env.VITE_USE_SHARED_SUPABASE_DAT
 const USE_SHARED_SUPABASE_DATA = !['0', 'false', 'no', 'off'].includes(SHARED_SUPABASE_FLAG);
 const SHARED_DATA_CHANNEL = 'approval-flow-shared-data';
 const SHARED_DATA_EVENT = 'state-change';
-const SHARED_DATA_POLL_INTERVAL_MS = 2500;
+const SHARED_DATA_POLL_INTERVAL_MS = 5 * 60 * 1000;
 const GUEST_SEED_ID_PREFIX = 'guest_seed_';
 const GUEST_USER: User = {
   id: 'guest',
@@ -502,6 +502,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const autoArchiveTasks = tasks.filter(task => shouldAutoArchiveTask(task));
     if (autoArchiveTasks.length === 0) return;
 
+    autoArchiveTasks.forEach(task => queueTaskBroadcast(task.id));
     setTasks(prev => prev.map(task => (
       autoArchiveTasks.some(item => item.id === task.id)
         ? {
@@ -563,21 +564,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     const pendingTaskIds = Array.from(pendingTaskBroadcastIdsRef.current);
     const pendingNotificationIds = Array.from(pendingNotificationBroadcastIdsRef.current);
+    if (pendingTaskIds.length === 0 && pendingNotificationIds.length === 0) return;
+
     pendingTaskBroadcastIdsRef.current.clear();
     pendingNotificationBroadcastIdsRef.current.clear();
 
-    pendingTaskIds.forEach(taskId => {
-      const task = tasks.find(item => item.id === taskId);
-      if (task) sendSharedDataMessage({ type: 'task_upsert', task });
-    });
-    pendingNotificationIds.forEach(notificationId => {
-      const notification = notifications.find(item => item.id === notificationId);
-      if (notification) sendSharedDataMessage({ type: 'notification_upsert', notification });
-    });
+    const pendingTasks = pendingTaskIds
+      .map(taskId => tasks.find(item => item.id === taskId))
+      .filter(Boolean) as Task[];
+    const pendingNotifications = pendingNotificationIds
+      .map(notificationId => notifications.find(item => item.id === notificationId))
+      .filter(Boolean) as Notification[];
+
+    pendingTasks.forEach(task => sendSharedDataMessage({ type: 'task_upsert', task }));
+    pendingNotifications.forEach(notification => sendSharedDataMessage({ type: 'notification_upsert', notification }));
 
     const saveState = Promise.all([
-      ...tasks.map(task => upsertSupabaseTask(task)),
-      upsertSupabaseNotifications(notifications),
+      ...pendingTasks.map(task => upsertSupabaseTask(task)),
+      upsertSupabaseNotifications(pendingNotifications),
     ]);
 
     saveState
@@ -586,6 +590,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       })
       .catch(error => {
         console.error('Failed to save app state', error);
+        pendingTaskIds.forEach(taskId => pendingTaskBroadcastIdsRef.current.add(taskId));
+        pendingNotificationIds.forEach(notificationId => pendingNotificationBroadcastIdsRef.current.add(notificationId));
         setPersistenceError(getSharedDataErrorMessage(error, 'Failed to save app state.'));
       });
   }, [tasks, notifications, isSharedWorkspaceActive]);
