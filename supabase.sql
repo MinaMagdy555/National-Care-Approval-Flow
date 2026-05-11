@@ -51,7 +51,10 @@ create index if not exists user_profiles_approval_status_idx on public.user_prof
 create index if not exists user_profiles_legacy_id_idx on public.user_profiles (legacy_id);
 create index if not exists approval_tasks_environment_idx on public.approval_tasks (environment);
 create index if not exists approval_tasks_status_idx on public.approval_tasks (status);
+create index if not exists approval_tasks_updated_at_idx on public.approval_tasks (updated_at);
 create index if not exists approval_notifications_user_id_idx on public.approval_notifications (user_id);
+create index if not exists approval_notifications_task_id_idx on public.approval_notifications (task_id);
+create index if not exists approval_notifications_created_at_idx on public.approval_notifications (created_at);
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -315,10 +318,6 @@ set
   file_size_limit = 209715200,
   allowed_mime_types = array['image/png', 'image/jpeg', 'video/mp4', 'application/pdf']
 where id = 'task-files';
-
-delete from storage.objects
-where bucket_id = 'task-files'
-  and name like 'guest-seed/%';
 
 delete from public.approval_notifications
 where task_id like 'guest_seed_%'
