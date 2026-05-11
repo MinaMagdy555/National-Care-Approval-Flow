@@ -36,6 +36,8 @@ The app uses fake local accounts. No email confirmation, external provider, or a
 
 To share the same tasks between devices, keep `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `.env.local`, then run `supabase.sql` in the Supabase SQL Editor for that project. The fake accounts use the public anon key, so the SQL includes demo RLS policies for `approval_tasks`, `approval_notifications`, and the `task-files` bucket.
 
+If the Supabase project is unavailable or has exhausted its egress quota, the app pauses shared sync and continues with local browser data. You can also force local-only mode by setting `VITE_USE_SHARED_SUPABASE_DATA=false`.
+
 ## Host on GitHub Pages
 
 This repo includes a GitHub Actions workflow that builds and deploys the app from `main`.

@@ -5,6 +5,8 @@ import { uploadLimitHelpText } from './uploadLimits';
 const TASK_FILES_BUCKET = 'task-files';
 const ROLE_VALUES: Role[] = ['team_member', 'reviewer', 'art_director', 'team_leader', 'admin'];
 const APPROVAL_STATUS_VALUES: AccountApprovalStatus[] = ['pending', 'approved', 'rejected'];
+let isSupabaseSharedDataPaused = false;
+let supabaseSharedDataPauseReason: string | null = null;
 
 type TaskRow = {
   id: string;
@@ -31,15 +33,43 @@ type UserProfileRow = {
   updated_at: string;
 };
 
+export function getSupabaseErrorMessage(error: unknown, fallback = 'Supabase request failed.') {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
+  return fallback;
+}
+
+export function isSupabaseServiceRestrictedError(error: unknown) {
+  const normalizedMessage = getSupabaseErrorMessage(error).toLowerCase();
+  return (
+    normalizedMessage.includes('exceed_cached_egress_quota') ||
+    normalizedMessage.includes('exceed_egress_quota') ||
+    normalizedMessage.includes('egress quota') ||
+    normalizedMessage.includes('service for this project is restricted')
+  );
+}
+
+export function setSupabaseSharedDataPaused(isPaused: boolean, reason: string | null = null) {
+  isSupabaseSharedDataPaused = isPaused;
+  supabaseSharedDataPauseReason = isPaused ? reason : null;
+}
+
+function hasUsableSupabaseClient() {
+  return Boolean(isSupabaseConfigured && supabase && !isSupabaseSharedDataPaused);
+}
+
 function ensureSupabase() {
-  if (!isSupabaseConfigured || !supabase) {
-    throw new Error('Supabase is not configured.');
+  if (!isSupabaseConfigured || !supabase || isSupabaseSharedDataPaused) {
+    throw new Error(supabaseSharedDataPauseReason || 'Supabase is not configured.');
   }
   return supabase;
 }
 
 async function hasWritableSupabaseClient() {
-  return Boolean(isSupabaseConfigured && supabase);
+  return hasUsableSupabaseClient();
 }
 
 function stripFileBlobs(task: Task): Task {
@@ -354,6 +384,11 @@ export async function uploadTaskFiles(taskId: string, files: UploadedTaskFile[])
       });
 
     if (error) {
+      if (isSupabaseServiceRestrictedError(error)) {
+        setSupabaseSharedDataPaused(true, 'Supabase egress quota is exhausted, so this browser is using local data.');
+        return files;
+      }
+
       const message = 'message' in error ? error.message : 'Upload failed.';
       const help = message.toLowerCase().includes('maximum allowed size')
         ? ` ${uploadLimitHelpText()}`
@@ -390,6 +425,14 @@ export async function uploadTaskPreviewImage(storagePath: string, previewBlob: B
     });
 
   if (error) {
+    if (isSupabaseServiceRestrictedError(error)) {
+      setSupabaseSharedDataPaused(true, 'Supabase egress quota is exhausted, so this browser is using local data.');
+      return {
+        storagePath,
+        url: URL.createObjectURL(previewBlob),
+      };
+    }
+
     const message = 'message' in error ? error.message : 'Preview upload failed.';
     throw new Error(`${storagePath}: ${message}`);
   }
@@ -403,7 +446,7 @@ export async function uploadTaskPreviewImage(storagePath: string, previewBlob: B
 }
 
 export function getTaskFilePublicUrl(storagePath: string) {
-  if (!isSupabaseConfigured || !supabase) return '';
+  if (!hasUsableSupabaseClient()) return '';
 
   const { data } = supabase.storage.from(TASK_FILES_BUCKET).getPublicUrl(storagePath);
   return data.publicUrl;

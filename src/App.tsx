@@ -102,6 +102,7 @@ function WorkspaceContent() {
     notifications,
     persistenceMode,
     persistenceError,
+    sharedDataFallbackReason,
     localMigrationCount,
     isMigratingLocalData,
     migrateLocalDataToSupabase,
@@ -301,6 +302,11 @@ function WorkspaceContent() {
           {persistenceMode === 'supabase' && persistenceError && (
             <div className="mx-4 mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700 sm:mx-6 lg:mx-8">
               Shared data error: {persistenceError}
+            </div>
+          )}
+          {persistenceMode === 'local' && sharedDataFallbackReason && (
+            <div className="mx-4 mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900 sm:mx-6 lg:mx-8">
+              Shared data paused. {sharedDataFallbackReason}
             </div>
           )}
           {persistenceMode === 'supabase' && !persistenceError && localMigrationCount > 0 && (
