@@ -3,6 +3,7 @@ import { useAppStore } from '../lib/store';
 import {
   Archive,
   Bell,
+  CalendarClock,
   Check,
   ChevronDown,
   ChevronRight,
@@ -49,6 +50,7 @@ export function Sidebar({
   useEffect(() => {
     if (
       currentView === 'all_tasks' ||
+      currentView === 'campaign_scheduler' ||
       currentView === 'my_tasks' ||
       currentView === 'review_queue' ||
       currentView === 'quick_look_queue' ||
@@ -79,6 +81,7 @@ export function Sidebar({
   const getMenuForRole = (): MenuItem[] => {
     const commonTop = [
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      { id: 'campaign_scheduler', label: 'Campaign Scheduler', icon: CalendarClock },
       { id: 'notifications', label: `Notifications${unreadCount > 0 ? ` (${unreadCount})` : ''}`, icon: Bell },
     ];
 
@@ -131,6 +134,8 @@ export function Sidebar({
           }
         ];
       case 'team_leader':
+      case 'manager':
+      case 'developer':
       case 'admin':
         return [
           ...commonTop,
@@ -154,6 +159,7 @@ export function Sidebar({
   const menu = getMenuForRole();
   const taskViews = new Set([
     'all_tasks',
+    'campaign_scheduler',
     'my_tasks',
     'review_queue',
     'quick_look_queue',

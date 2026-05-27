@@ -1,28 +1,45 @@
 import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
-import { AccountProfile, AuthStatus, User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile } from './types';
+import { AccountProfile, AuthStatus, User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile, ReviewMode } from './types';
 import { demoAccounts, initialUsers, initialTasks } from './mockData';
 import { clearAppState, loadAppState, saveAppState } from './localDb';
 import { shouldAutoArchiveTask } from './archiveUtils';
 import { sanitizeHandledBy } from './handlerUtils';
-import { isSupabaseConfigured, supabase } from './supabaseClient';
 import {
-  deleteSupabaseGuestSeedData,
-  fetchSupabaseNotifications,
-  fetchSupabaseTasks,
-  isSupabaseServiceRestrictedError,
+  ART_DIRECTOR_WAITING_STATUSES,
+  CLOSED_STATUSES,
+  RETURNED_STATUSES,
+  REVIEWER_WAITING_STATUSES,
+  canReviewRouteUpdateStatus,
+  getCurrentOwnerUserIds,
+  getReviewRouteTarget,
+  getTaskParticipantIds,
+  uniqueIds,
+} from './workflowUtils';
+import {
+  fetchDriveNotifications,
+  fetchDriveTasks,
+  importDriveSelectionToTasks,
   uploadTaskFiles,
-  upsertSupabaseNotifications,
-  upsertSupabaseTask,
-} from './supabaseDb';
+  upsertDriveNotifications,
+  upsertDriveTask,
+  USE_SHARED_DRIVE_DATA,
+} from './driveDb';
+import {
+  clearDriveSession,
+  getStoredDriveRoot,
+  getStoredDriveUserEmail,
+  hasUsableDriveToken,
+  isGoogleDriveConfigured,
+  pickDriveDocuments,
+  requestDriveAccessToken,
+  setStoredDriveRoot,
+  type DriveAuthStatus,
+  type DriveRootFolder,
+} from './driveAuth';
 import { addLowResPreviewsToFiles, getTaskFiles } from './previewUtils';
 
-const REVIEWER_WAITING_STATUSES: TaskStatus[] = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'];
 const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
-const SHARED_SUPABASE_FLAG = String(import.meta.env.VITE_USE_SHARED_SUPABASE_DATA ?? '').trim().toLowerCase();
-const USE_SHARED_SUPABASE_DATA = !['0', 'false', 'no', 'off'].includes(SHARED_SUPABASE_FLAG);
-const SHARED_DATA_CHANNEL = 'approval-flow-shared-data';
-const SHARED_DATA_EVENT = 'state-change';
-const SHARED_DATA_POLL_INTERVAL_MS = 5 * 60 * 1000;
+const SHARED_DATA_POLL_INTERVAL_MS = 60 * 1000;
 const GUEST_SEED_ID_PREFIX = 'guest_seed_';
 const GUEST_USER: User = {
   id: 'guest',
@@ -32,7 +49,7 @@ const GUEST_USER: User = {
 };
 
 function isSharedWorkspaceStatus(status: AuthStatus) {
-  return USE_SHARED_SUPABASE_DATA && isSupabaseConfigured && status === 'approved';
+  return USE_SHARED_DRIVE_DATA && status === 'approved';
 }
 
 type AuthActionResult = {
@@ -40,18 +57,6 @@ type AuthActionResult = {
   message?: string;
   needsEmailConfirmation?: boolean;
 };
-
-type SharedDataPayload =
-  | { type: 'task_upsert'; task: Task }
-  | { type: 'notification_upsert'; notification: Notification };
-
-type SharedDataMessage = SharedDataPayload & { originClientId: string };
-
-function createClientId() {
-  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `client_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-}
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (typeof error === 'string') return error;
@@ -63,20 +68,10 @@ function getErrorMessage(error: unknown, fallback: string) {
 function getSharedDataErrorMessage(error: unknown, fallback: string) {
   const message = getErrorMessage(error, fallback);
   const normalizedMessage = message.toLowerCase();
-  const isPolicyError = normalizedMessage.includes('permission denied') || normalizedMessage.includes('row-level security');
-  const isWorkflowTableError = normalizedMessage.includes('approval_tasks') || normalizedMessage.includes('approval_notifications');
   const isNetworkError = normalizedMessage.includes('failed to fetch') || normalizedMessage.includes('networkerror') || normalizedMessage.includes('network error');
 
-  if (isSupabaseServiceRestrictedError(error)) {
-    return 'Supabase egress quota is exhausted. Shared tasks cannot load until the Supabase project is unblocked.';
-  }
-
   if (isNetworkError) {
-    return 'Supabase connection failed. Check your Supabase URL, anon key, and network access, then refresh.';
-  }
-
-  if (isPolicyError && isWorkflowTableError) {
-    return 'Supabase policies need updating. Run the updated supabase.sql in this project, then refresh.';
+    return 'Google Drive connection failed. Check Google access, Drive permissions, and network access, then refresh.';
   }
 
   return message;
@@ -92,12 +87,14 @@ function findDemoAccount(identifier: string, password: string) {
 
   return demoAccounts.find(account => {
     const user = account.user;
-    const acceptedNames = [
-      user.id,
-      user.name,
-      user.name.split(/\s+/)[0],
-      user.email || '',
-    ].filter(Boolean).map(normalizeCredentialValue);
+    const acceptedNames = (user.email
+      ? [user.email]
+      : [
+          user.id,
+          user.name,
+          user.name.split(/\s+/)[0],
+        ]
+    ).filter(Boolean).map(normalizeCredentialValue);
 
     return acceptedNames.includes(normalizedIdentifier) && normalizeCredentialValue(account.password) === normalizedPassword;
   }) || null;
@@ -134,6 +131,16 @@ function getUserIdsByRole(users: User[], roles: Role[]) {
     .map(user => user.id);
 }
 
+function getUserIdsByRoleRecord(users: Record<string, User>, roles: Role[]) {
+  return Object.values(users)
+    .filter(user => roles.includes(user.role))
+    .map(user => user.id);
+}
+
+function getUserDisplayName(users: Record<string, User>, userId: string) {
+  return users[userId]?.name || initialUsers.find(user => user.id === userId)?.name || userId;
+}
+
 function isReviewerCreatedTask(task: Task, users: Record<string, User>) {
   const creatorRole = users[task.createdBy]?.role || initialUsers.find(user => user.id === task.createdBy)?.role;
   return creatorRole === 'reviewer' || creatorRole === 'admin';
@@ -151,6 +158,7 @@ function normalizeReviewerCreatedTask(task: Task, users: Record<string, User>): 
     status: 'sent_to_art_director',
     currentOwnerRole: 'art_director',
     currentOwnerUserId: null,
+    currentOwnerUserIds: getUserIdsByRoleRecord(users, ['art_director']),
   };
 }
 
@@ -159,6 +167,10 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
 
   const now = new Date().toISOString();
   const versions = Array.isArray(task.versions) ? task.versions : [];
+  const currentOwnerUserIds = uniqueIds([
+    ...(Array.isArray(task.currentOwnerUserIds) ? task.currentOwnerUserIds : []),
+    task.currentOwnerUserId,
+  ]);
 
   return {
     id: task.id,
@@ -172,12 +184,19 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
     status: task.status || 'submitted',
     currentOwnerRole: task.currentOwnerRole ?? null,
     currentOwnerUserId: task.currentOwnerUserId ?? null,
+    currentOwnerUserIds,
     priority: task.priority || 'not_set',
     deadlineText: task.deadlineText ?? null,
+    scheduledPublishAt: task.scheduledPublishAt ?? null,
+    publishNote: task.publishNote ?? null,
+    publishedAt: task.publishedAt ?? null,
+    publishReminderSentAt: task.publishReminderSentAt ?? null,
     versions,
     comments: Array.isArray(task.comments) ? task.comments : [],
     thumbnailUrl: task.thumbnailUrl || '',
     thumbnailStoragePath: task.thumbnailStoragePath,
+    driveFolderId: task.driveFolderId,
+    driveMetadataFileId: task.driveMetadataFileId,
     archivedAt: task.archivedAt ?? null,
     archivedReason: task.archivedReason ?? null,
     createdAt: task.createdAt || now,
@@ -190,6 +209,7 @@ function reviveTaskFiles(tasks: Task[], users: Record<string, User> = {}): Task[
     const versions = task.versions.map(version => {
       const files = version.files?.map(file => ({
         ...file,
+        storageProvider: file.storageProvider || (file.driveFileId ? 'drive' : file.blob || file.url?.startsWith('blob:') ? 'local' : file.storageProvider),
         url: file.blob ? URL.createObjectURL(file.blob) : file.url,
       }));
 
@@ -228,7 +248,21 @@ function taskSyncKey(task: Task) {
     .map(section => section.imageStoragePath || '')
     .join('|');
 
-  return `${task.id}:${task.updatedAt}:${task.status}:${task.archivedAt || ''}:${task.thumbnailStoragePath || ''}:${previewKey}:${commentImageKey}`;
+  return [
+    task.id,
+    task.updatedAt,
+    task.status,
+    task.reviewMode,
+    task.handledBy.join(','),
+    getCurrentOwnerUserIds(task).join(','),
+    task.scheduledPublishAt || '',
+    task.publishedAt || '',
+    task.publishReminderSentAt || '',
+    task.archivedAt || '',
+    task.thumbnailStoragePath || '',
+    previewKey,
+    commentImageKey,
+  ].join(':');
 }
 
 function preserveStoredMediaPreviews(currentTask: Task, incomingTask: Task): Task {
@@ -317,7 +351,11 @@ async function uploadMigratedTaskFiles(task: Task): Promise<Task> {
   const versions = await Promise.all(task.versions.map(async version => {
     if (!version.files || version.files.length === 0) return version;
 
-    const uploadedFiles = await uploadTaskFiles(task.id, version.files);
+    const uploadedFiles = await uploadTaskFiles(task.id, version.files, {
+      taskCode: task.code,
+      taskName: task.name,
+      taskFolderId: task.driveFolderId,
+    });
     const previewedFiles = await addLowResPreviewsToFiles(task.id, uploadedFiles, version.files);
 
     return {
@@ -347,16 +385,27 @@ interface AppState {
   users: Record<string, User>;
   userList: User[];
   notifications: Notification[];
-  persistenceMode: 'supabase' | 'local';
+  persistenceMode: 'drive' | 'local';
   persistenceError: string | null;
   localMigrationCount: number;
   isMigratingLocalData: boolean;
+  driveStatus: DriveAuthStatus;
+  driveUserEmail: string | null;
+  driveRootFolder: DriveRootFolder | null;
+  isConnectingDrive: boolean;
+  isChoosingDriveRoot: boolean;
+  isImportingDriveTasks: boolean;
 }
 
 interface AppContextType extends AppState {
   setEnvironment: (env: Environment) => void;
-  updateTaskStatus: (taskId: string, newStatus: TaskStatus, newOwnerRole: Role | null) => void;
+  updateTaskStatus: (taskId: string, newStatus: TaskStatus, newOwnerRole: Role | null, newOwnerUserIds?: string[]) => void;
   updateTaskPriority: (taskId: string, priority: Priority, deadline: string | null) => void;
+  updateTaskAssignment: (taskId: string, handledByIds: string[], currentOwnerUserIds: string[]) => void;
+  updateTaskReviewMode: (taskId: string, reviewMode: ReviewMode) => void;
+  updateTaskPublishSchedule: (taskId: string, schedule: { scheduledPublishAt: string | null; publishNote: string | null }) => void;
+  markCampaignPublished: (taskId: string) => void;
+  markPublishReminderSent: (taskId: string) => void;
   addTaskComment: (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => void;
   addTaskVersion: (taskId: string, version: TaskVersion) => void;
   replaceTaskVersionFiles: (taskId: string, versionId: string, files: UploadedTaskFile[]) => void;
@@ -368,7 +417,11 @@ interface AppContextType extends AppState {
   logout: () => Promise<void>;
   archiveTask: (taskId: string, reason?: string) => void;
   unarchiveTask: (taskId: string) => void;
-  migrateLocalDataToSupabase: () => Promise<void>;
+  connectGoogleDrive: () => Promise<void>;
+  disconnectGoogleDrive: () => void;
+  chooseDriveRoot: () => Promise<void>;
+  importDriveTasks: () => Promise<void>;
+  migrateLocalDataToDrive: () => Promise<void>;
   dismissLocalMigration: () => void;
 }
 
@@ -377,13 +430,9 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export function AppProvider({ children }: { children: ReactNode }) {
   const initialDemoUser = getStoredDemoUser();
   const hasLoadedPersistedState = useRef(false);
-  const clientIdRef = useRef(createClientId());
-  const sharedDataChannelRef = useRef<ReturnType<NonNullable<typeof supabase>['channel']> | null>(null);
-  const isSharedDataChannelReadyRef = useRef(false);
   const sharedDataLoadFailedRef = useRef(false);
   const pendingTaskBroadcastIdsRef = useRef<Set<string>>(new Set());
   const pendingNotificationBroadcastIdsRef = useRef<Set<string>>(new Set());
-  const queuedSharedDataMessagesRef = useRef<SharedDataMessage[]>([]);
   const [accountProfiles, setAccountProfiles] = useState<AccountProfile[]>([]);
   const [authProfile, setAuthProfile] = useState<AccountProfile | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>(initialDemoUser.id === GUEST_USER.id ? 'signed_out' : 'approved');
@@ -401,50 +450,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [localMigrationState, setLocalMigrationState] = useState<{ tasks: Task[]; notifications: Notification[] } | null>(null);
   const [isMigratingLocalData, setIsMigratingLocalData] = useState(false);
+  const [driveRootFolder, setDriveRootFolder] = useState<DriveRootFolder | null>(() => getStoredDriveRoot());
+  const [driveUserEmail, setDriveUserEmail] = useState<string | null>(() => getStoredDriveUserEmail());
+  const [hasDriveToken, setHasDriveToken] = useState(() => hasUsableDriveToken());
+  const [isConnectingDrive, setIsConnectingDrive] = useState(false);
+  const [isChoosingDriveRoot, setIsChoosingDriveRoot] = useState(false);
+  const [isImportingDriveTasks, setIsImportingDriveTasks] = useState(false);
   const currentUser = currentUserState;
   const isSharedWorkspaceActive = isSharedWorkspaceStatus(authStatus);
+  const isDriveWorkspaceReady = isSharedWorkspaceActive && hasDriveToken && Boolean(driveRootFolder);
+  const driveStatus: DriveAuthStatus = !USE_SHARED_DRIVE_DATA
+    ? 'disabled'
+    : !isGoogleDriveConfigured
+      ? 'needs_config'
+      : !hasDriveToken
+        ? 'needs_auth'
+        : !driveRootFolder
+          ? 'needs_root'
+          : 'ready';
   const isLocalWorkspaceActive = authStatus === 'approved' && !isSharedWorkspaceActive;
-
-  const sendSharedDataMessage = (message: SharedDataPayload) => {
-    if (!isSharedWorkspaceActive || !isSupabaseConfigured || !supabase) return;
-
-    const sharedMessage = {
-      ...message,
-      originClientId: clientIdRef.current,
-    } as SharedDataMessage;
-
-    if (!isSharedDataChannelReadyRef.current || !sharedDataChannelRef.current) {
-      queuedSharedDataMessagesRef.current.push(sharedMessage);
-      return;
-    }
-
-    void sharedDataChannelRef.current
-      .send({
-        type: 'broadcast',
-        event: SHARED_DATA_EVENT,
-        payload: sharedMessage,
-      })
-      .catch(error => {
-        console.error('Failed to broadcast shared data change', error);
-      });
-  };
-
-  const flushQueuedSharedDataMessages = () => {
-    if (!isSharedDataChannelReadyRef.current || !sharedDataChannelRef.current) return;
-
-    const queuedMessages = queuedSharedDataMessagesRef.current.splice(0);
-    queuedMessages.forEach(message => {
-      void sharedDataChannelRef.current
-        ?.send({
-          type: 'broadcast',
-          event: SHARED_DATA_EVENT,
-          payload: message,
-        })
-        .catch(error => {
-          console.error('Failed to broadcast queued shared data change', error);
-        });
-    });
-  };
 
   const queueTaskBroadcast = (taskId: string) => {
     pendingTaskBroadcastIdsRef.current.add(taskId);
@@ -517,38 +541,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!isSharedWorkspaceActive) return;
+    if (!isDriveWorkspaceReady) {
+      sharedDataLoadFailedRef.current = false;
+      hasLoadedPersistedState.current = true;
+      setTasks(initialTasks);
+      setNotifications([]);
+      setLocalMigrationState(null);
+      setPersistenceError(null);
+      return;
+    }
 
     let isMounted = true;
     sharedDataLoadFailedRef.current = false;
     hasLoadedPersistedState.current = false;
 
-    Promise.all([fetchSupabaseTasks(), fetchSupabaseNotifications()])
-      .then(([loadedTasks, loadedNotifications]) => {
+    Promise.all([fetchDriveTasks(), fetchDriveNotifications(), loadAppState()])
+      .then(([loadedTasks, loadedNotifications, localState]) => {
         if (!isMounted) return;
 
         const sharedTasks = reviveWorkspaceTasks(loadedTasks, usersObj);
         const sharedNotifications = removeGuestSeedNotifications(loadedNotifications);
+        const localTasks = Array.isArray(localState?.tasks) ? localState.tasks.filter(task => !isGuestSeedTask(task)) : [];
+        const localNotifications = Array.isArray(localState?.notifications) ? removeGuestSeedNotifications(localState.notifications) : [];
 
         sharedDataLoadFailedRef.current = false;
         setTasks(sharedTasks);
         setNotifications(sharedNotifications);
-        setLocalMigrationState(null);
+        setLocalMigrationState(localTasks.length || localNotifications.length
+          ? { tasks: localTasks, notifications: localNotifications }
+          : null);
         setPersistenceError(null);
-
-        void deleteSupabaseGuestSeedData().catch(error => {
-          console.error('Failed to delete guest seed data from Supabase', error);
-          if (isMounted) {
-            setPersistenceError(getSharedDataErrorMessage(error, 'Failed to delete guest demo tasks.'));
-          }
-        });
       })
       .catch(error => {
-        console.error('Failed to load persisted app state', error);
+        console.error('Failed to load Drive app state', error);
         if (!isMounted) return;
 
         sharedDataLoadFailedRef.current = true;
         setLocalMigrationState(null);
-        setPersistenceError(getSharedDataErrorMessage(error, 'Failed to load persisted app state.'));
+        setPersistenceError(getSharedDataErrorMessage(error, 'Failed to load Drive app state.'));
       })
       .finally(() => {
         if (isMounted) hasLoadedPersistedState.current = true;
@@ -557,10 +587,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       isMounted = false;
     };
-  }, [isSharedWorkspaceActive, currentUser.id]);
+  }, [isSharedWorkspaceActive, isDriveWorkspaceReady, currentUser.id, driveRootFolder?.id]);
 
   useEffect(() => {
-    if (!isSharedWorkspaceActive || !hasLoadedPersistedState.current || sharedDataLoadFailedRef.current) return;
+    if (!isDriveWorkspaceReady || !hasLoadedPersistedState.current || sharedDataLoadFailedRef.current) return;
 
     const pendingTaskIds = Array.from(pendingTaskBroadcastIdsRef.current);
     const pendingNotificationIds = Array.from(pendingNotificationBroadcastIdsRef.current);
@@ -576,12 +606,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .map(notificationId => notifications.find(item => item.id === notificationId))
       .filter(Boolean) as Notification[];
 
-    pendingTasks.forEach(task => sendSharedDataMessage({ type: 'task_upsert', task }));
-    pendingNotifications.forEach(notification => sendSharedDataMessage({ type: 'notification_upsert', notification }));
-
     const saveState = Promise.all([
-      ...pendingTasks.map(task => upsertSupabaseTask(task)),
-      upsertSupabaseNotifications(pendingNotifications),
+      ...pendingTasks.map(task => upsertDriveTask(task)),
+      upsertDriveNotifications(pendingNotifications),
     ]);
 
     saveState
@@ -594,7 +621,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         pendingNotificationIds.forEach(notificationId => pendingNotificationBroadcastIdsRef.current.add(notificationId));
         setPersistenceError(getSharedDataErrorMessage(error, 'Failed to save app state.'));
       });
-  }, [tasks, notifications, isSharedWorkspaceActive]);
+  }, [tasks, notifications, isDriveWorkspaceReady]);
 
   useEffect(() => {
     if (!isLocalWorkspaceActive || !hasLoadedPersistedState.current) return;
@@ -610,99 +637,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [tasks, notifications, isLocalWorkspaceActive]);
 
   useEffect(() => {
-    if (!isSharedWorkspaceActive || !supabase) return;
-
-    const channel = supabase
-      .channel(SHARED_DATA_CHANNEL, {
-        config: {
-          broadcast: { ack: true, self: false },
-        },
-      })
-      .on('broadcast', { event: SHARED_DATA_EVENT }, payload => {
-        const message = payload.payload as SharedDataMessage | undefined;
-        if (!message || message.originClientId === clientIdRef.current) return;
-
-        if (message.type === 'task_upsert') {
-          if (isGuestSeedTask(message.task)) {
-            setTasks(prev => prev.filter(task => task.id !== message.task.id));
-            return;
-          }
-
-          const revivedTask = reviveWorkspaceTasks([message.task], usersObj)[0];
-          if (revivedTask) {
-            setTasks(prev => mergeTaskIntoState(prev, revivedTask));
-          }
-          return;
-        }
-
-        if (message.type === 'notification_upsert') {
-          if (isGuestSeedNotification(message.notification)) {
-            setNotifications(prev => prev.filter(notification => notification.id !== message.notification.id));
-            return;
-          }
-
-          setNotifications(prev => mergeNotificationIntoState(prev, message.notification));
-        }
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'approval_tasks' }, payload => {
-        if (payload.eventType === 'DELETE') {
-          const row = payload.old as { id?: string } | null;
-          if (row?.id) {
-            setTasks(prev => prev.filter(task => task.id !== row.id));
-          }
-          return;
-        }
-
-        const row = payload.new as { payload?: Task } | null;
-        const task = row?.payload;
-        if (!task) return;
-        if (isGuestSeedTask(task)) {
-          setTasks(prev => prev.filter(existingTask => existingTask.id !== task.id));
-          return;
-        }
-
-        setTasks(prev => {
-          const revivedTask = reviveWorkspaceTasks([task], usersObj)[0];
-          return revivedTask ? mergeTaskIntoState(prev, revivedTask) : prev;
-        });
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'approval_notifications' }, payload => {
-        if (payload.eventType === 'DELETE') {
-          const row = payload.old as { id?: string } | null;
-          if (row?.id) {
-            setNotifications(prev => prev.filter(notification => notification.id !== row.id));
-          }
-          return;
-        }
-
-        const row = payload.new as { payload?: Notification } | null;
-        const notification = row?.payload;
-        if (!notification) return;
-        if (isGuestSeedNotification(notification)) {
-          setNotifications(prev => prev.filter(existingNotification => existingNotification.id !== notification.id));
-          return;
-        }
-
-        setNotifications(prev => mergeNotificationIntoState(prev, notification));
-      })
-      .subscribe(status => {
-        isSharedDataChannelReadyRef.current = status === 'SUBSCRIBED';
-        if (status === 'SUBSCRIBED') {
-          flushQueuedSharedDataMessages();
-        }
-      });
-
-    sharedDataChannelRef.current = channel;
-
-    return () => {
-      isSharedDataChannelReadyRef.current = false;
-      sharedDataChannelRef.current = null;
-      supabase.removeChannel(channel);
-    };
-  }, [isSharedWorkspaceActive, currentUser.id]);
-
-  useEffect(() => {
-    if (!isSharedWorkspaceActive) return;
+    if (!isDriveWorkspaceReady) return;
 
     let isMounted = true;
     let isPolling = false;
@@ -713,8 +648,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       isPolling = true;
       try {
         const [latestTasks, latestNotifications] = await Promise.all([
-          fetchSupabaseTasks(),
-          fetchSupabaseNotifications(),
+          fetchDriveTasks(),
+          fetchDriveNotifications(),
         ]);
 
         if (!isMounted) return;
@@ -740,14 +675,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
         void syncLatestSharedData();
       }
     };
+    const handleFocus = () => {
+      void syncLatestSharedData();
+    };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
     return () => {
       isMounted = false;
       window.clearInterval(intervalId);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
     };
-  }, [isSharedWorkspaceActive, currentUser.id]);
+  }, [isDriveWorkspaceReady, currentUser.id, driveRootFolder?.id]);
 
   const addNotification = (notif: Omit<Notification, 'id' | 'createdAt' | 'read'>) => {
     const notification: Notification = {
@@ -766,6 +706,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addNotification({ userId, taskId, message });
     });
   };
+
+  const getDefaultOwnerIdsForRole = (role: Role | null, task?: Task) => {
+    if (!role) return [];
+    if (role === 'reviewer') return getUserIdsByRole(userList, ['reviewer', 'admin']);
+    if (role === 'art_director') return getUserIdsByRole(userList, ['art_director']);
+    if (role === 'team_leader') return getUserIdsByRole(userList, ['team_leader']);
+    if (role === 'team_member' && task) return uniqueIds([task.createdBy, ...task.handledBy]);
+    return [];
+  };
+
+  const addAuditComment = (task: Task, authorId: string, action: TaskComment['action'], message: string, createdAt = new Date().toISOString()): Task => ({
+    ...task,
+    comments: [
+      ...(task.comments || []),
+      {
+        id: Math.random().toString(36).substring(7),
+        authorId,
+        action,
+        message,
+        sections: [],
+        createdAt,
+      },
+    ],
+  });
 
   const markNotificationAsRead = (id: string) => {
     const notification = notifications.find(item => item.id === id);
@@ -808,6 +772,81 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setAuthError(null);
   };
 
+  const connectGoogleDrive = async () => {
+    if (!isGoogleDriveConfigured || isConnectingDrive) return;
+
+    setIsConnectingDrive(true);
+    setPersistenceError(null);
+    try {
+      await requestDriveAccessToken('consent');
+      setHasDriveToken(hasUsableDriveToken());
+      setDriveUserEmail(getStoredDriveUserEmail());
+    } catch (error) {
+      console.error('Failed to connect Google Drive', error);
+      setPersistenceError(getSharedDataErrorMessage(error, 'Failed to connect Google Drive.'));
+    } finally {
+      setIsConnectingDrive(false);
+    }
+  };
+
+  const disconnectGoogleDrive = () => {
+    clearDriveSession();
+    setHasDriveToken(false);
+    setDriveUserEmail(null);
+    hasLoadedPersistedState.current = false;
+    setTasks(initialTasks);
+    setNotifications([]);
+  };
+
+  const chooseDriveRoot = async () => {
+    if (!isGoogleDriveConfigured || isChoosingDriveRoot) return;
+
+    setIsChoosingDriveRoot(true);
+    setPersistenceError(null);
+    try {
+      if (!hasUsableDriveToken()) {
+        await requestDriveAccessToken('consent');
+      }
+
+      const [folder] = await pickDriveDocuments('root');
+      if (!folder?.id) return;
+
+      const root = {
+        id: folder.id,
+        name: folder.name || 'Shared Drive folder',
+      };
+      setStoredDriveRoot(root);
+      setDriveRootFolder(root);
+      setHasDriveToken(hasUsableDriveToken());
+      setDriveUserEmail(getStoredDriveUserEmail());
+      hasLoadedPersistedState.current = false;
+    } catch (error) {
+      console.error('Failed to choose Drive root folder', error);
+      setPersistenceError(getSharedDataErrorMessage(error, 'Failed to choose Drive root folder.'));
+    } finally {
+      setIsChoosingDriveRoot(false);
+    }
+  };
+
+  const importDriveTasks = async () => {
+    if (!isDriveWorkspaceReady || isImportingDriveTasks) return;
+
+    setIsImportingDriveTasks(true);
+    setPersistenceError(null);
+    try {
+      const documents = await pickDriveDocuments('import');
+      const importedTasks = await importDriveSelectionToTasks(documents, currentUser, environment);
+      if (importedTasks.length > 0) {
+        setTasks(prev => mergeTasksIntoState(prev, reviveWorkspaceTasks(importedTasks, usersObj)));
+      }
+    } catch (error) {
+      console.error('Failed to import Drive tasks', error);
+      setPersistenceError(getSharedDataErrorMessage(error, 'Failed to import Drive tasks.'));
+    } finally {
+      setIsImportingDriveTasks(false);
+    }
+  };
+
   const archiveTask = (taskId: string, reason = 'Archived manually') => {
     queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(task => task.id === taskId
@@ -824,8 +863,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ));
   };
 
-  const migrateLocalDataToSupabase = async () => {
-    if (!isSharedWorkspaceActive || !localMigrationState || isMigratingLocalData) return;
+  const migrateLocalDataToDrive = async () => {
+    if (!isDriveWorkspaceReady || !localMigrationState || isMigratingLocalData) return;
 
     setIsMigratingLocalData(true);
     setPersistenceError(null);
@@ -834,8 +873,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const uploadedTasks = await Promise.all(localMigrationState.tasks.map(uploadMigratedTaskFiles));
 
       await Promise.all([
-        ...uploadedTasks.map(task => upsertSupabaseTask(task)),
-        upsertSupabaseNotifications(localMigrationState.notifications),
+        ...uploadedTasks.map(task => upsertDriveTask(task)),
+        upsertDriveNotifications(localMigrationState.notifications),
       ]);
 
       setTasks(prev => {
@@ -849,7 +888,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLocalMigrationState(null);
       await clearAppState();
     } catch (error) {
-      console.error('Failed to migrate local data to Supabase', error);
+      console.error('Failed to migrate local data to Google Drive', error);
       setPersistenceError(getSharedDataErrorMessage(error, 'Failed to migrate local data.'));
     } finally {
       setIsMigratingLocalData(false);
@@ -860,19 +899,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setLocalMigrationState(null);
   };
 
-  const updateTaskStatus = (taskId: string, newStatus: TaskStatus, newOwnerRole: Role | null) => {
+  const updateTaskStatus = (taskId: string, newStatus: TaskStatus, newOwnerRole: Role | null, newOwnerUserIds?: string[]) => {
     const taskIndex = tasks.findIndex(t => t.id === taskId);
     if (taskIndex !== -1) {
       const task = tasks[taskIndex];
       const reviewerIds = getUserIdsByRole(userList, ['reviewer', 'admin']);
       const artDirectorIds = getUserIdsByRole(userList, ['art_director']);
       const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
+      const contributorIds = uniqueIds([task.createdBy, ...task.handledBy]);
       if (newStatus === 'approved_by_art_director' && task.status !== newStatus) {
-        addNotifications([...artDirectorIds, ...teamLeaderIds, ...reviewerIds, task.createdBy, ...task.handledBy], taskId, `Art director approved "${task.name}".`);
+        addNotifications([...artDirectorIds, ...teamLeaderIds, ...reviewerIds, ...contributorIds], taskId, `Art director approved "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_reviewer' && task.status !== newStatus) {
-        addNotifications([...artDirectorIds, ...teamLeaderIds, task.createdBy], taskId, `Reviewer requested changes on "${task.name}".`);
+        addNotifications([...artDirectorIds, ...teamLeaderIds, ...contributorIds], taskId, `Reviewer requested changes on "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_art_director' && task.status !== newStatus) {
-        addNotifications([...teamLeaderIds, ...reviewerIds, task.createdBy], taskId, `Art director rejected "${task.name}" and requested changes.`);
+        addNotifications([...teamLeaderIds, ...reviewerIds, ...contributorIds], taskId, `Art director rejected "${task.name}" and requested changes.`);
       } else if ((newStatus === 'reviewer_approved' || newStatus === 'sent_to_art_director') && task.status !== newStatus) {
         addNotifications([...artDirectorIds, ...teamLeaderIds], taskId, `Reviewer sent "${task.name}" to art director for approval.`);
       }
@@ -881,7 +921,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(t => {
       if (t.id === taskId) {
-        return { ...t, status: newStatus, currentOwnerRole: newOwnerRole, updatedAt: new Date().toISOString() };
+        const nextOwnerIds = uniqueIds(newOwnerUserIds ?? getDefaultOwnerIdsForRole(newOwnerRole, t));
+        return {
+          ...t,
+          status: newStatus,
+          currentOwnerRole: newOwnerRole,
+          currentOwnerUserId: nextOwnerIds[0] || null,
+          currentOwnerUserIds: nextOwnerIds,
+          updatedAt: new Date().toISOString(),
+        };
       }
       return t;
     }));
@@ -897,8 +945,144 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }));
   };
 
+  const updateTaskAssignment = (taskId: string, handledByIds: string[], currentOwnerUserIds: string[]) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    const nextHandledBy = sanitizeHandledBy([task.createdBy, ...handledByIds]);
+    const nextOwnerIds = uniqueIds(currentOwnerUserIds);
+    const previousAssignees = new Set([...task.handledBy, ...getCurrentOwnerUserIds(task)]);
+    const addedAssignees = uniqueIds([...nextHandledBy, ...nextOwnerIds]).filter(userId => !previousAssignees.has(userId));
+    if (addedAssignees.length > 0) {
+      addNotifications(addedAssignees, taskId, `You were assigned to "${task.name}".`);
+    }
+
+    const message = [
+      `Assigned contributors: ${nextHandledBy.map(userId => getUserDisplayName(usersObj, userId)).join(', ') || 'None'}.`,
+      `Current owners: ${nextOwnerIds.map(userId => getUserDisplayName(usersObj, userId)).join(', ') || 'Role queue'}.`,
+    ].join(' ');
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      const now = new Date().toISOString();
+      return addAuditComment({
+        ...t,
+        handledBy: nextHandledBy,
+        currentOwnerUserId: nextOwnerIds[0] || null,
+        currentOwnerUserIds: nextOwnerIds,
+        updatedAt: now,
+      }, currentUser.id, 'assignment_change', message, now);
+    }));
+  };
+
+  const updateTaskReviewMode = (taskId: string, reviewMode: ReviewMode) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    const target = getReviewRouteTarget(reviewMode);
+    const shouldUpdateStatus = canReviewRouteUpdateStatus(task);
+    const nextOwnerRole = shouldUpdateStatus ? target.ownerRole : task.currentOwnerRole;
+    const nextOwnerIds = shouldUpdateStatus ? getDefaultOwnerIdsForRole(target.ownerRole, task) : getCurrentOwnerUserIds(task);
+    const reviewerLabel = reviewMode === 'full_review' ? 'Full Review' : reviewMode === 'quick_look' ? 'Quick Look' : 'Direct to Art Director';
+
+    if (shouldUpdateStatus && nextOwnerIds.length > 0) {
+      addNotifications(nextOwnerIds, taskId, `"${task.name}" is now routed to ${reviewerLabel}.`);
+    }
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      const now = new Date().toISOString();
+      const updatedTask = {
+        ...t,
+        reviewMode,
+        status: shouldUpdateStatus ? target.status : t.status,
+        currentOwnerRole: nextOwnerRole,
+        currentOwnerUserId: nextOwnerIds[0] || null,
+        currentOwnerUserIds: nextOwnerIds,
+        updatedAt: now,
+      };
+      return addAuditComment(updatedTask, currentUser.id, 'review_route_change', `Review route changed to ${reviewerLabel}.`, now);
+    }));
+  };
+
+  const updateTaskPublishSchedule = (taskId: string, schedule: { scheduledPublishAt: string | null; publishNote: string | null }) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || task.taskType !== 'campaign') return;
+
+    const normalizedAt = schedule.scheduledPublishAt?.trim() || null;
+    const normalizedNote = schedule.publishNote?.trim() || null;
+    const scheduleChanged = task.scheduledPublishAt !== normalizedAt;
+    const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
+    const recipients = getTaskParticipantIds(task, teamLeaderIds).filter(userId => userId !== currentUser.id);
+    addNotifications(recipients, taskId, normalizedAt ? `Campaign publish schedule updated for "${task.name}".` : `Campaign publish schedule cleared for "${task.name}".`);
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      const now = new Date().toISOString();
+      const message = normalizedAt
+        ? `Publish scheduled for ${new Date(normalizedAt).toLocaleString()}${normalizedNote ? `: ${normalizedNote}` : '.'}`
+        : 'Publish schedule cleared.';
+      return addAuditComment({
+        ...t,
+        scheduledPublishAt: normalizedAt,
+        publishNote: normalizedNote,
+        publishedAt: scheduleChanged ? null : t.publishedAt,
+        publishReminderSentAt: scheduleChanged ? null : t.publishReminderSentAt,
+        updatedAt: now,
+      }, currentUser.id, 'publish_schedule_change', message, now);
+    }));
+  };
+
+  const markCampaignPublished = (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || task.taskType !== 'campaign') return;
+
+    const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
+    const recipients = getTaskParticipantIds(task, teamLeaderIds).filter(userId => userId !== currentUser.id);
+    addNotifications(recipients, taskId, `Campaign "${task.name}" was marked as published.`);
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      const now = new Date().toISOString();
+      return addAuditComment({
+        ...t,
+        publishedAt: now,
+        updatedAt: now,
+      }, currentUser.id, 'campaign_published', `Campaign marked as published at ${new Date(now).toLocaleString()}.`, now);
+    }));
+  };
+
+  const markPublishReminderSent = (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || task.taskType !== 'campaign' || !task.scheduledPublishAt || task.publishedAt || task.publishReminderSentAt) return;
+
+    const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
+    const recipients = getTaskParticipantIds(task, teamLeaderIds);
+    const publishDate = new Date(task.scheduledPublishAt);
+    const isOverdue = publishDate.getTime() < Date.now();
+    addNotifications(recipients, taskId, `${isOverdue ? 'Overdue' : 'Upcoming'} campaign publish: "${task.name}" is scheduled for ${publishDate.toLocaleString()}.`);
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => (
+      t.id === taskId
+        ? { ...t, publishReminderSentAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+        : t
+    )));
+  };
+
   const addTask = (task: Task) => {
-    const normalizedTask = normalizeReviewerCreatedTask(task, usersObj);
+    const normalizedTaskBase = normalizeReviewerCreatedTask(task, usersObj);
+    const ownerIds = getCurrentOwnerUserIds(normalizedTaskBase);
+    const finalOwnerIds = ownerIds.length > 0 ? ownerIds : getDefaultOwnerIdsForRole(normalizedTaskBase.currentOwnerRole, normalizedTaskBase);
+    const normalizedTask = {
+      ...normalizedTaskBase,
+      currentOwnerUserId: finalOwnerIds[0] || null,
+      currentOwnerUserIds: finalOwnerIds,
+    };
     queueTaskBroadcast(normalizedTask.id);
     setTasks(prev => [normalizedTask, ...prev]);
   };
@@ -914,13 +1098,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ? 'waiting_reviewer_quick_look'
         : 'waiting_reviewer_full_review';
     const nextOwnerRole: Role = sendToMarwa ? 'art_director' : 'reviewer';
+    const nextOwnerIds = getDefaultOwnerIdsForRole(nextOwnerRole, task);
     const creatorName = usersObj[task.createdBy]?.name || 'Someone';
     const reviewerIds = getUserIdsByRole(userList, ['reviewer', 'admin']);
     const artDirectorIds = getUserIdsByRole(userList, ['art_director']);
     const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
     const recipients = (sendToMarwa
-      ? [...artDirectorIds, ...teamLeaderIds, ...reviewerIds]
-      : [...reviewerIds, ...teamLeaderIds]
+      ? [...nextOwnerIds, ...artDirectorIds, ...teamLeaderIds, ...reviewerIds]
+      : [...nextOwnerIds, ...reviewerIds, ...teamLeaderIds]
     ).filter(userId => userId !== task.createdBy);
 
     addNotifications(recipients, taskId, `${creatorName} uploaded V${version.versionNumber} for "${task.name}".`);
@@ -938,7 +1123,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         handledBy: sanitizeHandledBy([...t.handledBy, version.submittedBy]),
         status: nextStatus,
         currentOwnerRole: nextOwnerRole,
-        currentOwnerUserId: null,
+        currentOwnerUserId: nextOwnerIds[0] || null,
+        currentOwnerUserIds: nextOwnerIds,
         thumbnailUrl: previewFile?.previewUrl || thumbnailFile?.previewUrl || '',
         thumbnailStoragePath: previewFile?.previewStoragePath || thumbnailFile?.previewStoragePath,
         updatedAt: new Date().toISOString(),
@@ -1026,13 +1212,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
       users: usersObj,
       userList,
       notifications,
-      persistenceMode: isSharedWorkspaceActive ? 'supabase' : 'local',
+      persistenceMode: isSharedWorkspaceActive ? 'drive' : 'local',
       persistenceError,
       localMigrationCount: (localMigrationState?.tasks.length || 0) + (localMigrationState?.notifications.length || 0),
       isMigratingLocalData,
+      driveStatus,
+      driveUserEmail,
+      driveRootFolder,
+      isConnectingDrive,
+      isChoosingDriveRoot,
+      isImportingDriveTasks,
       setEnvironment,
       updateTaskStatus,
       updateTaskPriority,
+      updateTaskAssignment,
+      updateTaskReviewMode,
+      updateTaskPublishSchedule,
+      markCampaignPublished,
+      markPublishReminderSent,
       addTaskComment,
       addTaskVersion,
       replaceTaskVersionFiles,
@@ -1044,7 +1241,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       logout,
       archiveTask,
       unarchiveTask,
-      migrateLocalDataToSupabase,
+      connectGoogleDrive,
+      disconnectGoogleDrive,
+      chooseDriveRoot,
+      importDriveTasks,
+      migrateLocalDataToDrive,
       dismissLocalMigration,
     }}>
       {children}

@@ -1,5 +1,6 @@
 import { Task, TaskComment, TaskCommentSection, TaskVersion, UploadedTaskFile } from './types';
-import { getTaskFilePublicUrl, uploadTaskPreviewImage } from './supabaseDb';
+import { getTaskFilePublicUrl, uploadTaskPreviewImage } from './driveDb';
+import { isLinkedTaskFile } from './linkAttachments';
 
 const PREVIEW_MAX_EDGE = 420;
 const PREVIEW_JPEG_QUALITY = 0.45;
@@ -185,8 +186,8 @@ export function isDataImageUrl(url?: string) {
   return Boolean(url?.startsWith('data:image/'));
 }
 
-export function getExpectedFilePreview(taskId: string, file?: Pick<UploadedTaskFile, 'id' | 'name' | 'type' | 'url'>): PreviewUpload | null {
-  if (!file?.id || !file.url || file.url.startsWith('blob:') || getFileKind(file) === 'file') return null;
+export function getExpectedFilePreview(taskId: string, file?: Pick<UploadedTaskFile, 'id' | 'name' | 'type' | 'url' | 'storageProvider'>): PreviewUpload | null {
+  if (!file?.id || !file.url || isLinkedTaskFile(file) || file.url.startsWith('blob:') || getFileKind(file) === 'file') return null;
 
   const previewStoragePath = `${safePathPart(taskId)}/previews/${safePathPart(file.id)}.jpg`;
   const previewUrl = getTaskFilePublicUrl(previewStoragePath);
@@ -199,6 +200,8 @@ export function getExpectedFilePreview(taskId: string, file?: Pick<UploadedTaskF
 }
 
 export async function createLowResPreviewBlob(file: PreviewSource): Promise<Blob | null> {
+  if (isLinkedTaskFile(file)) return null;
+
   const kind = getFileKind(file);
 
   try {
@@ -232,7 +235,7 @@ export async function uploadFilePreview(taskId: string, file: PreviewSource): Pr
   if (!blob) return null;
 
   const previewStoragePath = `${safePathPart(taskId)}/previews/${safePathPart(file.id)}.jpg`;
-  const uploadedPreview = await uploadTaskPreviewImage(previewStoragePath, blob);
+  const uploadedPreview = await uploadTaskPreviewImage(previewStoragePath, blob, file.driveFolderId);
 
   return {
     previewUrl: uploadedPreview.url,
@@ -240,12 +243,12 @@ export async function uploadFilePreview(taskId: string, file: PreviewSource): Pr
   };
 }
 
-export async function uploadCommentImagePreview(taskId: string, sectionId: string, source: Blob | string): Promise<{ imageUrl: string; imageStoragePath: string } | null> {
+export async function uploadCommentImagePreview(taskId: string, sectionId: string, source: Blob | string, taskFolderId?: string): Promise<{ imageUrl: string; imageStoragePath: string } | null> {
   const blob = await createLowResCommentImageBlob(source);
   if (!blob) return null;
 
   const imageStoragePath = `${safePathPart(taskId)}/comment-previews/${safePathPart(sectionId)}.jpg`;
-  const uploadedPreview = await uploadTaskPreviewImage(imageStoragePath, blob);
+  const uploadedPreview = await uploadTaskPreviewImage(imageStoragePath, blob, taskFolderId);
 
   return {
     imageUrl: uploadedPreview.url,
@@ -257,7 +260,7 @@ export async function addLowResPreviewsToFiles(taskId: string, files: UploadedTa
   const sourcesById = new Map(sourceFiles.map(file => [file.id, file]));
 
   return Promise.all(files.map(async file => {
-    if (isStoredPreviewUrl(file)) return file;
+    if (isStoredPreviewUrl(file) || isLinkedTaskFile(file)) return file;
 
     const sourceFile = sourcesById.get(file.id) || file;
     const preview = await uploadFilePreview(taskId, { ...file, blob: sourceFile.blob });
@@ -279,7 +282,7 @@ export function getTaskFiles(version?: TaskVersion): UploadedTaskFile[] {
 }
 
 export function taskNeedsPreviewOptimization(task: Task) {
-  const hasMissingFilePreview = task.versions.some(version => getTaskFiles(version).some(file => !isStoredPreviewUrl(file)));
+  const hasMissingFilePreview = task.versions.some(version => getTaskFiles(version).some(file => !isLinkedTaskFile(file) && !isStoredPreviewUrl(file)));
   const hasBase64CommentImage = (task.comments || []).some(comment => comment.sections.some(section => isDataImageUrl(section.imageUrl)));
   return hasMissingFilePreview || hasBase64CommentImage;
 }
@@ -288,7 +291,7 @@ export function taskNeedsThumbnailPreview(task: Task) {
   if (isStoredTaskThumbnail(task)) return false;
 
   const firstVersionFiles = getTaskFiles(task.versions[0]);
-  return firstVersionFiles.some(file => !isStoredPreviewUrl(file));
+  return firstVersionFiles.some(file => !isLinkedTaskFile(file) && !isStoredPreviewUrl(file));
 }
 
 export async function optimizeTaskThumbnailForPreview(task: Task): Promise<{
@@ -311,7 +314,7 @@ export async function optimizeTaskThumbnailForPreview(task: Task): Promise<{
   const files = getTaskFiles(firstVersion);
   let previewedFiles = files;
 
-  if (files.some(file => !isStoredPreviewUrl(file))) {
+  if (files.some(file => !isLinkedTaskFile(file) && !isStoredPreviewUrl(file))) {
     previewedFiles = await addLowResPreviewsToFiles(task.id, files);
     if (previewedFiles.some((file, index) => file.previewStoragePath !== files[index]?.previewStoragePath)) {
       changed = true;
@@ -351,7 +354,7 @@ export async function optimizeTaskMediaForPreview(task: Task): Promise<{
 
   const versions = await Promise.all(task.versions.map(async version => {
     const files = getTaskFiles(version);
-    if (files.length === 0 || files.every(isStoredPreviewUrl)) return version;
+    if (files.length === 0 || files.every(file => isLinkedTaskFile(file) || isStoredPreviewUrl(file))) return version;
 
     const previewedFiles = await addLowResPreviewsToFiles(task.id, files);
     if (previewedFiles.some((file, index) => file.previewStoragePath !== files[index]?.previewStoragePath)) {

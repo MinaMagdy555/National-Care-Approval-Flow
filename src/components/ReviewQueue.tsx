@@ -4,6 +4,7 @@ import { Task } from '../lib/types';
 import { getStatusInfo, getTaskTypeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
+import { getCurrentOwnerUserIds } from '../lib/workflowUtils';
 import { CalendarDays, Search, X } from 'lucide-react';
 import { CustomSelect } from './CustomSelect';
 import { TaskThumbnail } from './FilePreview';
@@ -216,6 +217,8 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
               const creator = getUserById(task.createdBy);
               const version = task.versions.length > 0 ? task.versions[0].versionNumber : 1;
               const isDemo = task.environment === 'demo';
+              const assignedNames = task.handledBy.map(getUserById).filter(Boolean).map(user => user!.name.split(' ')[0]).join(', ');
+              const ownerNames = getCurrentOwnerUserIds(task).map(getUserById).filter(Boolean).map(user => user!.name.split(' ')[0]).join(', ');
 
               return (
                 <tr key={task.id} className="hover:bg-slate-50/50 transition-colors group cursor-pointer border-b border-slate-100 last:border-0" onClick={() => onOpenTask(task.id)}>
@@ -250,6 +253,15 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
                              Priority: <span className="text-slate-900">{task.priority}</span>
                           </div>
+                        )}
+                      </div>
+                    )}
+                    {(assignedNames || ownerNames || task.scheduledPublishAt) && (
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-semibold text-slate-500">
+                        {assignedNames && <span>Assigned: <span className="text-slate-800">{assignedNames}</span></span>}
+                        {ownerNames && <span>Owners: <span className="text-slate-800">{ownerNames}</span></span>}
+                        {task.scheduledPublishAt && (
+                          <span>Publish: <span className="text-slate-800">{new Date(task.scheduledPublishAt).toLocaleString()}</span></span>
                         )}
                       </div>
                     )}

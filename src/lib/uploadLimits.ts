@@ -8,6 +8,6 @@ export function uploadLimitLabel() {
 
 export function uploadLimitHelpText() {
   return MAX_UPLOAD_SIZE_MB <= 50
-    ? 'Supabase Free projects cannot upload files over 50MB. Compress the file, split it, or upgrade Supabase and raise VITE_MAX_UPLOAD_MB.'
+    ? 'Only PNG, JPG, MP4, or PDF files up to 50MB are allowed. Compress the file or raise VITE_MAX_UPLOAD_MB for larger Drive uploads.'
     : `Only PNG, JPG, MP4, or PDF files up to ${uploadLimitLabel()} are allowed.`;
 }

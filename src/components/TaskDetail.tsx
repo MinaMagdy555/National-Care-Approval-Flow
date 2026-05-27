@@ -1,15 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { Priority, TaskCommentSection, UploadedTaskFile } from '../lib/types';
+import { Priority, ReviewMode, TaskCommentSection, UploadedTaskFile } from '../lib/types';
 import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
-import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, File as FileIcon } from 'lucide-react';
+import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, File as FileIcon, Link2, Settings2 } from 'lucide-react';
 import { FileContentThumbnail, FilePreview, isLocalOnlyFileUrl } from './FilePreview';
-import { uploadTaskFiles } from '../lib/supabaseDb';
+import { uploadTaskFiles } from '../lib/driveDb';
 import { isTaskArchived } from '../lib/archiveUtils';
 import { isAssignableHandler } from '../lib/handlerUtils';
+import { UserMultiSelect } from './UserMultiSelect';
+import { CustomSelect } from './CustomSelect';
 import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText, uploadLimitLabel } from '../lib/uploadLimits';
+import { createLinkedTaskFile, getLinkHostLabel } from '../lib/linkAttachments';
+import { canManageWorkflow, canUserAccessTask, canUserActAsCurrentOwner, getCurrentOwnerUserIds, userCanViewFullWorkspace } from '../lib/workflowUtils';
 import {
   addLowResPreviewsToFiles,
   getTaskFiles,
@@ -29,7 +33,24 @@ type ReviewNoteSection = {
 };
 
 export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => void }) {
-  const { tasks, currentUser, users, updateTaskStatus, updateTaskPriority, addTaskComment, addTaskVersion, replaceTaskVersionFiles, updateTaskMediaPreviews, archiveTask, unarchiveTask } = useAppStore();
+  const {
+    tasks,
+    currentUser,
+    users,
+    userList,
+    updateTaskStatus,
+    updateTaskPriority,
+    updateTaskAssignment,
+    updateTaskReviewMode,
+    updateTaskPublishSchedule,
+    markCampaignPublished,
+    addTaskComment,
+    addTaskVersion,
+    replaceTaskVersionFiles,
+    updateTaskMediaPreviews,
+    archiveTask,
+    unarchiveTask,
+  } = useAppStore();
   const task = tasks.find(t => t.id === taskId);
   
   const [modal, setModal] = useState<'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
@@ -41,6 +62,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [adRejectNotes, setAdRejectNotes] = useState<ReviewNoteSection[]>([{ id: 'ad_note_1', note: '' }]);
   const [selectedMinaFeedbackIds, setSelectedMinaFeedbackIds] = useState<string[]>([]);
   const [resubmitFiles, setResubmitFiles] = useState<File[]>([]);
+  const [resubmitLinks, setResubmitLinks] = useState<UploadedTaskFile[]>([]);
+  const [resubmitLinkUrl, setResubmitLinkUrl] = useState('');
   const [resubmitNote, setResubmitNote] = useState('');
   const [resubmitError, setResubmitError] = useState('');
   const [isResubmitting, setIsResubmitting] = useState(false);
@@ -48,17 +71,31 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [isRepairingFiles, setIsRepairingFiles] = useState(false);
   const [isSavingAction, setIsSavingAction] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [managedContributorIds, setManagedContributorIds] = useState<string[]>([]);
+  const [managedOwnerIds, setManagedOwnerIds] = useState<string[]>([]);
+  const [managedReviewMode, setManagedReviewMode] = useState<ReviewMode>('full_review');
+  const [managedPublishAt, setManagedPublishAt] = useState('');
+  const [managedPublishNote, setManagedPublishNote] = useState('');
   const resubmitInputRef = useRef<HTMLInputElement>(null);
   const repairInputRef = useRef<HTMLInputElement>(null);
   const previewOptimizationAttemptedRef = useRef<Set<string>>(new Set());
   const updateTaskMediaPreviewsRef = useRef(updateTaskMediaPreviews);
 
-  const canViewFullWorkspace = Boolean(currentUser.isAdmin) || ['reviewer', 'art_director', 'team_leader', 'admin'].includes(currentUser.role);
+  const canViewFullWorkspace = userCanViewFullWorkspace(currentUser);
 
   useEffect(() => {
     setSelectedVersionIndex(0);
     setSelectedFileIndex(0);
   }, [taskId]);
+
+  useEffect(() => {
+    if (!task) return;
+    setManagedContributorIds(task.handledBy);
+    setManagedOwnerIds(getCurrentOwnerUserIds(task));
+    setManagedReviewMode(task.reviewMode);
+    setManagedPublishAt(task.scheduledPublishAt || '');
+    setManagedPublishNote(task.publishNote || '');
+  }, [taskId, (task?.handledBy || []).join('|'), (task?.currentOwnerUserIds || []).join('|'), task?.currentOwnerUserId, task?.reviewMode, task?.scheduledPublishAt, task?.publishNote]);
 
   useEffect(() => {
     if (task && selectedVersionIndex > task.versions.length - 1) {
@@ -72,7 +109,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   }, [updateTaskMediaPreviews]);
 
   useEffect(() => {
-    if (!task || (!canViewFullWorkspace && task.createdBy !== currentUser.id) || previewOptimizationAttemptedRef.current.has(task.id) || !taskNeedsPreviewOptimization(task)) return;
+    if (!task || !canUserAccessTask(task, currentUser) || previewOptimizationAttemptedRef.current.has(task.id) || !taskNeedsPreviewOptimization(task)) return;
 
     previewOptimizationAttemptedRef.current.add(task.id);
     let cancelled = false;
@@ -92,13 +129,18 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     };
   }, [canViewFullWorkspace, currentUser.id, task]);
 
-  if (!task || (!canViewFullWorkspace && task.createdBy !== currentUser.id)) return <div>Task not found</div>;
+  if (!task || !canUserAccessTask(task, currentUser)) return <div>Task not found</div>;
 
   const statusInfo = getStatusInfo(task, currentUser.role);
   const nextAction = getNextActionLabel(task, currentUser.role);
   const creator = users[task.createdBy]?.name || (task.createdBy === currentUser.id ? currentUser.name : initialUsers.find(u => u.id === task.createdBy)?.name) || 'Unknown';
   const handledByNames = task.handledBy
     .filter(isAssignableHandler)
+    .map(id => users[id]?.name || initialUsers.find(u => u.id === id)?.name)
+    .filter(Boolean)
+    .join(' + ');
+  const currentOwnerIds = getCurrentOwnerUserIds(task);
+  const currentOwnerNames = currentOwnerIds
     .map(id => users[id]?.name || initialUsers.find(u => u.id === id)?.name)
     .filter(Boolean)
     .join(' + ');
@@ -110,8 +152,14 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const isArchived = isTaskArchived(task);
   const isDetailedReviewType = task.taskType === 'ai_packet' || task.taskType === 'video';
   const isSelfCreatedTask = task.createdBy === currentUser.id;
+  const isReadOnlyObserver = currentUser.role === 'manager' || currentUser.role === 'developer';
+  const isCurrentActiveOwner = canUserActAsCurrentOwner(task, currentUser);
+  const canActAsReviewer = currentUser.role === 'reviewer' && isCurrentActiveOwner;
+  const canActAsArtDirector = currentUser.role === 'art_director' && isCurrentActiveOwner;
+  const canManageWorkflowSettings = canManageWorkflow(currentUser);
+  const canResubmitTask = !isReadOnlyObserver && (isSelfCreatedTask || task.handledBy.includes(currentUser.id) || currentOwnerIds.includes(currentUser.id));
   const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
-  const canResubmitVersion = isSelfCreatedTask && ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(task.status);
+  const canResubmitVersion = canResubmitTask && ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(task.status);
   const isInternalReviewTask = !isDetailedReviewType;
   const canViewInternalReviewNotes = canViewFullWorkspace;
   const isReviewerCommentAuthor = (authorId: string) => {
@@ -158,6 +206,35 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   });
   const selectedMinaFeedback = minaForwardableFeedback.filter(item => selectedMinaFeedbackIds.includes(item.id));
   const canSubmitADReject = adRejectComment.trim() || selectedMinaFeedback.length > 0 || adRejectNotes.some(section => section.note.trim() || section.imageUrl || section.localPreviewUrl || section.imageFile);
+  const hasResubmitAttachments = resubmitFiles.length > 0 || resubmitLinks.length > 0;
+  const contributorOptions = userList.filter(user => user.role !== 'art_director');
+  const ownerOptions = task.currentOwnerRole === 'reviewer'
+    ? userList.filter(user => user.role === 'reviewer' || user.role === 'admin')
+    : task.currentOwnerRole === 'art_director'
+      ? userList.filter(user => user.role === 'art_director')
+      : task.currentOwnerRole === 'team_member'
+        ? userList.filter(user => user.id === task.createdBy || task.handledBy.includes(user.id))
+        : userList;
+  const reviewModeOptions = [
+    { value: 'full_review', label: 'Full Review' },
+    { value: 'quick_look', label: 'Quick Look' },
+    { value: 'direct_to_ad', label: 'Direct to Art Director' },
+  ];
+
+  const saveAssignment = () => {
+    updateTaskAssignment(task.id, managedContributorIds, managedOwnerIds);
+  };
+
+  const saveReviewRoute = () => {
+    updateTaskReviewMode(task.id, managedReviewMode);
+  };
+
+  const savePublishSchedule = () => {
+    updateTaskPublishSchedule(task.id, {
+      scheduledPublishAt: managedPublishAt || null,
+      publishNote: managedPublishNote || null,
+    });
+  };
 
   const appendResubmitFiles = (incomingFiles: File[]) => {
     const validFiles = incomingFiles.filter(file => {
@@ -173,9 +250,24 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     }
   };
 
+  const addResubmitLink = () => {
+    try {
+      const linkedFile = createLinkedTaskFile(resubmitLinkUrl);
+      setResubmitLinks(prev => (
+        prev.some(file => file.url === linkedFile.url)
+          ? prev
+          : [...prev, linkedFile]
+      ));
+      setResubmitLinkUrl('');
+      setResubmitError('');
+    } catch (error) {
+      setResubmitError(error instanceof Error ? error.message : 'Enter a valid link.');
+    }
+  };
+
   const handleResubmitVersion = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (resubmitFiles.length === 0 || isResubmitting) return;
+    if (!hasResubmitAttachments || isResubmitting) return;
 
     setIsResubmitting(true);
     setResubmitError('');
@@ -188,22 +280,33 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       size: file.size,
       blob: file,
       url: URL.createObjectURL(file),
+      storageProvider: 'local',
     }));
 
     try {
-      let uploadedFiles = await uploadTaskFiles(task.id, localFiles);
-      uploadedFiles = await addLowResPreviewsToFiles(task.id, uploadedFiles, localFiles);
+      let uploadedFiles: UploadedTaskFile[] = [];
+      if (localFiles.length > 0) {
+        uploadedFiles = await uploadTaskFiles(task.id, localFiles, {
+          taskCode: task.code,
+          taskName: task.name,
+          taskFolderId: task.driveFolderId,
+        });
+        uploadedFiles = await addLowResPreviewsToFiles(task.id, uploadedFiles, localFiles);
+      }
+      const versionFiles = [...uploadedFiles, ...resubmitLinks];
       addTaskVersion(task.id, {
         id: Math.random().toString(36).substring(7),
         versionNumber: nextVersionNumber,
         submittedBy: currentUser.id,
         submissionNote: resubmitNote.trim() || `Resubmitted as V${nextVersionNumber}`,
-        fileUrl: uploadedFiles[0].url,
-        files: uploadedFiles,
+        fileUrl: versionFiles[0].url,
+        files: versionFiles,
         createdAt: new Date().toISOString(),
       });
       setSelectedFileIndex(0);
       setResubmitFiles([]);
+      setResubmitLinks([]);
+      setResubmitLinkUrl('');
       setResubmitNote('');
     } catch (error) {
       console.error('Failed to upload revised task files', error);
@@ -236,10 +339,15 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       size: file.size,
       blob: file,
       url: URL.createObjectURL(file),
+      storageProvider: 'local',
     }));
 
     try {
-      let uploadedFiles = await uploadTaskFiles(task.id, localFiles);
+      let uploadedFiles = await uploadTaskFiles(task.id, localFiles, {
+        taskCode: task.code,
+        taskName: task.name,
+        taskFolderId: task.driveFolderId,
+      });
       uploadedFiles = await addLowResPreviewsToFiles(task.id, uploadedFiles, localFiles);
       replaceTaskVersionFiles(task.id, currentVersion.id, uploadedFiles);
       setSelectedFileIndex(0);
@@ -318,7 +426,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
     return Promise.all(filledSections.map(async section => {
       const uploadedImage = section.imageFile
-        ? await uploadCommentImagePreview(task.id, section.id, section.imageFile)
+        ? await uploadCommentImagePreview(task.id, section.id, section.imageFile, task.driveFolderId)
         : null;
       if (section.imageFile && !uploadedImage) {
         throw new Error(`Could not upload ${section.imageName || 'screenshot'}.`);
@@ -393,7 +501,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
         action: 'request_edits',
         sections,
       });
-      updateTaskStatus(task.id, 'changes_requested_by_reviewer', 'team_member');
+      updateTaskStatus(task.id, 'changes_requested_by_reviewer', 'team_member', [task.createdBy, ...task.handledBy]);
       resetReviewNotes();
     } catch (error) {
       console.error('Failed to save edit request', error);
@@ -428,7 +536,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
         message: message || 'Forwarded selected notes from reviewer.',
         sections: [...forwardedSections, ...marwaSections],
       });
-      updateTaskStatus(task.id, 'changes_requested_by_art_director', 'team_member');
+      updateTaskStatus(task.id, 'changes_requested_by_art_director', 'team_member', [task.createdBy, ...task.handledBy]);
       setAdRejectComment('');
       resetADRejectNotes();
       setSelectedMinaFeedbackIds([]);
@@ -552,7 +660,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             <FilePreview file={selectedFile} onImageClick={setLightboxUrl} />
           </div>
 
-          {currentVersionHasLocalOnlyFiles && (
+          {currentVersionHasLocalOnlyFiles && !isReadOnlyObserver && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-900 shadow-sm">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -627,7 +735,11 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             </div>
             <div>
               <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Handled by</span>
-              <span className="font-semibold text-slate-900">{handledByNames}</span>
+              <span className="font-semibold text-slate-900">{handledByNames || 'Not assigned'}</span>
+            </div>
+            <div>
+              <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Current owners</span>
+              <span className="font-semibold text-slate-900">{currentOwnerNames || 'Role queue'}</span>
             </div>
             <div>
               <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Task type</span>
@@ -657,6 +769,126 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               </span>
             </div>
           </div>
+
+          {canManageWorkflowSettings && (
+            <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex items-center gap-2">
+                <Settings2 className="h-4 w-4 text-indigo-500" />
+                <h3 className="text-sm font-black text-slate-900">Workflow Management</h3>
+              </div>
+
+              <div className="space-y-3">
+                <div className="grid gap-3 sm:grid-cols-[1fr,auto]">
+                  <div>
+                    <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Review Route</label>
+                    <CustomSelect
+                      value={managedReviewMode}
+                      onChange={value => setManagedReviewMode(value as ReviewMode)}
+                      options={reviewModeOptions}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={saveReviewRoute}
+                    disabled={managedReviewMode === task.reviewMode}
+                    className="self-end rounded-lg bg-indigo-600 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    Save Route
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Assigned Contributors</label>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">Contributors can view and resubmit this task when edits are requested.</p>
+                  </div>
+                  <UserMultiSelect
+                    users={contributorOptions}
+                    selectedIds={managedContributorIds}
+                    onChange={setManagedContributorIds}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Current Owners</label>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">When owners are selected, only those users can perform this stage's role action.</p>
+                  </div>
+                  <UserMultiSelect
+                    users={ownerOptions}
+                    selectedIds={managedOwnerIds}
+                    onChange={setManagedOwnerIds}
+                    emptyText="No matching users for the current owner role."
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={saveAssignment}
+                  className="w-full rounded-lg border border-slate-200 bg-slate-900 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-black"
+                >
+                  Save Assignment
+                </button>
+              </div>
+            </div>
+          )}
+
+          {task.taskType === 'campaign' && (
+            <div className="mt-4 space-y-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+              <div>
+                <h3 className="text-sm font-black text-emerald-950">Campaign Publishing</h3>
+                <p className="mt-1 text-xs font-semibold text-emerald-800/70">
+                  {task.publishedAt
+                    ? `Published at ${new Date(task.publishedAt).toLocaleString()}`
+                    : task.scheduledPublishAt
+                      ? `Scheduled for ${new Date(task.scheduledPublishAt).toLocaleString()}`
+                      : 'No publish date scheduled.'}
+                </p>
+              </div>
+              {task.publishNote && <p className="rounded-lg bg-white/70 p-3 text-xs font-bold text-emerald-900">{task.publishNote}</p>}
+              {canManageWorkflowSettings && (
+                <div className="space-y-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-emerald-700">Publish Date & Time</label>
+                      <input
+                        type="datetime-local"
+                        value={managedPublishAt}
+                        onChange={event => setManagedPublishAt(event.target.value)}
+                        className="w-full rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-emerald-700">Publish Note</label>
+                      <input
+                        type="text"
+                        value={managedPublishNote}
+                        onChange={event => setManagedPublishNote(event.target.value)}
+                        className="w-full rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={savePublishSchedule}
+                      className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-emerald-700"
+                    >
+                      Save Schedule
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => markCampaignPublished(task.id)}
+                      disabled={Boolean(task.publishedAt)}
+                      className="rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-black uppercase tracking-wide text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:bg-emerald-100 disabled:text-emerald-400"
+                    >
+                      {task.publishedAt ? 'Published' : 'Mark Published'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Actions Section */}
@@ -666,7 +898,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               <div>
                 <h3 className="text-sm font-black text-indigo-950">Upload New Version</h3>
                 <p className="mt-1 text-xs font-semibold text-indigo-800/70">
-                  Add the edited files here. This keeps the same task and creates V{Math.max(0, ...task.versions.map(version => version.versionNumber)) + 1}.
+                  Add edited files or links here. This keeps the same task and creates V{Math.max(0, ...task.versions.map(version => version.versionNumber)) + 1}.
                 </p>
               </div>
 
@@ -700,6 +932,34 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 />
               </div>
 
+              <div className="grid gap-2 sm:grid-cols-[1fr,auto]">
+                <div className="relative">
+                  <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="url"
+                    value={resubmitLinkUrl}
+                    onChange={event => setResubmitLinkUrl(event.target.value)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' && resubmitLinkUrl.trim()) {
+                        event.preventDefault();
+                        addResubmitLink();
+                      }
+                    }}
+                    placeholder="Paste a Drive, image, video, or PDF link"
+                    className="w-full rounded-xl border border-slate-300 py-3 pl-10 pr-4 text-sm font-bold text-slate-900 outline-none transition-all placeholder:text-slate-400 placeholder:font-medium focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={addResubmitLink}
+                  disabled={!resubmitLinkUrl.trim()}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white shadow-sm transition-colors hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Link
+                </button>
+              </div>
+
               {resubmitFiles.length > 0 && (
                 <div className="space-y-2">
                   {resubmitFiles.map((file, index) => (
@@ -711,6 +971,30 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                       <button
                         type="button"
                         onClick={() => setResubmitFiles(prev => prev.filter((_, fileIndex) => fileIndex !== index))}
+                        className="rounded-md p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                        aria-label={`Remove ${file.name}`}
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {resubmitLinks.length > 0 && (
+                <div className="space-y-2">
+                  {resubmitLinks.map(file => (
+                    <div key={file.id} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Link2 className="h-4 w-4 shrink-0 text-indigo-500" />
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-bold text-slate-800">{file.name}</p>
+                          <p className="truncate text-[10px] font-bold text-slate-400">{getLinkHostLabel(file.url)}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setResubmitLinks(prev => prev.filter(item => item.id !== file.id))}
                         className="rounded-md p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
                         aria-label={`Remove ${file.name}`}
                       >
@@ -733,7 +1017,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
               <button
                 type="submit"
-                disabled={resubmitFiles.length === 0 || isResubmitting}
+                disabled={!hasResubmitAttachments || isResubmitting}
                 className="w-full rounded-xl bg-indigo-600 px-4 py-3 font-black text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
               >
                 {isResubmitting ? 'Uploading...' : `Submit V${Math.max(0, ...task.versions.map(version => version.versionNumber)) + 1}`}
@@ -741,7 +1025,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             </form>
           )}
           
-          {currentUser.role === 'reviewer' && isReviewerActionable && (
+          {canActAsReviewer && isReviewerActionable && (
             <>
               <button 
                 onClick={() => {
@@ -779,7 +1063,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             </div>
           )}
 
-          {currentUser.role === 'art_director' && ['sent_to_art_director', 'waiting_art_director_approval', 'reviewer_approved'].includes(task.status) && (
+          {canActAsArtDirector && ['sent_to_art_director', 'waiting_art_director_approval', 'reviewer_approved'].includes(task.status) && (
             <>
               <button 
                 onClick={handleADApprove}
@@ -801,7 +1085,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             </>
           )}
 
-          {currentUser.role === 'art_director' && task.status === 'approved_by_art_director' && (
+          {canActAsArtDirector && task.status === 'approved_by_art_director' && (
             <>
               <div className="bg-green-50 text-green-700 border border-green-200 rounded-xl p-4 mb-2 flex items-start gap-3">
                 <Check className="w-5 h-5 flex-shrink-0 mt-0.5 text-green-600" />
@@ -905,25 +1189,27 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
           )}
           </div>
 
-          <div className="mt-4">
-            {isArchived ? (
-              <button
-                type="button"
-                onClick={() => unarchiveTask(task.id)}
-                className="w-full rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700 transition-colors hover:bg-emerald-100"
-              >
-                Unarchive Task
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => archiveTask(task.id)}
-                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-600 transition-colors hover:bg-slate-50"
-              >
-                Archive Task
-              </button>
-            )}
-          </div>
+          {canManageWorkflowSettings && (
+            <div className="mt-4">
+              {isArchived ? (
+                <button
+                  type="button"
+                  onClick={() => unarchiveTask(task.id)}
+                  className="w-full rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700 transition-colors hover:bg-emerald-100"
+                >
+                  Unarchive Task
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => archiveTask(task.id)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-600 transition-colors hover:bg-slate-50"
+                >
+                  Archive Task
+                </button>
+              )}
+            </div>
+          )}
 
         </div>
 

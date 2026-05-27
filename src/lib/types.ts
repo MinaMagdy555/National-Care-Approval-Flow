@@ -1,4 +1,4 @@
-export type Role = 'team_member' | 'reviewer' | 'art_director' | 'team_leader' | 'admin';
+export type Role = 'team_member' | 'reviewer' | 'art_director' | 'team_leader' | 'manager' | 'developer' | 'admin';
 export type Environment = 'production' | 'demo' | 'archived';
 export type ReviewMode = 'full_review' | 'quick_look' | 'direct_to_ad';
 export type Priority = 'low' | 'normal' | 'high' | 'urgent' | 'not_set';
@@ -68,9 +68,14 @@ export interface UploadedTaskFile {
   type: string;
   size: number;
   url: string;
+  storageProvider?: 'drive' | 'local' | 'link';
   storagePath?: string;
   previewUrl?: string;
   previewStoragePath?: string;
+  driveFileId?: string;
+  driveFolderId?: string;
+  webViewLink?: string;
+  downloadUrl?: string;
   blob?: Blob;
 }
 
@@ -104,7 +109,15 @@ export interface TaskCommentSection {
 export interface TaskComment {
   id: string;
   authorId: string;
-  action: 'review_note' | 'request_edits' | 'sent_to_marwa' | 'marwa_rejection';
+  action:
+    | 'review_note'
+    | 'request_edits'
+    | 'sent_to_marwa'
+    | 'marwa_rejection'
+    | 'assignment_change'
+    | 'review_route_change'
+    | 'publish_schedule_change'
+    | 'campaign_published';
   message?: string;
   sections: TaskCommentSection[];
   createdAt: string;
@@ -122,12 +135,19 @@ export interface Task {
   status: TaskStatus;
   currentOwnerRole: Role | null;
   currentOwnerUserId: string | null;
+  currentOwnerUserIds: string[];
   priority: Priority;
   deadlineText: string | null;
+  scheduledPublishAt?: string | null;
+  publishNote?: string | null;
+  publishedAt?: string | null;
+  publishReminderSentAt?: string | null;
   versions: TaskVersion[];
   comments?: TaskComment[];
   thumbnailUrl: string;
   thumbnailStoragePath?: string;
+  driveFolderId?: string;
+  driveMetadataFileId?: string;
   archivedAt?: string | null;
   archivedReason?: string | null;
   createdAt: string;

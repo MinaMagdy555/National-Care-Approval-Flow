@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ExternalLink, FileText, FileWarning, Film, Image as ImageIcon } from 'lucide-react';
+import { ExternalLink, FileText, FileWarning, Film, Image as ImageIcon, Link2 } from 'lucide-react';
 import { Task, UploadedTaskFile } from '../lib/types';
 import {
   getExpectedFilePreview,
@@ -10,6 +10,7 @@ import {
   taskNeedsThumbnailPreview,
 } from '../lib/previewUtils';
 import { useAppStore } from '../lib/store';
+import { getLinkedFileEmbedUrl, getLinkHostLabel, isLinkedTaskFile } from '../lib/linkAttachments';
 
 const thumbnailPreviewBackfillAttempts = new Set<string>();
 const thumbnailPreviewBackfillQueue: Array<() => Promise<void>> = [];
@@ -67,6 +68,103 @@ function MissingSharedFile({ compact = false }: { compact?: boolean }) {
           This task was migrated before its file was uploaded to shared storage.
         </p>
       )}
+    </div>
+  );
+}
+
+function isDriveFile(file?: Pick<UploadedTaskFile, 'storageProvider' | 'driveFileId' | 'webViewLink'>) {
+  return file?.storageProvider === 'drive' || Boolean(file?.driveFileId || file?.webViewLink);
+}
+
+function LinkedFilePreview({
+  file,
+  onImageClick,
+}: {
+  file: UploadedTaskFile;
+  onImageClick?: (url: string) => void;
+}) {
+  const kind = getFileKind(file);
+  const embedUrl = getLinkedFileEmbedUrl(file.url);
+  const openUrl = file.webViewLink || file.url;
+  const hostLabel = getLinkHostLabel(file.url);
+
+  if (kind === 'image') {
+    return (
+      <div className="relative flex h-full w-full items-center justify-center bg-slate-100">
+        <button type="button" onClick={() => onImageClick?.(file.url)} className="flex h-full w-full items-center justify-center">
+          <img src={file.url} alt={file.name} className="block max-h-full max-w-full object-contain" />
+        </button>
+        <a
+          href={openUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900/90 text-white shadow-sm transition-colors hover:bg-slate-950"
+          aria-label="Open linked file"
+          title="Open linked file"
+        >
+          <ExternalLink className="h-4 w-4" />
+        </a>
+      </div>
+    );
+  }
+
+  if (kind === 'video' && !embedUrl) {
+    return (
+      <div className="relative flex h-full w-full items-center justify-center bg-black">
+        <video src={file.url} controls className="block max-h-full max-w-full object-contain" />
+        <a
+          href={openUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-white/90 text-slate-900 shadow-sm transition-colors hover:bg-white"
+          aria-label="Open linked file"
+          title="Open linked file"
+        >
+          <ExternalLink className="h-4 w-4" />
+        </a>
+      </div>
+    );
+  }
+
+  if (embedUrl || kind === 'pdf') {
+    return (
+      <div className="relative h-full w-full bg-slate-100">
+        <iframe
+          src={embedUrl || file.url}
+          title={file.name}
+          className="h-full w-full border-0 bg-white"
+          allow="autoplay; encrypted-media; fullscreen"
+        />
+        <a
+          href={openUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900/90 text-white shadow-sm transition-colors hover:bg-slate-950"
+          aria-label="Open linked file"
+          title="Open linked file"
+        >
+          <ExternalLink className="h-4 w-4" />
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-slate-100 p-4 text-center">
+      <div className="flex max-w-sm flex-col items-center gap-2 rounded-xl bg-white p-6 shadow-sm">
+        <Link2 className="h-7 w-7 text-indigo-500" />
+        <p className="max-w-full truncate text-sm font-black text-slate-900">{file.name}</p>
+        <p className="text-xs font-bold text-slate-500">{hostLabel}</p>
+      </div>
+      <a
+        href={openUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white shadow-sm transition-colors hover:bg-black"
+      >
+        <ExternalLink className="h-4 w-4" />
+        Open Link
+      </a>
     </div>
   );
 }
@@ -340,8 +438,40 @@ export function FilePreview({
     return <div className="flex h-full w-full items-center justify-center text-sm font-bold text-slate-400">No file uploaded</div>;
   }
 
-  if (persistenceMode === 'supabase' && isLocalOnlyFileUrl(file.url)) {
+  if (persistenceMode === 'drive' && isLocalOnlyFileUrl(file.url)) {
     return <MissingSharedFile />;
+  }
+
+  if (isLinkedTaskFile(file)) {
+    return <LinkedFilePreview file={file} onImageClick={onImageClick} />;
+  }
+
+  if (isDriveFile(file)) {
+    const openUrl = file.webViewLink || file.url;
+    const previewUrl = file.previewUrl;
+
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-slate-100 p-4 text-center">
+        <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden rounded-xl bg-white shadow-sm">
+          {previewUrl ? (
+            <button type="button" onClick={() => onImageClick?.(previewUrl)} className="flex h-full w-full items-center justify-center">
+              <img src={previewUrl} alt={file.name} className="block max-h-full max-w-full object-contain" />
+            </button>
+          ) : (
+            <LightweightFilePlaceholder file={file} />
+          )}
+        </div>
+        <a
+          href={openUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white shadow-sm transition-colors hover:bg-black"
+        >
+          <ExternalLink className="h-4 w-4" />
+          Open in Drive
+        </a>
+      </div>
+    );
   }
 
   if (kind === 'image') {

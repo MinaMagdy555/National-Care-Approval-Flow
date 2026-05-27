@@ -39,9 +39,10 @@ export function AuthScreen({ onContinueAsGuest }: { onContinueAsGuest?: () => vo
   };
 
   const handleUseAccount = (account: typeof demoAccounts[number]) => {
-    setIdentifier(account.user.name);
+    const loginIdentifier = account.user.email || account.user.name;
+    setIdentifier(loginIdentifier);
     setPassword(account.password);
-    void runLogin(account.user.name, account.password);
+    void runLogin(loginIdentifier, account.password);
   };
 
   if (authStatus === 'loading') {
@@ -99,7 +100,7 @@ export function AuthScreen({ onContinueAsGuest }: { onContinueAsGuest?: () => vo
               </div>
             )}
             <div>
-              <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Account Name</label>
+              <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Email or Account Name</label>
               <input
                 type="text"
                 value={identifier}
@@ -110,7 +111,10 @@ export function AuthScreen({ onContinueAsGuest }: { onContinueAsGuest?: () => vo
               />
               <datalist id="demo-account-names">
                 {demoAccounts.map(account => (
-                  <option key={account.user.id} value={account.user.name} />
+                  <React.Fragment key={account.user.id}>
+                    <option value={account.user.email || account.user.name} />
+                    <option value={account.user.name} />
+                  </React.Fragment>
                 ))}
               </datalist>
             </div>

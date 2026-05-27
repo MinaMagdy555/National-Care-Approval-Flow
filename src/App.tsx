@@ -6,9 +6,11 @@ import { TaskDetail } from './components/TaskDetail';
 import { ReviewQueue } from './components/ReviewQueue';
 import { NotificationsList } from './components/Notifications';
 import { CreateTask } from './components/CreateTask';
+import { CampaignScheduler } from './components/CampaignScheduler';
 import { AuthScreen } from './components/AuthScreen';
 import { isDueThisWeek, isDueToday } from './lib/deadlineUtils';
 import { isTaskArchived } from './lib/archiveUtils';
+import { canUserAccessTask, canUserActAsCurrentOwner, parsePublishDate, userCanViewFullWorkspace } from './lib/workflowUtils';
 import { Menu } from 'lucide-react';
 
 let notificationAudioContext: AudioContext | null = null;
@@ -104,8 +106,19 @@ function WorkspaceContent() {
     persistenceError,
     localMigrationCount,
     isMigratingLocalData,
-    migrateLocalDataToSupabase,
+    migrateLocalDataToDrive,
     dismissLocalMigration,
+    driveStatus,
+    driveUserEmail,
+    driveRootFolder,
+    isConnectingDrive,
+    isChoosingDriveRoot,
+    isImportingDriveTasks,
+    connectGoogleDrive,
+    disconnectGoogleDrive,
+    chooseDriveRoot,
+    importDriveTasks,
+    markPublishReminderSent,
     authStatus,
   } = useAppStore();
   const initialUnreadCountRef = useRef<number | null>(null);
@@ -164,6 +177,25 @@ function WorkspaceContent() {
     };
   }, []);
 
+  useEffect(() => {
+    if (authStatus !== 'approved') return;
+
+    const now = Date.now();
+    const reminderWindowMs = 24 * 60 * 60 * 1000;
+    tasks.forEach(task => {
+      if (task.taskType !== 'campaign' || !task.scheduledPublishAt || task.publishedAt || task.publishReminderSentAt) return;
+      if (!canUserAccessTask(task, currentUser)) return;
+
+      const publishDate = parsePublishDate(task.scheduledPublishAt);
+      if (!publishDate) return;
+
+      const timeUntilPublish = publishDate.getTime() - now;
+      if (timeUntilPublish <= reminderWindowMs) {
+        markPublishReminderSent(task.id);
+      }
+    });
+  }, [tasks, currentUser.id, authStatus]);
+
   const navigateTo = (route: AppRoute, mode: 'push' | 'replace' = 'push') => {
     setView(route.view);
     setActiveTaskId(route.taskId);
@@ -194,12 +226,17 @@ function WorkspaceContent() {
     setIsSidebarOpen(false);
   };
 
-  const canViewFullWorkspace = Boolean(currentUser.isAdmin) || ['reviewer', 'art_director', 'team_leader', 'admin'].includes(currentUser.role);
+  const canViewFullWorkspace = userCanViewFullWorkspace(currentUser);
   const envTasks = tasks.filter(t => t.environment === environment);
   const activeEnvTasks = envTasks.filter(task => !isTaskArchived(task));
   const archivedEnvTasks = envTasks.filter(isTaskArchived);
-  const visibleEnvTasks = canViewFullWorkspace ? activeEnvTasks : activeEnvTasks.filter(t => t.createdBy === currentUser.id);
-  const visibleArchivedTasks = canViewFullWorkspace ? archivedEnvTasks : archivedEnvTasks.filter(t => t.createdBy === currentUser.id);
+  const visibleEnvTasks = canViewFullWorkspace ? activeEnvTasks : activeEnvTasks.filter(t => canUserAccessTask(t, currentUser));
+  const visibleArchivedTasks = canViewFullWorkspace ? archivedEnvTasks : archivedEnvTasks.filter(t => canUserAccessTask(t, currentUser));
+  const isScopedToCurrentOwner = (task: typeof visibleEnvTasks[number]) => (
+    currentUser.role !== 'reviewer' && currentUser.role !== 'art_director'
+      ? true
+      : canUserActAsCurrentOwner(task, currentUser)
+  );
 
   const renderContent = () => {
     if (activeTaskId) {
@@ -215,16 +252,18 @@ function WorkspaceContent() {
         return <AuthScreen onContinueAsGuest={() => handleNavigate('dashboard')} />;
       case 'create_task':
         return <CreateTask />;
+      case 'campaign_scheduler':
+        return <CampaignScheduler onOpenTask={handleOpenTask} />;
       case 'review_queue': {
-        const needsFullReview = visibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status));
+        const needsFullReview = visibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status) && isScopedToCurrentOwner(t));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsFullReview} title="Needs Full Review" />;
       }
       case 'quick_look_queue': {
-        const needsQuickLook = visibleEnvTasks.filter(t => t.status === 'waiting_reviewer_quick_look');
+        const needsQuickLook = visibleEnvTasks.filter(t => t.status === 'waiting_reviewer_quick_look' && isScopedToCurrentOwner(t));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsQuickLook} title="Needs Quick Look" />;
       }
       case 'ad_queue': {
-        const needsAd = visibleEnvTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director'));
+        const needsAd = visibleEnvTasks.filter(t => (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && isScopedToCurrentOwner(t));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsAd} title="Needs Art Director Action" />;
       }
       case 'due_today': {
@@ -262,7 +301,7 @@ function WorkspaceContent() {
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={visibleTasks} title="All Tasks" />;
       }
       case 'my_tasks': {
-        const myTasks = visibleEnvTasks.filter(t => t.createdBy === currentUser.id);
+        const myTasks = visibleEnvTasks.filter(t => t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={myTasks} title="My Tasks" />;
       }
       case 'archived_tasks': {
@@ -298,12 +337,81 @@ function WorkspaceContent() {
           >
             <Menu className="h-5 w-5" />
           </button>
-          {persistenceMode === 'supabase' && persistenceError && (
+          {persistenceMode === 'drive' && driveStatus !== 'ready' && (
+            <div className="mx-4 mt-4 flex flex-col gap-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sky-900 sm:mx-6 lg:mx-8 lg:flex-row lg:items-center lg:justify-between">
+              <div className="text-sm font-bold">
+                {driveStatus === 'needs_config'
+                  ? 'Google Drive is not configured.'
+                  : driveStatus === 'needs_auth'
+                    ? 'Connect Google Drive to load shared tasks.'
+                    : 'Choose the shared Drive task folder.'}
+                {driveUserEmail && <span className="ml-1 text-sky-700">({driveUserEmail})</span>}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {driveStatus === 'needs_auth' && (
+                  <button
+                    type="button"
+                    onClick={() => void connectGoogleDrive()}
+                    disabled={isConnectingDrive}
+                    className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-sky-300"
+                  >
+                    {isConnectingDrive ? 'Connecting...' : 'Connect Drive'}
+                  </button>
+                )}
+                {driveStatus === 'needs_root' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void chooseDriveRoot()}
+                      disabled={isChoosingDriveRoot}
+                      className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-sky-300"
+                    >
+                      {isChoosingDriveRoot ? 'Opening...' : 'Choose Folder'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={disconnectGoogleDrive}
+                      className="rounded-lg border border-sky-300 bg-white px-3 py-2 text-xs font-black uppercase tracking-wide text-sky-800 transition-colors hover:bg-sky-100"
+                    >
+                      Disconnect
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+          {persistenceMode === 'drive' && driveStatus === 'ready' && (
+            <div className="mx-4 mt-4 flex flex-col gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-900 sm:mx-6 lg:mx-8 lg:flex-row lg:items-center lg:justify-between">
+              <p className="text-sm font-bold">
+                Drive: {driveRootFolder?.name || 'Shared folder'}
+                {driveUserEmail && <span className="ml-1 text-emerald-700">({driveUserEmail})</span>}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void importDriveTasks()}
+                  disabled={isImportingDriveTasks}
+                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
+                >
+                  {isImportingDriveTasks ? 'Importing...' : 'Import from Drive'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void chooseDriveRoot()}
+                  disabled={isChoosingDriveRoot}
+                  className="rounded-lg border border-emerald-300 bg-white px-3 py-2 text-xs font-black uppercase tracking-wide text-emerald-800 transition-colors hover:bg-emerald-100"
+                >
+                  Change Folder
+                </button>
+              </div>
+            </div>
+          )}
+          {persistenceMode === 'drive' && persistenceError && (
             <div className="mx-4 mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700 sm:mx-6 lg:mx-8">
               Shared data error: {persistenceError}
             </div>
           )}
-          {persistenceMode === 'supabase' && !persistenceError && localMigrationCount > 0 && (
+          {persistenceMode === 'drive' && driveStatus === 'ready' && !persistenceError && localMigrationCount > 0 && (
             <div className="mx-4 mt-4 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 sm:mx-6 lg:mx-8 lg:flex-row lg:items-center lg:justify-between">
               <p className="text-sm font-bold">
                 {localMigrationCount} local-only item{localMigrationCount === 1 ? '' : 's'} found on this browser.
@@ -311,7 +419,7 @@ function WorkspaceContent() {
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={migrateLocalDataToSupabase}
+                  onClick={migrateLocalDataToDrive}
                   disabled={isMigratingLocalData}
                   className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-amber-300"
                 >

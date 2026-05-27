@@ -5,6 +5,7 @@ import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel
 import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
 import { TaskThumbnail } from './FilePreview';
+import { getCurrentOwnerUserIds } from '../lib/workflowUtils';
 
 export function TaskCard({ task, onClick }: { task: Task; onClick: (id: string) => void; key?: string | number }) {
   const { currentUser, users } = useAppStore();
@@ -13,6 +14,7 @@ export function TaskCard({ task, onClick }: { task: Task; onClick: (id: string) 
 
   const creator = users[task.createdBy]?.name || (task.createdBy === currentUser.id ? currentUser.name : initialUsers.find(u => u.id === task.createdBy)?.name) || 'Unknown';
   const handledByNames = task.handledBy.map(id => users[id]?.name || initialUsers.find(u => u.id === id)?.name).filter(Boolean).join(' + ');
+  const ownerNames = getCurrentOwnerUserIds(task).map(id => users[id]?.name || initialUsers.find(u => u.id === id)?.name).filter(Boolean).join(' + ');
 
   const version = task.versions.length > 0 ? task.versions[0].versionNumber : 1;
 
@@ -59,6 +61,8 @@ export function TaskCard({ task, onClick }: { task: Task; onClick: (id: string) 
         
         <div className="flex flex-wrap gap-x-4 gap-y-2 mb-4 mt-2 text-[11px] text-slate-500">
            <div><span className="font-bold text-slate-700">Creator:</span> {creator}</div>
+           {handledByNames && <div><span className="font-bold text-slate-700">Assigned:</span> {handledByNames}</div>}
+           {ownerNames && <div><span className="font-bold text-slate-700">Owners:</span> {ownerNames}</div>}
            <div><span className="font-bold text-slate-700">Type:</span> {getTaskTypeLabel(task.taskType)}</div>
            <div><span className="font-bold text-slate-700">Version:</span> V{version}</div>
         </div>

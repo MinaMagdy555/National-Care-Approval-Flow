@@ -30,15 +30,31 @@ The app uses fake local accounts. No email confirmation, external provider, or a
 | Mariam | `Password 4` |
 | Noreen | `Password 5` |
 | Yomna | `Password 6` |
-| Ahmed Fawzy | `Password 7` |
+| Eng. Fawzy, Manager (`ahmed.mostafa.fawzy@gmail.com`) | `Password 7` |
+| Omar Mansour, Developer (`omarmansoour96@gmail.com`) | `Password 8` |
+
+## Workflow Features
+
+- Team leaders, reviewers, art directors, and admins can reassign contributors and current workflow owners from a task detail page.
+- Review routes can be changed per task between Full Review, Quick Look, and Direct to Art Director. Pending tasks move to the matching queue immediately; returned tasks use the new route after resubmission.
+- Campaign tasks can include a publish date/time and note. The Campaign Scheduler shows month, overdue, upcoming, and published views, with in-app reminders while the app is open.
 
 ## Shared Data
 
-To share the same tasks between devices, keep `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `.env.local`, then run `supabase.sql` in the Supabase SQL Editor for that project. The fake accounts use the public anon key, so the SQL includes demo RLS policies for `approval_tasks`, `approval_notifications`, and the `task-files` bucket.
+To share the same tasks between devices, configure Google Drive shared storage in `.env.local`:
 
-If the Supabase project is unavailable or has exhausted its egress quota, the app stays in shared-data mode and shows the shared data error. You can force local-only mode for offline demos by setting `VITE_USE_SHARED_SUPABASE_DATA=false`.
+```env
+VITE_USE_SHARED_DRIVE_DATA=true
+VITE_GOOGLE_CLIENT_ID="YOUR_GOOGLE_OAUTH_WEB_CLIENT_ID"
+VITE_GOOGLE_API_KEY="YOUR_GOOGLE_API_KEY"
+VITE_GOOGLE_APP_ID="YOUR_GOOGLE_CLOUD_PROJECT_NUMBER"
+```
 
-The app uses Supabase Realtime for live updates and only performs a slow background refresh, so shared data does not repeatedly download the whole workspace.
+In Google Cloud, enable the Google Drive API and Google Picker API, create a web OAuth client, and add the deployed app origin to the OAuth client. After signing into a demo account, connect Google Drive and choose the company shared-drive task folder. The app stores task folders, uploaded originals, previews, comments, and metadata JSON files in that Drive folder.
+
+Existing Drive work can be imported from inside the app with **Import from Drive**. The app uses Google Picker selection instead of broad Drive auto-scanning.
+
+To force local-only mode for offline demos, set `VITE_USE_SHARED_DRIVE_DATA=false`.
 
 ## Host on GitHub Pages
 
