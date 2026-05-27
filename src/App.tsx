@@ -18,6 +18,7 @@ let notificationAudioContext: AudioContext | null = null;
 type AppRoute = {
   view: string;
   taskId: string | null;
+  assignmentId: string | null;
 };
 
 function getRouteFromUrl(): AppRoute {
@@ -25,6 +26,7 @@ function getRouteFromUrl(): AppRoute {
   return {
     view: params.get('view') || 'dashboard',
     taskId: params.get('task') || null,
+    assignmentId: params.get('assignment') || null,
   };
 }
 
@@ -32,6 +34,7 @@ function writeRouteToUrl(route: AppRoute, mode: 'push' | 'replace' = 'push') {
   const params = new URLSearchParams();
   if (route.view !== 'dashboard' || route.taskId) params.set('view', route.view);
   if (route.taskId) params.set('task', route.taskId);
+  if (route.assignmentId) params.set('assignment', route.assignmentId);
 
   const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
   window.history[mode === 'push' ? 'pushState' : 'replaceState'](route, '', nextUrl);
@@ -96,6 +99,7 @@ function WorkspaceContent() {
   const initialRoute = getRouteFromUrl();
   const [currentView, setView] = useState(initialRoute.view);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(initialRoute.taskId);
+  const [activeAssignmentId, setActiveAssignmentId] = useState<string | null>(initialRoute.assignmentId);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const {
     tasks,
@@ -127,11 +131,12 @@ function WorkspaceContent() {
   const mainRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    writeRouteToUrl({ view: currentView, taskId: activeTaskId }, 'replace');
+    writeRouteToUrl({ view: currentView, taskId: activeTaskId, assignmentId: activeAssignmentId }, 'replace');
     const handlePopState = () => {
       const route = getRouteFromUrl();
       setView(route.view);
       setActiveTaskId(route.taskId);
+      setActiveAssignmentId(route.assignmentId);
       setIsSidebarOpen(false);
     };
 
@@ -199,6 +204,7 @@ function WorkspaceContent() {
   const navigateTo = (route: AppRoute, mode: 'push' | 'replace' = 'push') => {
     setView(route.view);
     setActiveTaskId(route.taskId);
+    setActiveAssignmentId(route.assignmentId);
     writeRouteToUrl(route, mode);
     requestAnimationFrame(() => {
       mainRef.current?.scrollTo({ top: 0, left: 0 });
@@ -208,21 +214,26 @@ function WorkspaceContent() {
 
   useEffect(() => {
     if (authStatus === 'approved' && currentView === 'sign_in') {
-      navigateTo({ view: 'dashboard', taskId: null }, 'replace');
+      navigateTo({ view: 'dashboard', taskId: null, assignmentId: null }, 'replace');
     }
   }, [authStatus, currentView]);
 
   const handleOpenTask = (id: string) => {
-    navigateTo({ view: 'task_detail', taskId: id });
+    navigateTo({ view: 'task_detail', taskId: id, assignmentId: null });
     setIsSidebarOpen(false);
   };
 
   const handleBack = () => {
-    navigateTo({ view: 'dashboard', taskId: null });
+    navigateTo({ view: 'dashboard', taskId: null, assignmentId: null });
   };
 
   const handleNavigate = (view: string) => {
-    navigateTo({ view, taskId: null });
+    navigateTo({ view, taskId: null, assignmentId: null });
+    setIsSidebarOpen(false);
+  };
+
+  const handleOpenAssignmentUpload = (assignmentId: string) => {
+    navigateTo({ view: 'create_task', taskId: null, assignmentId });
     setIsSidebarOpen(false);
   };
 
@@ -232,6 +243,7 @@ function WorkspaceContent() {
   const archivedEnvTasks = envTasks.filter(isTaskArchived);
   const visibleEnvTasks = canViewFullWorkspace ? activeEnvTasks : activeEnvTasks.filter(t => canUserAccessTask(t, currentUser));
   const visibleArchivedTasks = canViewFullWorkspace ? archivedEnvTasks : archivedEnvTasks.filter(t => canUserAccessTask(t, currentUser));
+  const workflowVisibleEnvTasks = visibleEnvTasks.filter(task => task.status !== 'assigned_work');
   const isScopedToCurrentOwner = (task: typeof visibleEnvTasks[number]) => (
     currentUser.role !== 'reviewer' && currentUser.role !== 'art_director'
       ? true
@@ -245,51 +257,51 @@ function WorkspaceContent() {
 
     switch (currentView) {
       case 'dashboard':
-        return <Dashboard onOpenTask={handleOpenTask} onNavigate={handleNavigate} />;
+        return <Dashboard onOpenTask={handleOpenTask} onNavigate={handleNavigate} onOpenAssignmentUpload={handleOpenAssignmentUpload} />;
       case 'notifications':
         return <NotificationsList onOpenTask={handleOpenTask} />;
       case 'sign_in':
         return <AuthScreen onContinueAsGuest={() => handleNavigate('dashboard')} />;
       case 'create_task':
-        return <CreateTask />;
+        return <CreateTask assignmentTaskId={activeAssignmentId} onAssignmentUploaded={handleOpenTask} />;
       case 'campaign_scheduler':
         return <CampaignScheduler onOpenTask={handleOpenTask} />;
       case 'review_queue': {
-        const needsFullReview = visibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status) && isScopedToCurrentOwner(t));
+        const needsFullReview = workflowVisibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status) && isScopedToCurrentOwner(t));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsFullReview} title="Needs Full Review" />;
       }
       case 'quick_look_queue': {
-        const needsQuickLook = visibleEnvTasks.filter(t => t.status === 'waiting_reviewer_quick_look' && isScopedToCurrentOwner(t));
+        const needsQuickLook = workflowVisibleEnvTasks.filter(t => t.status === 'waiting_reviewer_quick_look' && isScopedToCurrentOwner(t));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsQuickLook} title="Needs Quick Look" />;
       }
       case 'ad_queue': {
-        const needsAd = visibleEnvTasks.filter(t => (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && isScopedToCurrentOwner(t));
+        const needsAd = workflowVisibleEnvTasks.filter(t => (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && isScopedToCurrentOwner(t));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsAd} title="Needs Art Director Action" />;
       }
       case 'due_today': {
-        const dueToday = visibleEnvTasks.filter(isDueToday);
+        const dueToday = workflowVisibleEnvTasks.filter(isDueToday);
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={dueToday} title="Due Today" />;
       }
       case 'due_this_week': {
-        const dueThisWeek = visibleEnvTasks.filter(isDueThisWeek);
+        const dueThisWeek = workflowVisibleEnvTasks.filter(isDueThisWeek);
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={dueThisWeek} title="Due This Week" />;
       }
       case 'waiting_for_mina': {
-        const waitingForMina = visibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
+        const waitingForMina = workflowVisibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMina} title="Waiting for Reviewer" />;
       }
       case 'waiting_for_marwa': {
-        const waitingForMarwa = visibleEnvTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
+        const waitingForMarwa = workflowVisibleEnvTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMarwa} title="Waiting for Art Director" />;
       }
       case 'approved_by_me': {
-        const approved = visibleEnvTasks.filter(t => t.status === 'approved_by_art_director');
+        const approved = workflowVisibleEnvTasks.filter(t => t.status === 'approved_by_art_director');
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={approved} title="Approved Tasks" />;
       }
       case 'rejected_reopened': {
         const rejected = currentUser.role === 'art_director'
-          ? visibleEnvTasks.filter(t => t.status === 'changes_requested_by_art_director')
-          : visibleEnvTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
+          ? workflowVisibleEnvTasks.filter(t => t.status === 'changes_requested_by_art_director')
+          : workflowVisibleEnvTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={rejected} title="Rejected / Returned" />;
       }
       case 'all_tasks': {

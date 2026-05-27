@@ -18,7 +18,7 @@ export function getCurrentOwnerUserIds(task: Pick<Task, 'currentOwnerUserIds' | 
 }
 
 export function userCanViewFullWorkspace(user: Pick<User, 'role' | 'isAdmin'>) {
-  return Boolean(user.isAdmin) || ['reviewer', 'art_director', 'team_leader', 'manager', 'developer', 'admin'].includes(user.role);
+  return Boolean(user.isAdmin) || ['reviewer', 'art_director', 'team_leader', 'manager', 'developer', 'marketing_manager', 'admin'].includes(user.role);
 }
 
 export function canUserAccessTask(task: Task, user: Pick<User, 'id' | 'role' | 'isAdmin'>) {

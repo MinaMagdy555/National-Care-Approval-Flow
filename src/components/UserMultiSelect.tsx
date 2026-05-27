@@ -9,12 +9,14 @@ export function UserMultiSelect({
   onChange,
   emptyText = 'No users available',
   disabledIds = [],
+  layout = 'grid',
 }: {
   users: User[];
   selectedIds: string[];
   onChange: (ids: string[]) => void;
   emptyText?: string;
   disabledIds?: string[];
+  layout?: 'grid' | 'single';
 }) {
   const selected = new Set(selectedIds);
   const disabled = new Set(disabledIds);
@@ -36,7 +38,7 @@ export function UserMultiSelect({
   }
 
   return (
-    <div className="grid gap-2 sm:grid-cols-2">
+    <div className={cn("grid gap-2", layout === 'grid' && "sm:grid-cols-2")}>
       {users.map(user => {
         const checked = selected.has(user.id);
         const isDisabled = disabled.has(user.id);
@@ -57,8 +59,8 @@ export function UserMultiSelect({
               {user.avatar ? <img src={user.avatar} alt="" className="h-full w-full object-cover" /> : user.name.charAt(0)}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-black">{user.name}</span>
-              <span className="block truncate text-[10px] font-bold uppercase tracking-wide text-slate-400">{user.role.replaceAll('_', ' ')}</span>
+              <span className="block text-sm font-black leading-tight">{user.name}</span>
+              <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-400">{user.role.replaceAll('_', ' ')}</span>
             </span>
             <span className={cn(
               "flex h-5 w-5 shrink-0 items-center justify-center rounded-md border",
@@ -72,4 +74,3 @@ export function UserMultiSelect({
     </div>
   );
 }
-

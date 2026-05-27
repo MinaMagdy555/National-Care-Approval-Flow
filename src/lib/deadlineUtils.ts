@@ -36,7 +36,12 @@ function endOfWeek(date: Date) {
   return normalized;
 }
 
-function parseDeadlineDate(deadlineText: string | null, today = new Date()): Date | null {
+function normalizeToday(value: unknown) {
+  return value instanceof Date && !Number.isNaN(value.getTime()) ? value : new Date();
+}
+
+function parseDeadlineDate(deadlineText: string | null, todayValue: unknown = new Date()): Date | null {
+  const today = normalizeToday(todayValue);
   const text = deadlineText?.trim();
   if (!text) return null;
 
@@ -60,18 +65,29 @@ function parseDeadlineDate(deadlineText: string | null, today = new Date()): Dat
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function getTaskDeadlineDate(task: Task, today: Date) {
+  if (task.deadlineAt) {
+    const parsed = new Date(task.deadlineAt);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+
+  return parseDeadlineDate(task.deadlineText, today);
+}
+
 export function isOpenTask(task: Task) {
   return !CLOSED_STATUSES.has(task.status) && !isTaskArchived(task);
 }
 
-export function isDueToday(task: Task, today = new Date()) {
-  const deadline = parseDeadlineDate(task.deadlineText, today);
+export function isDueToday(task: Task, todayValue: unknown = new Date()) {
+  const today = normalizeToday(todayValue);
+  const deadline = getTaskDeadlineDate(task, today);
   if (!deadline || !isOpenTask(task)) return false;
   return deadline >= startOfDay(today) && deadline <= endOfDay(today);
 }
 
-export function isDueThisWeek(task: Task, today = new Date()) {
-  const deadline = parseDeadlineDate(task.deadlineText, today);
+export function isDueThisWeek(task: Task, todayValue: unknown = new Date()) {
+  const today = normalizeToday(todayValue);
+  const deadline = getTaskDeadlineDate(task, today);
   if (!deadline || !isOpenTask(task)) return false;
   return deadline >= startOfDay(today) && deadline <= endOfWeek(today);
 }

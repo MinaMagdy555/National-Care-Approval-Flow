@@ -43,6 +43,7 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
   if (viewerRole === 'team_member') {
     switch (status) {
       case 'submitted': return { label: 'Waiting for reviewer', color: 'blue' };
+      case 'assigned_work': return { label: 'Assigned work', color: 'purple' };
       case 'waiting_reviewer_full_review': return { label: 'Waiting for reviewer', color: 'blue' };
       case 'waiting_reviewer_quick_look': return { label: 'Waiting for reviewer quick look', color: 'blue' };
       case 'changes_requested_by_reviewer': return { label: 'Changes requested by reviewer', color: 'red' };
@@ -60,6 +61,7 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
   if (viewerRole === 'reviewer') {
     switch (status) {
       case 'waiting_reviewer_full_review': return { label: 'Waiting for your full review', color: 'amber' };
+      case 'assigned_work': return { label: 'Assigned work', color: 'purple' };
       case 'submitted': return { label: 'Needs your review', color: 'amber' };
       case 'waiting_reviewer_quick_look': return { label: 'Needs your quick look', color: 'amber' };
       case 'changes_requested_by_reviewer': return { label: 'Returned to creator for changes', color: 'red' };
@@ -77,6 +79,7 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
   if (viewerRole === 'art_director') {
     switch (status) {
       case 'reviewer_approved': return { label: 'Ready for your approval', color: 'amber' };
+      case 'assigned_work': return { label: 'Assigned work', color: 'purple' };
       case 'sent_to_art_director': return { label: 'Ready for your approval', color: 'amber' };
       case 'waiting_art_director_approval': return { label: 'Ready for your approval', color: 'amber' };
       case 'approved_by_art_director': return { label: 'You approved this', color: 'green' };
@@ -92,6 +95,7 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
   }
 
   switch (status) {
+    case 'assigned_work': return { label: 'Assigned work', color: 'purple' };
     case 'submitted':
     case 'waiting_reviewer_full_review':
     case 'waiting_reviewer_quick_look': return { label: 'In Review', color: 'blue' };
@@ -113,6 +117,10 @@ export function getNextActionLabel(task: Task, viewerRole: Role): string {
   }
 
   if (viewerRole === 'team_member') {
+    if (status === 'assigned_work') {
+      return 'Upload finished work';
+    }
+
     if (status === 'changes_requested_by_reviewer' || status === 'changes_requested_by_art_director') {
       return 'Resubmit new version';
     }
@@ -120,6 +128,10 @@ export function getNextActionLabel(task: Task, viewerRole: Role): string {
   }
 
   if (viewerRole === 'reviewer') {
+    if (status === 'assigned_work') {
+      return 'Waiting for upload';
+    }
+
     if (status === 'submitted' || status === 'waiting_reviewer_full_review') {
       return 'Review now';
     }
@@ -132,6 +144,10 @@ export function getNextActionLabel(task: Task, viewerRole: Role): string {
   }
 
   if (viewerRole === 'art_director') {
+    if (status === 'assigned_work') {
+      return 'Waiting for upload';
+    }
+
     if (status === 'sent_to_art_director' || status === 'waiting_art_director_approval' || status === 'reviewer_approved') {
       return 'Review & Decide';
     }
@@ -142,6 +158,8 @@ export function getNextActionLabel(task: Task, viewerRole: Role): string {
       return 'Waiting for creator to resubmit';
     }
   }
+
+  if (status === 'assigned_work') return 'Waiting for upload';
 
   return 'None';
 }

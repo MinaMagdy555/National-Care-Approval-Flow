@@ -1,7 +1,8 @@
-export type Role = 'team_member' | 'reviewer' | 'art_director' | 'team_leader' | 'manager' | 'developer' | 'admin';
+export type Role = 'team_member' | 'reviewer' | 'art_director' | 'team_leader' | 'manager' | 'developer' | 'marketing_manager' | 'admin';
 export type Environment = 'production' | 'demo' | 'archived';
 export type ReviewMode = 'full_review' | 'quick_look' | 'direct_to_ad';
 export type Priority = 'low' | 'normal' | 'high' | 'urgent' | 'not_set';
+export type AssignmentPeriod = 'day' | 'week' | 'month';
 
 export type TaskType = 
   | 'video' 
@@ -13,6 +14,7 @@ export type TaskType =
 
 export type TaskStatus = 
   | 'draft'
+  | 'assigned_work'
   | 'submitted'
   | 'waiting_reviewer_full_review'
   | 'waiting_reviewer_quick_look'
@@ -117,7 +119,10 @@ export interface TaskComment {
     | 'assignment_change'
     | 'review_route_change'
     | 'publish_schedule_change'
-    | 'campaign_published';
+    | 'campaign_published'
+    | 'work_assignment_created'
+    | 'work_assignment_updated'
+    | 'work_assignment_uploaded';
   message?: string;
   sections: TaskCommentSection[];
   createdAt: string;
@@ -127,6 +132,7 @@ export interface Task {
   id: string;
   code: string;
   name: string;
+  description?: string | null;
   taskType: TaskType;
   reviewMode: ReviewMode;
   environment: Environment;
@@ -138,6 +144,10 @@ export interface Task {
   currentOwnerUserIds: string[];
   priority: Priority;
   deadlineText: string | null;
+  assignmentPeriod?: AssignmentPeriod | null;
+  assignmentLinks?: string[];
+  deadlineAt?: string | null;
+  assignmentUploadedAt?: string | null;
   scheduledPublishAt?: string | null;
   publishNote?: string | null;
   publishedAt?: string | null;

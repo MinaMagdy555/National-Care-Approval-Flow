@@ -100,7 +100,7 @@ export function CustomSelect({ options, value, onChange, placeholder, className,
             ref={menuRef}
             style={menuStyle}
             className={cn(
-              "z-[9999] bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden py-1 animate-in fade-in slide-in-from-top-2 duration-100",
+              "z-[9999] overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-xl ring-1 ring-slate-900/5 animate-in fade-in slide-in-from-top-2 duration-100",
               menuClassName
             )}
           >
@@ -111,12 +111,12 @@ export function CustomSelect({ options, value, onChange, placeholder, className,
                    onChange(option.value);
                    setIsOpen(false);
                  }}
-                 className="w-full text-left px-4 py-2.5 text-sm font-medium hover:bg-slate-50 transition-colors flex items-center justify-between group"
+                 className="group flex w-full items-center justify-between px-4 py-2.5 text-left text-sm font-bold transition-colors hover:bg-slate-100"
                >
-                 <span className={cn("truncate", option.value === value ? "text-indigo-600 font-bold" : "text-slate-700")}>
+                 <span className={cn("truncate", option.value === value ? "text-slate-950" : "text-slate-600")}>
                    {option.label}
                  </span>
-                 {option.value === value && <Check className="w-4 h-4 text-indigo-600" />}
+                 {option.value === value && <Check className="h-4 w-4 text-slate-900" />}
                </button>
             ))}
           </div>,

@@ -8,7 +8,7 @@ import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, File as FileIcon
 import { FileContentThumbnail, FilePreview, isLocalOnlyFileUrl } from './FilePreview';
 import { uploadTaskFiles } from '../lib/driveDb';
 import { isTaskArchived } from '../lib/archiveUtils';
-import { isAssignableHandler } from '../lib/handlerUtils';
+import { DINA_ID, MARWA_ID, isAssignableHandler } from '../lib/handlerUtils';
 import { UserMultiSelect } from './UserMultiSelect';
 import { CustomSelect } from './CustomSelect';
 import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText, uploadLimitLabel } from '../lib/uploadLimits';
@@ -72,7 +72,6 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [isSavingAction, setIsSavingAction] = useState(false);
   const [actionError, setActionError] = useState('');
   const [managedContributorIds, setManagedContributorIds] = useState<string[]>([]);
-  const [managedOwnerIds, setManagedOwnerIds] = useState<string[]>([]);
   const [managedReviewMode, setManagedReviewMode] = useState<ReviewMode>('full_review');
   const [managedPublishAt, setManagedPublishAt] = useState('');
   const [managedPublishNote, setManagedPublishNote] = useState('');
@@ -91,7 +90,6 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   useEffect(() => {
     if (!task) return;
     setManagedContributorIds(task.handledBy);
-    setManagedOwnerIds(getCurrentOwnerUserIds(task));
     setManagedReviewMode(task.reviewMode);
     setManagedPublishAt(task.scheduledPublishAt || '');
     setManagedPublishNote(task.publishNote || '');
@@ -157,6 +155,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const canActAsReviewer = currentUser.role === 'reviewer' && isCurrentActiveOwner;
   const canActAsArtDirector = currentUser.role === 'art_director' && isCurrentActiveOwner;
   const canManageWorkflowSettings = canManageWorkflow(currentUser);
+  const canReassignTask = currentUser.id === MARWA_ID || currentUser.id === DINA_ID;
   const canResubmitTask = !isReadOnlyObserver && (isSelfCreatedTask || task.handledBy.includes(currentUser.id) || currentOwnerIds.includes(currentUser.id));
   const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
   const canResubmitVersion = canResubmitTask && ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(task.status);
@@ -207,14 +206,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const selectedMinaFeedback = minaForwardableFeedback.filter(item => selectedMinaFeedbackIds.includes(item.id));
   const canSubmitADReject = adRejectComment.trim() || selectedMinaFeedback.length > 0 || adRejectNotes.some(section => section.note.trim() || section.imageUrl || section.localPreviewUrl || section.imageFile);
   const hasResubmitAttachments = resubmitFiles.length > 0 || resubmitLinks.length > 0;
-  const contributorOptions = userList.filter(user => user.role !== 'art_director');
-  const ownerOptions = task.currentOwnerRole === 'reviewer'
-    ? userList.filter(user => user.role === 'reviewer' || user.role === 'admin')
-    : task.currentOwnerRole === 'art_director'
-      ? userList.filter(user => user.role === 'art_director')
-      : task.currentOwnerRole === 'team_member'
-        ? userList.filter(user => user.id === task.createdBy || task.handledBy.includes(user.id))
-        : userList;
+  const contributorOptions = userList.filter(user => isAssignableHandler(user.id));
   const reviewModeOptions = [
     { value: 'full_review', label: 'Full Review' },
     { value: 'quick_look', label: 'Quick Look' },
@@ -222,7 +214,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   ];
 
   const saveAssignment = () => {
-    updateTaskAssignment(task.id, managedContributorIds, managedOwnerIds);
+    updateTaskAssignment(task.id, managedContributorIds, currentOwnerIds);
   };
 
   const saveReviewRoute = () => {
@@ -770,7 +762,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             </div>
           </div>
 
-          {canManageWorkflowSettings && (
+          {(canManageWorkflowSettings || canReassignTask) && (
             <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex items-center gap-2">
                 <Settings2 className="h-4 w-4 text-indigo-500" />
@@ -778,57 +770,51 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               </div>
 
               <div className="space-y-3">
-                <div className="grid gap-3 sm:grid-cols-[1fr,auto]">
-                  <div>
-                    <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Review Route</label>
-                    <CustomSelect
-                      value={managedReviewMode}
-                      onChange={value => setManagedReviewMode(value as ReviewMode)}
-                      options={reviewModeOptions}
-                    />
+                {canManageWorkflowSettings && (
+                  <div className="grid gap-3 sm:grid-cols-[1fr,auto]">
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Review Route</label>
+                      <CustomSelect
+                        value={managedReviewMode}
+                        onChange={value => setManagedReviewMode(value as ReviewMode)}
+                        options={reviewModeOptions}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={saveReviewRoute}
+                      disabled={managedReviewMode === task.reviewMode}
+                      className="self-end rounded-lg bg-indigo-600 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                    >
+                      Save Route
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={saveReviewRoute}
-                    disabled={managedReviewMode === task.reviewMode}
-                    className="self-end rounded-lg bg-indigo-600 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                  >
-                    Save Route
-                  </button>
-                </div>
+                )}
 
-                <div className="space-y-2">
-                  <div>
-                    <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Assigned Contributors</label>
-                    <p className="mt-1 text-xs font-semibold text-slate-500">Contributors can view and resubmit this task when edits are requested.</p>
-                  </div>
-                  <UserMultiSelect
-                    users={contributorOptions}
-                    selectedIds={managedContributorIds}
-                    onChange={setManagedContributorIds}
-                  />
-                </div>
+                {canReassignTask && (
+                  <>
+                    <div className="space-y-2">
+                      <div>
+                        <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Assigned Contributors</label>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">Only Marwa and Dina can reassign contributors. Managers, leadership, and assignment creators are not assignable task contributors.</p>
+                      </div>
+                      <UserMultiSelect
+                        users={contributorOptions}
+                        selectedIds={managedContributorIds}
+                        onChange={setManagedContributorIds}
+                        layout="single"
+                      />
+                    </div>
 
-                <div className="space-y-2">
-                  <div>
-                    <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Current Owners</label>
-                    <p className="mt-1 text-xs font-semibold text-slate-500">When owners are selected, only those users can perform this stage's role action.</p>
-                  </div>
-                  <UserMultiSelect
-                    users={ownerOptions}
-                    selectedIds={managedOwnerIds}
-                    onChange={setManagedOwnerIds}
-                    emptyText="No matching users for the current owner role."
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={saveAssignment}
-                  className="w-full rounded-lg border border-slate-200 bg-slate-900 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-black"
-                >
-                  Save Assignment
-                </button>
+                    <button
+                      type="button"
+                      onClick={saveAssignment}
+                      className="w-full rounded-lg border border-slate-200 bg-slate-900 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-black"
+                    >
+                      Save Assignment
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           )}

@@ -32,6 +32,26 @@ The app uses fake local accounts. No email confirmation, external provider, or a
 | Yomna | `Password 6` |
 | Eng. Fawzy, Manager (`ahmed.mostafa.fawzy@gmail.com`) | `Password 7` |
 | Omar Mansour, Developer (`omarmansoour96@gmail.com`) | `Password 8` |
+| Ahmed Sobeeh, Marketing Manager (`ahmed.sobeeh@example.com`) | `Password 9` |
+
+Fawzy and Omar can also use the invitation email flow to create their own passwords with their Gmail addresses. Once either one creates a password, that person's demo shortcut and demo password stop working in that browser.
+
+### Sending Invitation Emails
+
+To send real invite emails to Fawzy and Omar, configure Gmail SMTP in `.env.local`:
+
+```env
+SMTP_HOST="smtp.gmail.com"
+SMTP_PORT="465"
+SMTP_USER="your-gmail-address@gmail.com"
+SMTP_APP_PASSWORD="YOUR_GMAIL_APP_PASSWORD"
+SMTP_FROM_NAME="National Care Approval Flow"
+APP_URL="http://localhost:3000"
+INVITE_ADMIN_COPY_EMAIL="minamagdy5555@gmail.com"
+INVITE_SEND_SECRET="CHOOSE_A_PRIVATE_SEND_SECRET"
+```
+
+Use a Gmail app password for `SMTP_APP_PASSWORD`. After the variables are set, run `npm run send:invites` or use the invite panel in the sign-in screen with `INVITE_SEND_SECRET`.
 
 ## Workflow Features
 

@@ -6,6 +6,8 @@ import { initialUsers } from '../lib/mockData';
 import { isDueThisWeek, isDueToday } from '../lib/deadlineUtils';
 import { isTaskArchived } from '../lib/archiveUtils';
 import { canUserAccessTask, canUserActAsCurrentOwner, userCanViewFullWorkspace } from '../lib/workflowUtils';
+import { isWorkAssignmentTask } from '../lib/workAssignmentUtils';
+import { AssignedWorkSection } from './AssignedWorkSection';
 
 function SummaryCard({
   label,
@@ -84,14 +86,18 @@ function DueSummaryCard({
 export function Dashboard({
   onOpenTask,
   onNavigate,
+  onOpenAssignmentUpload,
 }: {
   onOpenTask: (id: string) => void;
   onNavigate: (view: string) => void;
+  onOpenAssignmentUpload: (id: string) => void;
 }) {
   const { tasks, currentUser, environment } = useAppStore();
 
   const canViewFullWorkspace = userCanViewFullWorkspace(currentUser);
   const envTasks = tasks.filter(t => t.environment === environment && !isTaskArchived(t) && (canViewFullWorkspace || canUserAccessTask(t, currentUser)));
+  const workflowTasks = envTasks.filter(task => task.status !== 'assigned_work');
+  const assignedWorkTasks = envTasks.filter(isWorkAssignmentTask);
   const isScopedToCurrentOwner = (task: typeof envTasks[number]) => (
     currentUser.role !== 'reviewer' && currentUser.role !== 'art_director'
       ? true
@@ -99,7 +105,7 @@ export function Dashboard({
   );
   const minaName = initialUsers.find(u => u.role === 'reviewer')?.name.split(' ')[0] || 'Mina';
   const marwaName = initialUsers.find(u => u.role === 'art_director')?.name.split(' ')[0] || 'Marwa';
-  const isWorkspaceMonitor = ['team_leader', 'manager', 'developer', 'admin'].includes(currentUser.role);
+  const isWorkspaceMonitor = ['team_leader', 'manager', 'developer', 'marketing_manager', 'admin'].includes(currentUser.role);
   const usesWorkspaceOverview = currentUser.role === 'team_member' || isWorkspaceMonitor;
 
   let needsAction = [];
@@ -110,37 +116,37 @@ export function Dashboard({
   let waitingForMarwa = [];
 
   if (currentUser.role === 'team_member') {
-    needsAction = envTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && (t.status === 'changes_requested_by_reviewer' || t.status === 'changes_requested_by_art_director'));
-    waitingOthers = envTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && ['waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
-    approved = envTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && t.status === 'approved_by_art_director');
+    needsAction = workflowTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && (t.status === 'changes_requested_by_reviewer' || t.status === 'changes_requested_by_art_director'));
+    waitingOthers = workflowTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && ['waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
+    approved = workflowTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && t.status === 'approved_by_art_director');
     returned = needsAction;
-    waitingForMina = envTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
-    waitingForMarwa = envTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
+    waitingForMina = workflowTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
+    waitingForMarwa = workflowTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
   } else if (currentUser.role === 'reviewer') {
-    needsAction = envTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status) && isScopedToCurrentOwner(t));
-    waitingOthers = envTasks.filter(t => ['sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
-    approved = envTasks.filter(t => t.status === 'approved_by_art_director');
-    returned = envTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
+    needsAction = workflowTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status) && isScopedToCurrentOwner(t));
+    waitingOthers = workflowTasks.filter(t => ['sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
+    approved = workflowTasks.filter(t => t.status === 'approved_by_art_director');
+    returned = workflowTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
   } else if (currentUser.role === 'art_director') {
-    needsAction = envTasks.filter(t => (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && isScopedToCurrentOwner(t));
-    waitingOthers = envTasks.filter(t => t.status === 'changes_requested_by_art_director' || t.status === 'waiting_reviewer_full_review' || t.status === 'waiting_reviewer_quick_look');
-    approved = envTasks.filter(t => t.status === 'approved_by_art_director');
-    returned = envTasks.filter(t => t.status === 'changes_requested_by_art_director');
+    needsAction = workflowTasks.filter(t => (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && isScopedToCurrentOwner(t));
+    waitingOthers = workflowTasks.filter(t => t.status === 'changes_requested_by_art_director' || t.status === 'waiting_reviewer_full_review' || t.status === 'waiting_reviewer_quick_look');
+    approved = workflowTasks.filter(t => t.status === 'approved_by_art_director');
+    returned = workflowTasks.filter(t => t.status === 'changes_requested_by_art_director');
   } else {
-    approved = envTasks.filter(t => t.status === 'approved_by_art_director' || t.status === 'completed');
-    waitingOthers = envTasks.filter(t => t.status !== 'approved_by_art_director' && t.status !== 'completed' && !t.status.includes('changes_requested'));
-    returned = envTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
-    waitingForMina = envTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
-    waitingForMarwa = envTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
+    approved = workflowTasks.filter(t => t.status === 'approved_by_art_director' || t.status === 'completed');
+    waitingOthers = workflowTasks.filter(t => t.status !== 'approved_by_art_director' && t.status !== 'completed' && !t.status.includes('changes_requested'));
+    returned = workflowTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
+    waitingForMina = workflowTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
+    waitingForMarwa = workflowTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
   }
 
-  const needsFullReviewCount = envTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status) && isScopedToCurrentOwner(t)).length;
-  const needsQuickLookCount = envTasks.filter(t => t.status === 'waiting_reviewer_quick_look' && isScopedToCurrentOwner(t)).length;
-  const waitingMarwaCount = envTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) && (currentUser.role !== 'art_director' || isScopedToCurrentOwner(t))).length;
-  const approvedCount = envTasks.filter(t => t.status === 'approved_by_art_director').length;
+  const needsFullReviewCount = workflowTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status) && isScopedToCurrentOwner(t)).length;
+  const needsQuickLookCount = workflowTasks.filter(t => t.status === 'waiting_reviewer_quick_look' && isScopedToCurrentOwner(t)).length;
+  const waitingMarwaCount = workflowTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) && (currentUser.role !== 'art_director' || isScopedToCurrentOwner(t))).length;
+  const approvedCount = workflowTasks.filter(t => t.status === 'approved_by_art_director').length;
   const rejectedCount = returned.length;
-  const dueTodayCount = envTasks.filter(isDueToday).length;
-  const dueThisWeekCount = envTasks.filter(isDueThisWeek).length;
+  const dueTodayCount = workflowTasks.filter(isDueToday).length;
+  const dueThisWeekCount = workflowTasks.filter(isDueThisWeek).length;
   const hasStatusCards = usesWorkspaceOverview || currentUser.role === 'reviewer' || currentUser.role === 'art_director';
 
   return (
@@ -295,6 +301,11 @@ export function Dashboard({
         </div>
       </div>
 
+      <AssignedWorkSection
+        tasks={assignedWorkTasks}
+        onOpenAssignmentUpload={onOpenAssignmentUpload}
+      />
+
       {needsAction.length > 0 && (
         <section>
           <div className="mb-6 flex items-center justify-between border-b border-slate-200 pb-3">
@@ -359,7 +370,7 @@ export function Dashboard({
         </section>
       )}
 
-      {needsAction.length === 0 && returned.length === 0 && waitingOthers.length === 0 && approved.length === 0 && (
+      {needsAction.length === 0 && returned.length === 0 && waitingOthers.length === 0 && approved.length === 0 && assignedWorkTasks.length === 0 && (
         <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white py-20 text-center">
           <p className="font-medium text-slate-500">{isWorkspaceMonitor ? 'No tasks in this workspace.' : 'No tasks in your queue.'}</p>
         </div>

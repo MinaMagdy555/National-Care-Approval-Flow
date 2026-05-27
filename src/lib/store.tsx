@@ -15,6 +15,7 @@ import {
   getTaskParticipantIds,
   uniqueIds,
 } from './workflowUtils';
+import { getAssignmentPeriodFromDeadline } from './workAssignmentUtils';
 import {
   fetchDriveNotifications,
   fetchDriveTasks,
@@ -38,7 +39,29 @@ import {
 } from './driveAuth';
 import { addLowResPreviewsToFiles, getTaskFiles } from './previewUtils';
 
+type WorkAssignmentInput = {
+  name: string;
+  description: string;
+  priority: Priority;
+  deadlineAt: string;
+  assignmentLinks: string[];
+  handledByIds: string[];
+};
+
+type WorkAssignmentUploadPayload = {
+  taskType: TaskType;
+  reviewMode: ReviewMode;
+  scheduledPublishAt: string | null;
+  publishNote: string | null;
+  version: TaskVersion;
+  thumbnailUrl: string;
+  thumbnailStoragePath?: string;
+  driveFolderId?: string;
+};
+
 const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
+const REGISTERED_PASSWORDS_STORAGE_KEY = 'national-care-registered-passwords';
+const DEMO_DISABLED_AFTER_SIGNUP_USER_IDS = new Set(['user_7', 'user_8']);
 const SHARED_DATA_POLL_INTERVAL_MS = 60 * 1000;
 const GUEST_SEED_ID_PREFIX = 'guest_seed_';
 const GUEST_USER: User = {
@@ -56,6 +79,15 @@ type AuthActionResult = {
   ok: boolean;
   message?: string;
   needsEmailConfirmation?: boolean;
+};
+
+type RegisteredPasswordRecord = {
+  userId: string;
+  email: string;
+  salt: string;
+  passwordHash: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -81,7 +113,105 @@ function normalizeCredentialValue(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function readRegisteredPasswords(): Record<string, RegisteredPasswordRecord> {
+  if (typeof window === 'undefined') return {};
+
+  try {
+    const raw = window.localStorage.getItem(REGISTERED_PASSWORDS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, RegisteredPasswordRecord>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function isDemoShortcutDisabledForUser(user: Pick<User, 'id' | 'email'>) {
+  if (!DEMO_DISABLED_AFTER_SIGNUP_USER_IDS.has(user.id) || !user.email) return false;
+  return Boolean(readRegisteredPasswords()[normalizeEmail(user.email)]);
+}
+
+function writeRegisteredPasswords(records: Record<string, RegisteredPasswordRecord>) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(REGISTERED_PASSWORDS_STORAGE_KEY, JSON.stringify(records));
+}
+
+function createPasswordSalt() {
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes).map(byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+}
+
+function fallbackHash(value: string) {
+  let hash = 5381;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
+  }
+  return `fallback_${(hash >>> 0).toString(16)}`;
+}
+
+async function hashPassword(password: string, salt: string) {
+  const value = `${salt}:${password}`;
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    const bytes = new TextEncoder().encode(value);
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  return fallbackHash(value);
+}
+
+function getInvitedUserByEmail(email: string) {
+  const normalizedEmail = normalizeEmail(email);
+  return initialUsers.find(user => user.email && normalizeEmail(user.email) === normalizedEmail) || null;
+}
+
+async function findRegisteredAccount(identifier: string, password: string) {
+  const normalizedEmail = normalizeEmail(identifier);
+  if (!normalizedEmail.includes('@')) return null;
+
+  const records = readRegisteredPasswords();
+  const record = records[normalizedEmail];
+  if (!record) return null;
+
+  const passwordHash = await hashPassword(password, record.salt);
+  if (passwordHash !== record.passwordHash) return null;
+
+  const user = initialUsers.find(item => item.id === record.userId && item.email && normalizeEmail(item.email) === normalizedEmail);
+  return user ? { user } : null;
+}
+
 function findDemoAccount(identifier: string, password: string) {
+  const normalizedIdentifier = normalizeCredentialValue(identifier);
+  const normalizedPassword = normalizeCredentialValue(password);
+
+  const account = demoAccounts.find(item => {
+    const user = item.user;
+    const acceptedNames = (user.email
+      ? [user.email]
+      : [
+          user.id,
+          user.name,
+          user.name.split(/\s+/)[0],
+        ]
+    ).filter(Boolean).map(normalizeCredentialValue);
+
+    return acceptedNames.includes(normalizedIdentifier) && normalizeCredentialValue(item.password) === normalizedPassword;
+  }) || null;
+
+  if (!account || isDemoShortcutDisabledForUser(account.user)) return null;
+  return account;
+}
+
+function findDemoAccountIncludingDisabled(identifier: string, password: string) {
   const normalizedIdentifier = normalizeCredentialValue(identifier);
   const normalizedPassword = normalizeCredentialValue(password);
 
@@ -103,7 +233,7 @@ function findDemoAccount(identifier: string, password: string) {
 function getStoredDemoUser() {
   if (typeof window === 'undefined') return GUEST_USER;
   const storedUserId = window.localStorage.getItem(CURRENT_USER_STORAGE_KEY);
-  return demoAccounts.find(account => account.user.id === storedUserId)?.user || GUEST_USER;
+  return initialUsers.find(user => user.id === storedUserId) || demoAccounts.find(account => account.user.id === storedUserId)?.user || GUEST_USER;
 }
 
 function isGuestSeedTask(task: Pick<Task, 'id' | 'code'> | null | undefined) {
@@ -141,6 +271,16 @@ function getUserDisplayName(users: Record<string, User>, userId: string) {
   return users[userId]?.name || initialUsers.find(user => user.id === userId)?.name || userId;
 }
 
+function createTaskCode(prefix = 'TSK') {
+  return `${prefix}-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+}
+
+function formatDeadlineText(deadlineAt?: string | null) {
+  if (!deadlineAt) return null;
+  const parsed = new Date(deadlineAt);
+  return Number.isNaN(parsed.getTime()) ? deadlineAt : parsed.toLocaleString();
+}
+
 function isReviewerCreatedTask(task: Task, users: Record<string, User>) {
   const creatorRole = users[task.createdBy]?.role || initialUsers.find(user => user.id === task.createdBy)?.role;
   return creatorRole === 'reviewer' || creatorRole === 'admin';
@@ -167,26 +307,35 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
 
   const now = new Date().toISOString();
   const versions = Array.isArray(task.versions) ? task.versions : [];
-  const currentOwnerUserIds = uniqueIds([
+  const currentOwnerRole = task.currentOwnerRole ?? null;
+  const rawCurrentOwnerUserIds = uniqueIds([
     ...(Array.isArray(task.currentOwnerUserIds) ? task.currentOwnerUserIds : []),
     task.currentOwnerUserId,
   ]);
+  const currentOwnerUserIds = currentOwnerRole === 'team_member'
+    ? sanitizeHandledBy(rawCurrentOwnerUserIds)
+    : rawCurrentOwnerUserIds;
 
   return {
     id: task.id,
     code: task.code || `TSK-${task.id}`,
     name: task.name || 'Untitled task',
+    description: task.description ?? null,
     taskType: task.taskType || 'others',
     reviewMode: task.reviewMode || 'full_review',
     environment: task.environment || 'production',
     createdBy: task.createdBy || initialUsers[0]?.id || 'unknown_user',
     handledBy: sanitizeHandledBy(Array.isArray(task.handledBy) ? task.handledBy : [task.createdBy || initialUsers[0]?.id || 'unknown_user']),
     status: task.status || 'submitted',
-    currentOwnerRole: task.currentOwnerRole ?? null,
-    currentOwnerUserId: task.currentOwnerUserId ?? null,
+    currentOwnerRole,
+    currentOwnerUserId: currentOwnerUserIds[0] || null,
     currentOwnerUserIds,
     priority: task.priority || 'not_set',
     deadlineText: task.deadlineText ?? null,
+    assignmentPeriod: task.assignmentPeriod ?? null,
+    assignmentLinks: Array.isArray(task.assignmentLinks) ? task.assignmentLinks : [],
+    deadlineAt: task.deadlineAt ?? null,
+    assignmentUploadedAt: task.assignmentUploadedAt ?? null,
     scheduledPublishAt: task.scheduledPublishAt ?? null,
     publishNote: task.publishNote ?? null,
     publishedAt: task.publishedAt ?? null,
@@ -255,6 +404,11 @@ function taskSyncKey(task: Task) {
     task.reviewMode,
     task.handledBy.join(','),
     getCurrentOwnerUserIds(task).join(','),
+    task.description || '',
+    task.assignmentPeriod || '',
+    (task.assignmentLinks || []).join(','),
+    task.deadlineAt || '',
+    task.assignmentUploadedAt || '',
     task.scheduledPublishAt || '',
     task.publishedAt || '',
     task.publishReminderSentAt || '',
@@ -406,6 +560,9 @@ interface AppContextType extends AppState {
   updateTaskPublishSchedule: (taskId: string, schedule: { scheduledPublishAt: string | null; publishNote: string | null }) => void;
   markCampaignPublished: (taskId: string) => void;
   markPublishReminderSent: (taskId: string) => void;
+  createWorkAssignment: (input: WorkAssignmentInput) => void;
+  updateWorkAssignment: (taskId: string, input: WorkAssignmentInput) => void;
+  submitWorkAssignmentUpload: (taskId: string, payload: WorkAssignmentUploadPayload) => void;
   addTaskComment: (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => void;
   addTaskVersion: (taskId: string, version: TaskVersion) => void;
   replaceTaskVersionFiles: (taskId: string, versionId: string, files: UploadedTaskFile[]) => void;
@@ -414,6 +571,7 @@ interface AppContextType extends AppState {
   addNotification: (notification: Omit<Notification, 'id' | 'createdAt' | 'read'>) => void;
   markNotificationAsRead: (id: string) => void;
   loginWithPassword: (identifier: string, password: string) => Promise<AuthActionResult>;
+  signupWithEmail: (email: string, password: string) => Promise<AuthActionResult>;
   logout: () => Promise<void>;
   archiveTask: (taskId: string, reason?: string) => void;
   unarchiveTask: (taskId: string) => void;
@@ -499,7 +657,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .then(localState => {
         if (!isMounted) return;
 
-        const localTasks = Array.isArray(localState?.tasks) ? localState.tasks : initialTasks;
+        const localTasks = Array.isArray(localState?.tasks) && localState.tasks.length > 0 ? localState.tasks : initialTasks;
         setTasks(reviveWorkspaceTasks(localTasks, usersObj));
         setNotifications(Array.isArray(localState?.notifications) ? removeGuestSeedNotifications(localState.notifications) : []);
         setLocalMigrationState(null);
@@ -559,7 +717,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .then(([loadedTasks, loadedNotifications, localState]) => {
         if (!isMounted) return;
 
-        const sharedTasks = reviveWorkspaceTasks(loadedTasks, usersObj);
+        const sharedTasks = reviveWorkspaceTasks(loadedTasks.length > 0 ? loadedTasks : initialTasks, usersObj);
         const sharedNotifications = removeGuestSeedNotifications(loadedNotifications);
         const localTasks = Array.isArray(localState?.tasks) ? localState.tasks.filter(task => !isGuestSeedTask(task)) : [];
         const localNotifications = Array.isArray(localState?.notifications) ? removeGuestSeedNotifications(localState.notifications) : [];
@@ -712,9 +870,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (role === 'reviewer') return getUserIdsByRole(userList, ['reviewer', 'admin']);
     if (role === 'art_director') return getUserIdsByRole(userList, ['art_director']);
     if (role === 'team_leader') return getUserIdsByRole(userList, ['team_leader']);
-    if (role === 'team_member' && task) return uniqueIds([task.createdBy, ...task.handledBy]);
+    if (role === 'team_member' && task) return sanitizeHandledBy([task.createdBy, ...task.handledBy]);
     return [];
   };
+
+  const normalizeOwnerIdsForRole = (role: Role | null, ids: string[]) => (
+    role === 'team_member' ? sanitizeHandledBy(ids) : uniqueIds(ids)
+  );
 
   const addAuditComment = (task: Task, authorId: string, action: TaskComment['action'], message: string, createdAt = new Date().toISOString()): Task => ({
     ...task,
@@ -741,12 +903,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const loginWithPassword = async (identifier: string, password: string): Promise<AuthActionResult> => {
     if (!identifier.trim() || !password.trim()) {
-      return { ok: false, message: 'Choose a demo account and enter its password.' };
+      return { ok: false, message: 'Enter your email or account name and password.' };
+    }
+
+    const registeredAccount = await findRegisteredAccount(identifier, password);
+    if (registeredAccount) {
+      window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, registeredAccount.user.id);
+      setAuthProfile(null);
+      setCurrentUserState(registeredAccount.user);
+      setUserList(initialUsers);
+      setAccountProfiles([]);
+      setAuthStatus('approved');
+      setAuthError(null);
+      return { ok: true };
     }
 
     const account = findDemoAccount(identifier, password);
     if (!account) {
-      return { ok: false, message: 'That demo account name or password does not match.' };
+      const disabledDemoAccount = findDemoAccountIncludingDisabled(identifier, password);
+      if (disabledDemoAccount && isDemoShortcutDisabledForUser(disabledDemoAccount.user)) {
+        return { ok: false, message: 'This demo password was disabled after signup. Use the Gmail address and created password.' };
+      }
+      return { ok: false, message: 'That email/account and password do not match.' };
     }
 
     window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, account.user.id);
@@ -757,6 +935,54 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setAuthStatus('approved');
     setAuthError(null);
     return { ok: true };
+  };
+
+  const signupWithEmail = async (email: string, password: string): Promise<AuthActionResult> => {
+    const normalizedEmail = normalizeEmail(email);
+    const invitedUser = getInvitedUserByEmail(normalizedEmail);
+
+    if (!normalizedEmail || !password.trim()) {
+      return { ok: false, message: 'Enter your invited Gmail address and create a password.' };
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return { ok: false, message: 'Enter a valid email address.' };
+    }
+
+    if (!invitedUser) {
+      return { ok: false, message: 'This email is not invited to the tool yet.' };
+    }
+
+    if (password.length < 8) {
+      return { ok: false, message: 'Password must be at least 8 characters.' };
+    }
+
+    const records = readRegisteredPasswords();
+    const now = new Date().toISOString();
+    const existingRecord = records[normalizedEmail];
+    const salt = existingRecord?.salt || createPasswordSalt();
+    const passwordHash = await hashPassword(password, salt);
+
+    writeRegisteredPasswords({
+      ...records,
+      [normalizedEmail]: {
+        userId: invitedUser.id,
+        email: normalizedEmail,
+        salt,
+        passwordHash,
+        createdAt: existingRecord?.createdAt || now,
+        updatedAt: now,
+      },
+    });
+
+    window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, invitedUser.id);
+    setAuthProfile(null);
+    setCurrentUserState(invitedUser);
+    setUserList(initialUsers);
+    setAccountProfiles([]);
+    setAuthStatus('approved');
+    setAuthError(null);
+    return { ok: true, message: 'Account created. Welcome in.' };
   };
 
   const logout = async () => {
@@ -921,7 +1147,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(t => {
       if (t.id === taskId) {
-        const nextOwnerIds = uniqueIds(newOwnerUserIds ?? getDefaultOwnerIdsForRole(newOwnerRole, t));
+        const nextOwnerIds = normalizeOwnerIdsForRole(newOwnerRole, newOwnerUserIds ?? getDefaultOwnerIdsForRole(newOwnerRole, t));
         return {
           ...t,
           status: newStatus,
@@ -950,7 +1176,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!task) return;
 
     const nextHandledBy = sanitizeHandledBy([task.createdBy, ...handledByIds]);
-    const nextOwnerIds = uniqueIds(currentOwnerUserIds);
+    const nextOwnerIds = normalizeOwnerIdsForRole(task.currentOwnerRole, currentOwnerUserIds);
     const previousAssignees = new Set([...task.handledBy, ...getCurrentOwnerUserIds(task)]);
     const addedAssignees = uniqueIds([...nextHandledBy, ...nextOwnerIds]).filter(userId => !previousAssignees.has(userId));
     if (addedAssignees.length > 0) {
@@ -1072,6 +1298,137 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ? { ...t, publishReminderSentAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
         : t
     )));
+  };
+
+  const createWorkAssignment = (input: WorkAssignmentInput) => {
+    const handledBy = sanitizeHandledBy(input.handledByIds);
+    if (!input.name.trim() || !input.description.trim() || !input.deadlineAt || handledBy.length === 0) return;
+
+    const now = new Date().toISOString();
+    const taskId = Math.random().toString(36).substring(7);
+    const normalizedLinks = input.assignmentLinks.map(link => link.trim()).filter(Boolean);
+    const deadlineText = formatDeadlineText(input.deadlineAt);
+    const assignmentPeriod = getAssignmentPeriodFromDeadline(input.deadlineAt);
+    const task: Task = {
+      id: taskId,
+      code: createTaskCode('WRK'),
+      name: input.name.trim(),
+      description: input.description.trim() || null,
+      taskType: 'others',
+      reviewMode: 'full_review',
+      environment,
+      createdBy: currentUser.id,
+      handledBy,
+      status: 'assigned_work',
+      currentOwnerRole: 'team_member',
+      currentOwnerUserId: handledBy[0] || null,
+      currentOwnerUserIds: handledBy,
+      priority: input.priority,
+      deadlineText,
+      assignmentPeriod,
+      assignmentLinks: normalizedLinks,
+      deadlineAt: input.deadlineAt || null,
+      assignmentUploadedAt: null,
+      scheduledPublishAt: null,
+      publishNote: null,
+      publishedAt: null,
+      publishReminderSentAt: null,
+      versions: [],
+      comments: [],
+      thumbnailUrl: '',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    addNotifications(handledBy.filter(userId => userId !== currentUser.id), taskId, `You were assigned "${task.name}".`);
+    queueTaskBroadcast(taskId);
+    setTasks(prev => [
+      addAuditComment(task, currentUser.id, 'work_assignment_created', `Assigned work created for ${handledBy.map(userId => getUserDisplayName(usersObj, userId)).join(', ')}.`, now),
+      ...prev,
+    ]);
+  };
+
+  const updateWorkAssignment = (taskId: string, input: WorkAssignmentInput) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || task.status !== 'assigned_work') return;
+
+    const handledBy = sanitizeHandledBy(input.handledByIds);
+    if (!input.name.trim() || !input.description.trim() || !input.deadlineAt || handledBy.length === 0) return;
+
+    const previousAssignees = new Set(task.handledBy);
+    const addedAssignees = handledBy.filter(userId => !previousAssignees.has(userId));
+    if (addedAssignees.length > 0) {
+      addNotifications(addedAssignees.filter(userId => userId !== currentUser.id), taskId, `You were assigned "${input.name.trim()}".`);
+    }
+
+    const normalizedLinks = input.assignmentLinks.map(link => link.trim()).filter(Boolean);
+    const assignmentPeriod = getAssignmentPeriodFromDeadline(input.deadlineAt);
+    const message = `Assigned work updated for ${handledBy.map(userId => getUserDisplayName(usersObj, userId)).join(', ')}.`;
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      const now = new Date().toISOString();
+      return addAuditComment({
+        ...t,
+        name: input.name.trim(),
+        description: input.description.trim() || null,
+        handledBy,
+        currentOwnerRole: 'team_member',
+        currentOwnerUserId: handledBy[0] || null,
+        currentOwnerUserIds: handledBy,
+        priority: input.priority,
+        deadlineText: formatDeadlineText(input.deadlineAt),
+        assignmentPeriod,
+        assignmentLinks: normalizedLinks,
+        deadlineAt: input.deadlineAt || null,
+        updatedAt: now,
+      }, currentUser.id, 'work_assignment_updated', message, now);
+    }));
+  };
+
+  const submitWorkAssignmentUpload = (taskId: string, payload: WorkAssignmentUploadPayload) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || task.status !== 'assigned_work') return;
+
+    const target = getReviewRouteTarget(payload.reviewMode);
+    const nextOwnerIds = getDefaultOwnerIdsForRole(target.ownerRole, task);
+    const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
+    const recipients = uniqueIds([
+      ...nextOwnerIds,
+      ...teamLeaderIds,
+      task.createdBy,
+      ...task.handledBy,
+    ]).filter(userId => userId !== payload.version.submittedBy);
+
+    addNotifications(recipients, taskId, `${getUserDisplayName(usersObj, payload.version.submittedBy)} uploaded finished work for "${task.name}".`);
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      const now = new Date().toISOString();
+      const updatedTask: Task = {
+        ...t,
+        taskType: payload.taskType,
+        reviewMode: payload.reviewMode,
+        status: target.status,
+        currentOwnerRole: target.ownerRole,
+        currentOwnerUserId: nextOwnerIds[0] || null,
+        currentOwnerUserIds: nextOwnerIds,
+        scheduledPublishAt: payload.taskType === 'campaign' ? payload.scheduledPublishAt : null,
+        publishNote: payload.taskType === 'campaign' ? payload.publishNote : null,
+        publishedAt: null,
+        publishReminderSentAt: null,
+        versions: [payload.version, ...t.versions],
+        thumbnailUrl: payload.thumbnailUrl || t.thumbnailUrl,
+        thumbnailStoragePath: payload.thumbnailStoragePath || t.thumbnailStoragePath,
+        driveFolderId: payload.driveFolderId || t.driveFolderId,
+        assignmentUploadedAt: now,
+        updatedAt: now,
+      };
+
+      return addAuditComment(updatedTask, payload.version.submittedBy, 'work_assignment_uploaded', 'Finished work uploaded and sent into the normal review flow.', now);
+    }));
   };
 
   const addTask = (task: Task) => {
@@ -1230,6 +1587,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTaskPublishSchedule,
       markCampaignPublished,
       markPublishReminderSent,
+      createWorkAssignment,
+      updateWorkAssignment,
+      submitWorkAssignmentUpload,
       addTaskComment,
       addTaskVersion,
       replaceTaskVersionFiles,
@@ -1238,6 +1598,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addNotification,
       markNotificationAsRead,
       loginWithPassword,
+      signupWithEmail,
       logout,
       archiveTask,
       unarchiveTask,

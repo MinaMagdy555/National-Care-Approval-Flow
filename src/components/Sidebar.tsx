@@ -136,6 +136,7 @@ export function Sidebar({
       case 'team_leader':
       case 'manager':
       case 'developer':
+      case 'marketing_manager':
       case 'admin':
         return [
           ...commonTop,
