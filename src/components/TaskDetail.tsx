@@ -8,7 +8,7 @@ import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, File as FileIcon
 import { FileContentThumbnail, FilePreview, isLocalOnlyFileUrl } from './FilePreview';
 import { uploadTaskFiles } from '../lib/driveDb';
 import { isTaskArchived } from '../lib/archiveUtils';
-import { DINA_ID, MARWA_ID, isAssignableHandler } from '../lib/handlerUtils';
+import { AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID, MARWA_ID, isAssignableHandler } from '../lib/handlerUtils';
 import { UserMultiSelect } from './UserMultiSelect';
 import { CustomSelect } from './CustomSelect';
 import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText, uploadLimitLabel } from '../lib/uploadLimits';
@@ -155,7 +155,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const canActAsReviewer = currentUser.role === 'reviewer' && isCurrentActiveOwner;
   const canActAsArtDirector = currentUser.role === 'art_director' && isCurrentActiveOwner;
   const canManageWorkflowSettings = canManageWorkflow(currentUser);
-  const canReassignTask = currentUser.id === MARWA_ID || currentUser.id === DINA_ID;
+  const canReassignTask = [DINA_ID, MARWA_ID, AHMED_SOBEEH_ID, FAWZY_ID].includes(currentUser.id);
   const canResubmitTask = !isReadOnlyObserver && (isSelfCreatedTask || task.handledBy.includes(currentUser.id) || currentOwnerIds.includes(currentUser.id));
   const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
   const canResubmitVersion = canResubmitTask && ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(task.status);
@@ -796,7 +796,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                     <div className="space-y-2">
                       <div>
                         <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Assigned Contributors</label>
-                        <p className="mt-1 text-xs font-semibold text-slate-500">Only Marwa and Dina can reassign contributors. Managers, leadership, and assignment creators are not assignable task contributors.</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">Only Dina, Marwa, Sobeeh, and Fawzy can reassign contributors. Managers, leadership, and assignment creators are not assignable task contributors.</p>
                       </div>
                       <UserMultiSelect
                         users={contributorOptions}

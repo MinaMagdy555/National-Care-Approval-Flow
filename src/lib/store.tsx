@@ -15,7 +15,7 @@ import {
   getTaskParticipantIds,
   uniqueIds,
 } from './workflowUtils';
-import { getAssignmentPeriodFromDeadline } from './workAssignmentUtils';
+import { canCreateWorkAssignment, canManageWorkAssignment, getAssignmentPeriodFromDeadline } from './workAssignmentUtils';
 import {
   fetchDriveNotifications,
   fetchDriveTasks,
@@ -63,6 +63,8 @@ const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
 const REGISTERED_PASSWORDS_STORAGE_KEY = 'national-care-registered-passwords';
 const REGISTERED_USERS_STORAGE_KEY = 'national-care-registered-users';
 const USER_OVERRIDES_STORAGE_KEY = 'national-care-user-overrides';
+const REMOVED_TEST_ACCOUNT_STORAGE_KEY = 'national-care-removed-minamagdy5555-account';
+const REMOVED_TEST_ACCOUNT_EMAIL = 'minamagdy5555@gmail.com';
 const DEMO_DISABLED_AFTER_SIGNUP_USER_IDS = new Set(['user_7', 'user_8']);
 const SHARED_DATA_POLL_INTERVAL_MS = 60 * 1000;
 const GUEST_SEED_ID_PREFIX = 'guest_seed_';
@@ -157,6 +159,56 @@ function readRegisteredUsers(): AccountProfile[] {
 function writeRegisteredUsers(profiles: AccountProfile[]) {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(REGISTERED_USERS_STORAGE_KEY, JSON.stringify(profiles));
+}
+
+function removeRegisteredAccountByUserId(userId: string) {
+  const profiles = readRegisteredUsers();
+  const profile = profiles.find(item => item.id === userId);
+  if (!profile) return { profiles, removed: false };
+
+  const nextProfiles = profiles.filter(item => item.id !== userId);
+  const records = readRegisteredPasswords();
+  const nextRecords = Object.fromEntries(
+    Object.entries(records).filter(([email, record]) => record.userId !== userId && normalizeEmail(email) !== normalizeEmail(profile.email))
+  ) as Record<string, RegisteredPasswordRecord>;
+
+  writeRegisteredUsers(nextProfiles);
+  writeRegisteredPasswords(nextRecords);
+  return { profiles: nextProfiles, removed: true };
+}
+
+function removeRegisteredAccountByEmail(email: string) {
+  const normalizedEmail = normalizeEmail(email);
+  const profiles = readRegisteredUsers();
+  const profile = profiles.find(item => normalizeEmail(item.email) === normalizedEmail);
+  const records = readRegisteredPasswords();
+  const record = records[normalizedEmail];
+  const userId = profile?.id || record?.userId;
+
+  if (userId) return removeRegisteredAccountByUserId(userId);
+
+  if (record) {
+    const nextRecords = { ...records };
+    delete nextRecords[normalizedEmail];
+    writeRegisteredPasswords(nextRecords);
+    return { profiles, removed: true };
+  }
+
+  return { profiles, removed: false };
+}
+
+function removeRequestedTestAccountOnce() {
+  if (typeof window === 'undefined') return;
+  if (window.localStorage.getItem(REMOVED_TEST_ACCOUNT_STORAGE_KEY)) return;
+
+  const { removed } = removeRegisteredAccountByEmail(REMOVED_TEST_ACCOUNT_EMAIL);
+  window.localStorage.setItem(REMOVED_TEST_ACCOUNT_STORAGE_KEY, '1');
+
+  if (removed && window.localStorage.getItem(CURRENT_USER_STORAGE_KEY)) {
+    const currentUserId = window.localStorage.getItem(CURRENT_USER_STORAGE_KEY);
+    const stillExists = buildUserList().some(user => user.id === currentUserId);
+    if (!stillExists) window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
+  }
 }
 
 function readUserOverrides(): Record<string, UserOverrideRecord> {
@@ -664,6 +716,7 @@ interface AppContextType extends AppState {
   loginWithPassword: (identifier: string, password: string) => Promise<AuthActionResult>;
   signupWithEmail: (email: string, password: string, name?: string) => Promise<AuthActionResult>;
   updateUserRole: (userId: string, role: Role) => void;
+  deleteUserAccount: (userId: string) => void;
   logout: () => Promise<void>;
   archiveTask: (taskId: string, reason?: string) => void;
   unarchiveTask: (taskId: string) => void;
@@ -678,6 +731,7 @@ interface AppContextType extends AppState {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: ReactNode }) {
+  removeRequestedTestAccountOnce();
   const initialDemoUser = getStoredDemoUser();
   const hasLoadedPersistedState = useRef(false);
   const sharedDataLoadFailedRef = useRef(false);
@@ -1150,6 +1204,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const deleteUserAccount = (userId: string) => {
+    const existingProfile = readRegisteredUsers().find(profile => profile.id === userId);
+    if (!existingProfile) return;
+
+    const { profiles: nextProfiles } = removeRegisteredAccountByUserId(userId);
+    const nextUserList = buildUserList(nextProfiles);
+    setUserList(nextUserList);
+    setAccountProfiles(nextProfiles);
+
+    if (currentUser.id === userId) {
+      window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
+      hasLoadedPersistedState.current = false;
+      setAuthProfile(null);
+      setCurrentUserState(GUEST_USER);
+      setAuthStatus('signed_out');
+      setAuthError(null);
+    }
+  };
+
   const logout = async () => {
     window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
     hasLoadedPersistedState.current = false;
@@ -1466,6 +1539,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const createWorkAssignment = (input: WorkAssignmentInput) => {
+    if (!canCreateWorkAssignment(currentUser)) return;
+
     const handledBy = sanitizeHandledBy(input.handledByIds);
     if (!input.name.trim() || !input.description.trim() || !input.deadlineAt || handledBy.length === 0) return;
 
@@ -1515,7 +1590,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const updateWorkAssignment = (taskId: string, input: WorkAssignmentInput) => {
     const task = tasks.find(t => t.id === taskId);
-    if (!task || task.status !== 'assigned_work') return;
+    if (!task || !canManageWorkAssignment(task, currentUser)) return;
 
     const handledBy = sanitizeHandledBy(input.handledByIds);
     if (!input.name.trim() || !input.description.trim() || !input.deadlineAt || handledBy.length === 0) return;
@@ -1765,6 +1840,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       loginWithPassword,
       signupWithEmail,
       updateUserRole,
+      deleteUserAccount,
       logout,
       archiveTask,
       unarchiveTask,

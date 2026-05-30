@@ -1,11 +1,11 @@
 import { AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID, MARWA_ID, OMAR_ID } from './handlerUtils';
 import { AssignmentPeriod, Priority, Task, User } from './types';
 
-export const WORK_ASSIGNMENT_CREATOR_IDS = [DINA_ID, MARWA_ID, AHMED_SOBEEH_ID];
+export const WORK_ASSIGNMENT_CREATOR_IDS = [DINA_ID, MARWA_ID, AHMED_SOBEEH_ID, FAWZY_ID];
 export const WORK_ASSIGNMENT_ASSIGNEE_EXCLUDED_IDS = new Set([...WORK_ASSIGNMENT_CREATOR_IDS, FAWZY_ID, OMAR_ID]);
 
 export function canCreateWorkAssignment(user: Pick<User, 'id' | 'isAdmin'>) {
-  return Boolean(user.isAdmin) || WORK_ASSIGNMENT_CREATOR_IDS.includes(user.id);
+  return WORK_ASSIGNMENT_CREATOR_IDS.includes(user.id);
 }
 
 export function canManageWorkAssignment(task: Task, user: Pick<User, 'id' | 'isAdmin'>) {
