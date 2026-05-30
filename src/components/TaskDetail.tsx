@@ -133,7 +133,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const nextAction = getNextActionLabel(task, currentUser.role);
   const creator = users[task.createdBy]?.name || (task.createdBy === currentUser.id ? currentUser.name : initialUsers.find(u => u.id === task.createdBy)?.name) || 'Unknown';
   const handledByNames = task.handledBy
-    .filter(isAssignableHandler)
+    .filter(id => isAssignableHandler(id))
     .map(id => users[id]?.name || initialUsers.find(u => u.id === id)?.name)
     .filter(Boolean)
     .join(' + ');
@@ -206,7 +206,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const selectedMinaFeedback = minaForwardableFeedback.filter(item => selectedMinaFeedbackIds.includes(item.id));
   const canSubmitADReject = adRejectComment.trim() || selectedMinaFeedback.length > 0 || adRejectNotes.some(section => section.note.trim() || section.imageUrl || section.localPreviewUrl || section.imageFile);
   const hasResubmitAttachments = resubmitFiles.length > 0 || resubmitLinks.length > 0;
-  const contributorOptions = userList.filter(user => isAssignableHandler(user.id));
+  const contributorOptions = userList.filter(user => isAssignableHandler(user.id, currentUser.id));
   const reviewModeOptions = [
     { value: 'full_review', label: 'Full Review' },
     { value: 'quick_look', label: 'Quick Look' },

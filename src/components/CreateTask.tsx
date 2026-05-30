@@ -48,7 +48,7 @@ export function CreateTask({
   const creatorOptions = workspaceUsers
     .filter(user => ['team_member', 'reviewer', 'admin'].includes(user.role))
     .map(user => ({ value: user.id, label: user.name }));
-  const contributorOptions = workspaceUsers.filter(user => isAssignableHandler(user.id) && user.id !== selectedCreatorId);
+  const contributorOptions = workspaceUsers.filter(user => isAssignableHandler(user.id, currentUser.id) && user.id !== selectedCreatorId);
   const taskTypeOptions = [
     { value: 'video', label: 'Video' },
     { value: 'ai_packet', label: 'AI Packets' },
@@ -212,7 +212,7 @@ export function CreateTask({
       : routeTarget.ownerRole === 'art_director'
         ? workspaceUsers.filter(user => user.role === 'art_director').map(user => user.id)
         : [];
-    const handledByIds = sanitizeHandledBy([selectedCreatorId, ...assignedContributorIds]);
+    const handledByIds = sanitizeHandledBy([selectedCreatorId, ...assignedContributorIds], currentUser.id);
 
     const newTask: Task = {
       id: newTaskId,

@@ -106,7 +106,7 @@ export function AssignedWorkSection({
   const [links, setLinks] = useState<string[]>([]);
   const [linkInput, setLinkInput] = useState('');
   const canCreate = canCreateWorkAssignment(currentUser);
-  const assigneeOptions = userList.filter(user => user.id !== 'guest' && isWorkAssignmentAssignee(user));
+  const assigneeOptions = userList.filter(user => user.id !== 'guest' && isWorkAssignmentAssignee(user, currentUser.id));
   const assignmentGroups = getAssignmentGroups(tasks, users, currentUser.id);
   const deadlineAt = combineDeadline(deadlineDate, deadlineTime);
   const shouldShow = canCreate || tasks.length > 0;

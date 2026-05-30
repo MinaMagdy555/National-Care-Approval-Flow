@@ -1020,8 +1020,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return [];
   };
 
-  const normalizeOwnerIdsForRole = (role: Role | null, ids: string[]) => (
-    role === 'team_member' ? sanitizeHandledBy(ids) : uniqueIds(ids)
+  const normalizeOwnerIdsForRole = (role: Role | null, ids: string[], assignerId?: string) => (
+    role === 'team_member' ? sanitizeHandledBy(ids, assignerId) : uniqueIds(ids)
   );
 
   const addAuditComment = (task: Task, authorId: string, action: TaskComment['action'], message: string, createdAt = new Date().toISOString()): Task => ({
@@ -1413,8 +1413,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
 
-    const nextHandledBy = sanitizeHandledBy([task.createdBy, ...handledByIds]);
-    const nextOwnerIds = normalizeOwnerIdsForRole(task.currentOwnerRole, currentOwnerUserIds);
+    const nextHandledBy = sanitizeHandledBy([task.createdBy, ...handledByIds], currentUser.id);
+    const nextOwnerIds = normalizeOwnerIdsForRole(task.currentOwnerRole, currentOwnerUserIds, currentUser.id);
     const previousAssignees = new Set([...task.handledBy, ...getCurrentOwnerUserIds(task)]);
     const addedAssignees = uniqueIds([...nextHandledBy, ...nextOwnerIds]).filter(userId => !previousAssignees.has(userId));
     if (addedAssignees.length > 0) {
@@ -1541,7 +1541,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const createWorkAssignment = (input: WorkAssignmentInput) => {
     if (!canCreateWorkAssignment(currentUser)) return;
 
-    const handledBy = sanitizeHandledBy(input.handledByIds);
+    const handledBy = sanitizeHandledBy(input.handledByIds, currentUser.id);
     if (!input.name.trim() || !input.description.trim() || !input.deadlineAt || handledBy.length === 0) return;
 
     const now = new Date().toISOString();
@@ -1592,7 +1592,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const task = tasks.find(t => t.id === taskId);
     if (!task || !canManageWorkAssignment(task, currentUser)) return;
 
-    const handledBy = sanitizeHandledBy(input.handledByIds);
+    const handledBy = sanitizeHandledBy(input.handledByIds, currentUser.id);
     if (!input.name.trim() || !input.description.trim() || !input.deadlineAt || handledBy.length === 0) return;
 
     const previousAssignees = new Set(task.handledBy);

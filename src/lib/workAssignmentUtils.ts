@@ -1,9 +1,7 @@
-import { AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID, MARWA_ID, OMAR_ID } from './handlerUtils';
+import { AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID, MARWA_ID, isAssignableHandler } from './handlerUtils';
 import { AssignmentPeriod, Priority, Task, User } from './types';
 
 export const WORK_ASSIGNMENT_CREATOR_IDS = [DINA_ID, MARWA_ID, AHMED_SOBEEH_ID, FAWZY_ID];
-export const WORK_ASSIGNMENT_ASSIGNEE_EXCLUDED_IDS = new Set([...WORK_ASSIGNMENT_CREATOR_IDS, FAWZY_ID, OMAR_ID]);
-
 export function canCreateWorkAssignment(user: Pick<User, 'id' | 'isAdmin'>) {
   return WORK_ASSIGNMENT_CREATOR_IDS.includes(user.id);
 }
@@ -21,8 +19,8 @@ export function isWorkAssignmentTask(task: Pick<Task, 'assignmentPeriod' | 'dead
   return Boolean(task.assignmentPeriod || task.deadlineAt);
 }
 
-export function isWorkAssignmentAssignee(user: Pick<User, 'id'>) {
-  return !WORK_ASSIGNMENT_ASSIGNEE_EXCLUDED_IDS.has(user.id);
+export function isWorkAssignmentAssignee(user: Pick<User, 'id'>, assignerId?: string) {
+  return isAssignableHandler(user.id, assignerId);
 }
 
 export function getAssignmentPeriodLabel(period?: AssignmentPeriod | null) {
