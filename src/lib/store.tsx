@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { AccountProfile, AuthStatus, User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile, ReviewMode } from './types';
-import { demoAccounts, initialUsers, initialTasks } from './mockData';
+import { demoAccounts, initialUsers, initialTasks, userRoleLabels } from './mockData';
 import { clearAppState, loadAppState, saveAppState } from './localDb';
 import { shouldAutoArchiveTask } from './archiveUtils';
 import { sanitizeHandledBy } from './handlerUtils';
@@ -61,6 +61,8 @@ type WorkAssignmentUploadPayload = {
 
 const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
 const REGISTERED_PASSWORDS_STORAGE_KEY = 'national-care-registered-passwords';
+const REGISTERED_USERS_STORAGE_KEY = 'national-care-registered-users';
+const USER_OVERRIDES_STORAGE_KEY = 'national-care-user-overrides';
 const DEMO_DISABLED_AFTER_SIGNUP_USER_IDS = new Set(['user_7', 'user_8']);
 const SHARED_DATA_POLL_INTERVAL_MS = 60 * 1000;
 const GUEST_SEED_ID_PREFIX = 'guest_seed_';
@@ -88,6 +90,15 @@ type RegisteredPasswordRecord = {
   passwordHash: string;
   createdAt: string;
   updatedAt: string;
+};
+
+type UserOverrideRecord = {
+  id: string;
+  role: Role;
+  requestedRole?: Role;
+  approvalStatus?: User['approvalStatus'];
+  jobTitle?: string;
+  isAdmin?: boolean;
 };
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -130,6 +141,42 @@ function readRegisteredPasswords(): Record<string, RegisteredPasswordRecord> {
   }
 }
 
+function readRegisteredUsers(): AccountProfile[] {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const raw = window.localStorage.getItem(REGISTERED_USERS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as AccountProfile[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeRegisteredUsers(profiles: AccountProfile[]) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(REGISTERED_USERS_STORAGE_KEY, JSON.stringify(profiles));
+}
+
+function readUserOverrides(): Record<string, UserOverrideRecord> {
+  if (typeof window === 'undefined') return {};
+
+  try {
+    const raw = window.localStorage.getItem(USER_OVERRIDES_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, UserOverrideRecord>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeUserOverrides(overrides: Record<string, UserOverrideRecord>) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(USER_OVERRIDES_STORAGE_KEY, JSON.stringify(overrides));
+}
+
 export function isDemoShortcutDisabledForUser(user: Pick<User, 'id' | 'email'>) {
   if (!DEMO_DISABLED_AFTER_SIGNUP_USER_IDS.has(user.id) || !user.email) return false;
   return Boolean(readRegisteredPasswords()[normalizeEmail(user.email)]);
@@ -138,6 +185,50 @@ export function isDemoShortcutDisabledForUser(user: Pick<User, 'id' | 'email'>) 
 function writeRegisteredPasswords(records: Record<string, RegisteredPasswordRecord>) {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(REGISTERED_PASSWORDS_STORAGE_KEY, JSON.stringify(records));
+}
+
+function createUserId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return `user_${crypto.randomUUID()}`;
+  }
+
+  return `user_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function nameFromEmail(email: string) {
+  const localPart = email.split('@')[0] || 'New User';
+  return localPart
+    .replace(/[._-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, letter => letter.toUpperCase()) || 'New User';
+}
+
+function accountProfileToUser(profile: AccountProfile): User {
+  return {
+    id: profile.id,
+    email: profile.email,
+    name: profile.name,
+    role: profile.role,
+    requestedRole: profile.requestedRole,
+    approvalStatus: profile.approvalStatus,
+    isAdmin: profile.isAdmin,
+    legacyId: profile.legacyId,
+    jobTitle: userRoleLabels[profile.role] || 'Team Member',
+  };
+}
+
+function buildUserList(profiles = readRegisteredUsers(), overrides = readUserOverrides()) {
+  const seededUsers = initialUsers.map(user => ({
+    ...user,
+    ...(overrides[user.id] || {}),
+  }));
+  const seededIds = new Set(seededUsers.map(user => user.id));
+  const registeredUsers = profiles
+    .filter(profile => !seededIds.has(profile.id))
+    .map(accountProfileToUser);
+
+  return [...seededUsers, ...registeredUsers];
 }
 
 function createPasswordSalt() {
@@ -171,7 +262,7 @@ async function hashPassword(password: string, salt: string) {
 
 function getInvitedUserByEmail(email: string) {
   const normalizedEmail = normalizeEmail(email);
-  return initialUsers.find(user => user.email && normalizeEmail(user.email) === normalizedEmail) || null;
+  return buildUserList().find(user => user.email && normalizeEmail(user.email) === normalizedEmail) || null;
 }
 
 async function findRegisteredAccount(identifier: string, password: string) {
@@ -185,7 +276,7 @@ async function findRegisteredAccount(identifier: string, password: string) {
   const passwordHash = await hashPassword(password, record.salt);
   if (passwordHash !== record.passwordHash) return null;
 
-  const user = initialUsers.find(item => item.id === record.userId && item.email && normalizeEmail(item.email) === normalizedEmail);
+  const user = buildUserList().find(item => item.id === record.userId && item.email && normalizeEmail(item.email) === normalizedEmail);
   return user ? { user } : null;
 }
 
@@ -233,7 +324,7 @@ function findDemoAccountIncludingDisabled(identifier: string, password: string) 
 function getStoredDemoUser() {
   if (typeof window === 'undefined') return GUEST_USER;
   const storedUserId = window.localStorage.getItem(CURRENT_USER_STORAGE_KEY);
-  return initialUsers.find(user => user.id === storedUserId) || demoAccounts.find(account => account.user.id === storedUserId)?.user || GUEST_USER;
+  return buildUserList().find(user => user.id === storedUserId) || demoAccounts.find(account => account.user.id === storedUserId)?.user || GUEST_USER;
 }
 
 function isGuestSeedTask(task: Pick<Task, 'id' | 'code'> | null | undefined) {
@@ -571,7 +662,8 @@ interface AppContextType extends AppState {
   addNotification: (notification: Omit<Notification, 'id' | 'createdAt' | 'read'>) => void;
   markNotificationAsRead: (id: string) => void;
   loginWithPassword: (identifier: string, password: string) => Promise<AuthActionResult>;
-  signupWithEmail: (email: string, password: string) => Promise<AuthActionResult>;
+  signupWithEmail: (email: string, password: string, name?: string) => Promise<AuthActionResult>;
+  updateUserRole: (userId: string, role: Role) => void;
   logout: () => Promise<void>;
   archiveTask: (taskId: string, reason?: string) => void;
   unarchiveTask: (taskId: string) => void;
@@ -591,11 +683,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const sharedDataLoadFailedRef = useRef(false);
   const pendingTaskBroadcastIdsRef = useRef<Set<string>>(new Set());
   const pendingNotificationBroadcastIdsRef = useRef<Set<string>>(new Set());
-  const [accountProfiles, setAccountProfiles] = useState<AccountProfile[]>([]);
+  const [accountProfiles, setAccountProfiles] = useState<AccountProfile[]>(() => readRegisteredUsers());
   const [authProfile, setAuthProfile] = useState<AccountProfile | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>(initialDemoUser.id === GUEST_USER.id ? 'signed_out' : 'approved');
   const [authError, setAuthError] = useState<string | null>(null);
-  const [userList, setUserList] = useState<User[]>(initialUsers);
+  const [userList, setUserList] = useState<User[]>(() => buildUserList());
   const usersObj = userList.reduce((acc, user) => {
     acc[user.id] = user;
     return acc;
@@ -639,8 +731,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const storedDemoUser = getStoredDemoUser();
     setCurrentUserState(storedDemoUser);
-    setUserList(initialUsers);
-    setAccountProfiles([]);
+    setUserList(buildUserList());
+    setAccountProfiles(readRegisteredUsers());
     setAuthProfile(null);
     setAuthStatus(storedDemoUser.id === GUEST_USER.id ? 'signed_out' : 'approved');
     setAuthError(null);
@@ -911,8 +1003,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, registeredAccount.user.id);
       setAuthProfile(null);
       setCurrentUserState(registeredAccount.user);
-      setUserList(initialUsers);
-      setAccountProfiles([]);
+      setUserList(buildUserList());
+      setAccountProfiles(readRegisteredUsers());
       setAuthStatus('approved');
       setAuthError(null);
       return { ok: true };
@@ -927,30 +1019,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return { ok: false, message: 'That email/account and password do not match.' };
     }
 
-    window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, account.user.id);
+    const demoUserList = buildUserList();
+    const demoUser = demoUserList.find(user => user.id === account.user.id) || account.user;
+
+    window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, demoUser.id);
     setAuthProfile(null);
-    setCurrentUserState(account.user);
-    setUserList(initialUsers);
-    setAccountProfiles([]);
+    setCurrentUserState(demoUser);
+    setUserList(demoUserList);
+    setAccountProfiles(readRegisteredUsers());
     setAuthStatus('approved');
     setAuthError(null);
     return { ok: true };
   };
 
-  const signupWithEmail = async (email: string, password: string): Promise<AuthActionResult> => {
+  const signupWithEmail = async (email: string, password: string, name?: string): Promise<AuthActionResult> => {
     const normalizedEmail = normalizeEmail(email);
-    const invitedUser = getInvitedUserByEmail(normalizedEmail);
+    const existingUser = getInvitedUserByEmail(normalizedEmail);
 
     if (!normalizedEmail || !password.trim()) {
-      return { ok: false, message: 'Enter your invited Gmail address and create a password.' };
+      return { ok: false, message: 'Enter your email address and create a password.' };
     }
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       return { ok: false, message: 'Enter a valid email address.' };
-    }
-
-    if (!invitedUser) {
-      return { ok: false, message: 'This email is not invited to the tool yet.' };
     }
 
     if (password.length < 8) {
@@ -958,15 +1049,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
 
     const records = readRegisteredPasswords();
+    const profiles = readRegisteredUsers();
     const now = new Date().toISOString();
     const existingRecord = records[normalizedEmail];
+    const existingProfile = profiles.find(profile => normalizeEmail(profile.email) === normalizedEmail);
     const salt = existingRecord?.salt || createPasswordSalt();
     const passwordHash = await hashPassword(password, salt);
+    const userId = existingUser?.id || existingProfile?.id || existingRecord?.userId || createUserId();
+    const role = existingUser?.role || existingProfile?.role || 'team_member';
+    const profile: AccountProfile = {
+      id: userId,
+      email: normalizedEmail,
+      name: (name || existingUser?.name || existingProfile?.name || nameFromEmail(normalizedEmail)).trim(),
+      role,
+      requestedRole: existingProfile?.requestedRole || role,
+      approvalStatus: 'approved',
+      isAdmin: Boolean(existingUser?.isAdmin || existingProfile?.isAdmin),
+      legacyId: existingUser?.legacyId || existingProfile?.legacyId || null,
+      approvedBy: existingProfile?.approvedBy || 'self_signup',
+      approvedAt: existingProfile?.approvedAt || now,
+      createdAt: existingProfile?.createdAt || now,
+      updatedAt: now,
+    };
+    const nextProfiles = [
+      ...profiles.filter(item => normalizeEmail(item.email) !== normalizedEmail && item.id !== userId),
+      profile,
+    ];
 
     writeRegisteredPasswords({
       ...records,
       [normalizedEmail]: {
-        userId: invitedUser.id,
+        userId,
         email: normalizedEmail,
         salt,
         passwordHash,
@@ -974,15 +1087,67 @@ export function AppProvider({ children }: { children: ReactNode }) {
         updatedAt: now,
       },
     });
+    writeRegisteredUsers(nextProfiles);
 
-    window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, invitedUser.id);
+    const nextUserList = buildUserList(nextProfiles);
+    const signedUpUser = nextUserList.find(user => user.id === userId) || accountProfileToUser(profile);
+
+    window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, userId);
     setAuthProfile(null);
-    setCurrentUserState(invitedUser);
-    setUserList(initialUsers);
-    setAccountProfiles([]);
+    setCurrentUserState(signedUpUser);
+    setUserList(nextUserList);
+    setAccountProfiles(nextProfiles);
     setAuthStatus('approved');
     setAuthError(null);
     return { ok: true, message: 'Account created. Welcome in.' };
+  };
+
+  const updateUserRole = (userId: string, role: Role) => {
+    const now = new Date().toISOString();
+    const profiles = readRegisteredUsers();
+    const existingProfile = profiles.find(profile => profile.id === userId);
+    let nextProfiles = profiles;
+
+    if (existingProfile) {
+      nextProfiles = profiles.map(profile => profile.id === userId
+        ? {
+            ...profile,
+            role,
+            requestedRole: role,
+            approvalStatus: 'approved',
+            approvedBy: currentUser.id,
+            approvedAt: profile.approvedAt || now,
+            updatedAt: now,
+          }
+        : profile
+      );
+      writeRegisteredUsers(nextProfiles);
+    } else {
+      const overrides = readUserOverrides();
+      const user = buildUserList(profiles, overrides).find(item => item.id === userId);
+      if (!user) return;
+
+      writeUserOverrides({
+        ...overrides,
+        [userId]: {
+          id: userId,
+          role,
+          requestedRole: role,
+          approvalStatus: 'approved',
+          jobTitle: userRoleLabels[role] || user.jobTitle,
+          isAdmin: user.isAdmin,
+        },
+      });
+    }
+
+    const nextUserList = buildUserList(nextProfiles);
+    setUserList(nextUserList);
+    setAccountProfiles(nextProfiles);
+
+    if (currentUser.id === userId) {
+      const nextCurrentUser = nextUserList.find(user => user.id === userId);
+      if (nextCurrentUser) setCurrentUserState(nextCurrentUser);
+    }
   };
 
   const logout = async () => {
@@ -990,8 +1155,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     hasLoadedPersistedState.current = false;
     setAuthProfile(null);
     setCurrentUserState(GUEST_USER);
-    setUserList(initialUsers);
-    setAccountProfiles([]);
+    setUserList(buildUserList());
+    setAccountProfiles(readRegisteredUsers());
     setLocalMigrationState(null);
     setPersistenceError(null);
     setAuthStatus('signed_out');
@@ -1599,6 +1764,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       markNotificationAsRead,
       loginWithPassword,
       signupWithEmail,
+      updateUserRole,
       logout,
       archiveTask,
       unarchiveTask,

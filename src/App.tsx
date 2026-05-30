@@ -8,6 +8,7 @@ import { NotificationsList } from './components/Notifications';
 import { CreateTask } from './components/CreateTask';
 import { CampaignScheduler } from './components/CampaignScheduler';
 import { AuthScreen } from './components/AuthScreen';
+import { UserManagement } from './components/UserManagement';
 import { isDueThisWeek, isDueToday } from './lib/deadlineUtils';
 import { isTaskArchived } from './lib/archiveUtils';
 import { canUserAccessTask, canUserActAsCurrentOwner, parsePublishDate, userCanViewFullWorkspace } from './lib/workflowUtils';
@@ -266,6 +267,8 @@ function WorkspaceContent() {
         return <CreateTask assignmentTaskId={activeAssignmentId} onAssignmentUploaded={handleOpenTask} />;
       case 'campaign_scheduler':
         return <CampaignScheduler onOpenTask={handleOpenTask} />;
+      case 'users':
+        return <UserManagement />;
       case 'review_queue': {
         const needsFullReview = workflowVisibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status) && isScopedToCurrentOwner(t));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsFullReview} title="Needs Full Review" />;
@@ -482,6 +485,7 @@ class AppErrorBoundary extends React.Component<{ children: ReactNode }, { error:
     window.localStorage.removeItem('national-care-current-user-id');
     window.localStorage.removeItem('national-care-registered-users');
     window.localStorage.removeItem('national-care-registered-passwords');
+    window.localStorage.removeItem('national-care-user-overrides');
     window.localStorage.removeItem('national-care-google-signup-request');
 
     if ('indexedDB' in window) {

@@ -17,6 +17,7 @@ import {
   LogOut,
   Send,
   Upload,
+  UsersRound,
   UserRoundCheck,
   X,
 } from 'lucide-react';
@@ -46,6 +47,7 @@ export function Sidebar({
   const isSignedIn = authStatus === 'approved';
 
   const unreadCount = notifications ? notifications.filter(n => n.userId === currentUser.id && !n.read).length : 0;
+  const canManageUsers = Boolean(currentUser.isAdmin) || currentUser.role === 'admin';
 
   useEffect(() => {
     if (
@@ -84,11 +86,13 @@ export function Sidebar({
       { id: 'campaign_scheduler', label: 'Campaign Scheduler', icon: CalendarClock },
       { id: 'notifications', label: `Notifications${unreadCount > 0 ? ` (${unreadCount})` : ''}`, icon: Bell },
     ];
+    const adminItems = canManageUsers ? [{ id: 'users', label: 'Users & Roles', icon: UsersRound }] : [];
 
     switch (currentUser.role) {
       case 'team_member':
         return [
           ...commonTop,
+          ...adminItems,
           { id: 'create_task', label: 'Upload Task', icon: Upload },
           {
             id: 'task_center', label: 'All Tasks', icon: ClipboardList,
@@ -105,6 +109,7 @@ export function Sidebar({
       case 'reviewer':
         return [
           ...commonTop,
+          ...adminItems,
           { id: 'create_task', label: 'Upload Task', icon: Upload },
           {
             id: 'task_center', label: 'All Tasks', icon: ClipboardList,
@@ -122,6 +127,7 @@ export function Sidebar({
       case 'art_director':
         return [
           ...commonTop,
+          ...adminItems,
           {
             id: 'task_center', label: 'All Tasks', icon: ClipboardList,
             children: [
@@ -140,6 +146,7 @@ export function Sidebar({
       case 'admin':
         return [
           ...commonTop,
+          ...adminItems,
           {
             id: 'task_center', label: 'All Tasks', icon: ClipboardList,
             children: [
@@ -171,7 +178,8 @@ export function Sidebar({
     'waiting_for_marwa',
     'approved_by_me',
     'rejected_reopened',
-    'archived_tasks'
+    'archived_tasks',
+    'users'
   ]);
 
   const renderMenuItem = (item: MenuItem, depth = 0) => {

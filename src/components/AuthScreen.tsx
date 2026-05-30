@@ -22,6 +22,7 @@ export function AuthScreen({ onContinueAsGuest }: { onContinueAsGuest?: () => vo
   const [mode, setMode] = useState<'login' | 'signup'>(params.get('signup') === '1' ? 'signup' : 'login');
   const [identifier, setIdentifier] = useState(initialSignupEmail || demoAccounts[0]?.user.email || demoAccounts[0]?.user.name || '');
   const [password, setPassword] = useState('');
+  const [signupName, setSignupName] = useState('');
   const [signupEmail, setSignupEmail] = useState(initialSignupEmail);
   const [signupPassword, setSignupPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -61,7 +62,7 @@ export function AuthScreen({ onContinueAsGuest }: { onContinueAsGuest?: () => vo
 
     setIsSubmitting(true);
     try {
-      const result = await signupWithEmail(signupEmail, signupPassword);
+      const result = await signupWithEmail(signupEmail, signupPassword, signupName);
       setMessage(result.message || (result.ok ? '' : 'Could not create that account.'));
       if (result.ok && onContinueAsGuest) onContinueAsGuest();
     } finally {
@@ -131,16 +132,16 @@ export function AuthScreen({ onContinueAsGuest }: { onContinueAsGuest?: () => vo
           </div>
           <h1 className="text-2xl font-black">Sign In</h1>
           <p className="mt-1 text-sm font-semibold text-slate-500">
-            Use an invited email and password, or open a local demo account.
+            Create an account with any email, then Mina can assign the right responsibility.
           </p>
         </div>
 
         <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_minmax(280px,340px)]">
           <div className="space-y-3 border-b border-slate-100 p-5 sm:p-6 lg:border-b-0 lg:border-r">
             <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-4">
-              <h2 className="text-sm font-black text-indigo-950">Invite Fawzy and Omar</h2>
+              <h2 className="text-sm font-black text-indigo-950">Optional invite emails</h2>
               <p className="mt-1 text-xs font-semibold text-indigo-900/70">
-                Send real invitation emails with signup links and copy Mina.
+                Send signup links and copy Mina when you want to email access directly.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {inviteUsers.map(user => (
@@ -286,14 +287,24 @@ export function AuthScreen({ onContinueAsGuest }: { onContinueAsGuest?: () => vo
             ) : (
               <form onSubmit={handleSignupSubmit} className="space-y-4">
                 <div>
-                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Invited Gmail</label>
+                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Full Name</label>
+                  <input
+                    type="text"
+                    value={signupName}
+                    onChange={event => setSignupName(event.target.value)}
+                    className={INPUT_CLASS}
+                    autoComplete="name"
+                    placeholder="Your name"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-400">Email</label>
                   <input
                     type="email"
                     value={signupEmail}
                     onChange={event => setSignupEmail(event.target.value)}
                     className={INPUT_CLASS}
                     autoComplete="email"
-                    list="invite-emails"
                   />
                 </div>
                 <div>
@@ -371,7 +382,7 @@ export function AuthScreen({ onContinueAsGuest }: { onContinueAsGuest?: () => vo
             )}
             <p className="flex items-start gap-2 text-xs font-semibold text-slate-400">
               <UserRound className="mt-0.5 h-4 w-4 shrink-0" />
-              Invited users can create a local password with their email. Other demo shortcuts still work for testing.
+              New accounts start as content creators. Mina can change responsibilities from Users & Roles.
             </p>
           </div>
         </div>
