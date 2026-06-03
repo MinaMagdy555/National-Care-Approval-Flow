@@ -429,6 +429,14 @@ function isGuestSeedTask(task: Pick<Task, 'id' | 'code'> | null | undefined) {
   return Boolean(task?.id?.startsWith(GUEST_SEED_ID_PREFIX) || task?.code?.startsWith('GST-'));
 }
 
+function isPlaceholderTask(task: Pick<Task, 'id' | 'code' | 'name'> | null | undefined) {
+  return Boolean(
+    task?.id?.startsWith('placeholder_') ||
+    task?.code?.startsWith('TMP-') ||
+    task?.name?.startsWith('Placeholder - ')
+  );
+}
+
 function isGuestSeedNotification(notification: Notification | null | undefined) {
   return Boolean(
     notification?.id?.startsWith(GUEST_SEED_ID_PREFIX) ||
@@ -441,7 +449,7 @@ function removeGuestSeedNotifications(notifications: Notification[]) {
 }
 
 function reviveWorkspaceTasks(tasks: Task[], users: Record<string, User>) {
-  return sortTasksByUpdate(reviveTaskFiles(tasks.filter(task => !isGuestSeedTask(task)), users));
+  return sortTasksByUpdate(reviveTaskFiles(tasks.filter(task => !isGuestSeedTask(task) && !isPlaceholderTask(task)), users));
 }
 
 function getUserIdsByRole(users: User[], roles: Role[]) {
@@ -915,7 +923,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         const sharedTasks = reviveWorkspaceTasks(loadedTasks.length > 0 ? loadedTasks : initialTasks, usersObj);
         const sharedNotifications = removeGuestSeedNotifications(loadedNotifications);
-        const localTasks = Array.isArray(localState?.tasks) ? localState.tasks.filter(task => !isGuestSeedTask(task)) : [];
+        const localTasks = Array.isArray(localState?.tasks) ? localState.tasks.filter(task => !isGuestSeedTask(task) && !isPlaceholderTask(task)) : [];
         const localNotifications = Array.isArray(localState?.notifications) ? removeGuestSeedNotifications(localState.notifications) : [];
 
         sharedDataLoadFailedRef.current = false;
@@ -1009,7 +1017,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!isMounted) return;
 
         sharedDataLoadFailedRef.current = false;
-        setTasks(prev => mergeTasksIntoState(prev.filter(task => !isGuestSeedTask(task)), reviveWorkspaceTasks(latestTasks, usersObj)));
+        setTasks(prev => mergeTasksIntoState(prev.filter(task => !isGuestSeedTask(task) && !isPlaceholderTask(task)), reviveWorkspaceTasks(latestTasks, usersObj)));
         setNotifications(prev => mergeNotificationsIntoState(removeGuestSeedNotifications(prev), removeGuestSeedNotifications(latestNotifications)));
         setPersistenceError(null);
       } catch (error) {
