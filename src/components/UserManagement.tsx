@@ -52,7 +52,7 @@ export function UserManagement() {
   );
 
   const confirmDelete = (userId: string, name: string) => {
-    if (!window.confirm(`Delete ${name}'s email/login access? Self-created accounts are removed from the list. Seeded users stay, but their email login is removed.`)) return;
+    if (!window.confirm(`Delete ${name}'s account? This removes the user from the tool and removes any saved email login for them.`)) return;
     deleteUserAccount(userId);
   };
 
@@ -151,19 +151,15 @@ export function UserManagement() {
                 />
               </div>
               <div className="flex justify-start lg:justify-end">
-                {(registeredIds.has(user.id) || user.email) ? (
-                  <button
-                    type="button"
-                    onClick={() => confirmDelete(user.id, user.name)}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-rose-100 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
-                    aria-label={`Delete ${user.name}`}
-                    title={`Delete ${user.name}`}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                ) : (
-                  <span className="text-xs font-bold text-slate-400">Seeded</span>
-                )}
+                <button
+                  type="button"
+                  onClick={() => confirmDelete(user.id, user.name)}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-rose-100 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+                  aria-label={`Delete ${user.name}`}
+                  title={`Delete ${user.name}`}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
               </div>
             </div>
           ))}

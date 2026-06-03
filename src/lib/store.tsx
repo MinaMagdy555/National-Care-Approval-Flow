@@ -64,6 +64,7 @@ const REGISTERED_PASSWORDS_STORAGE_KEY = 'national-care-registered-passwords';
 const REGISTERED_USERS_STORAGE_KEY = 'national-care-registered-users';
 const USER_OVERRIDES_STORAGE_KEY = 'national-care-user-overrides';
 const CUSTOM_RESPONSIBILITIES_STORAGE_KEY = 'national-care-custom-responsibilities';
+const DELETED_USER_IDS_STORAGE_KEY = 'national-care-deleted-user-ids';
 const REMOVED_TEST_ACCOUNT_STORAGE_KEY = 'national-care-removed-minamagdy5555-account';
 const REMOVED_TEST_ACCOUNT_EMAIL = 'minamagdy5555@gmail.com';
 const DEMO_DISABLED_AFTER_SIGNUP_USER_IDS = new Set(['user_7', 'user_8']);
@@ -249,6 +250,24 @@ function writeCustomResponsibilities(responsibilities: string[]) {
   window.localStorage.setItem(CUSTOM_RESPONSIBILITIES_STORAGE_KEY, JSON.stringify(Array.from(new Set(responsibilities.map(item => item.trim()).filter(Boolean)))));
 }
 
+function readDeletedUserIds(): string[] {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const raw = window.localStorage.getItem(DELETED_USER_IDS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as string[];
+    return Array.isArray(parsed) ? parsed.filter(item => typeof item === 'string' && item.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeDeletedUserIds(userIds: string[]) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(DELETED_USER_IDS_STORAGE_KEY, JSON.stringify(Array.from(new Set(userIds.filter(Boolean)))));
+}
+
 export function isDemoShortcutDisabledForUser(user: Pick<User, 'id' | 'email'>) {
   if (!DEMO_DISABLED_AFTER_SIGNUP_USER_IDS.has(user.id) || !user.email) return false;
   return Boolean(readRegisteredPasswords()[normalizeEmail(user.email)]);
@@ -290,7 +309,8 @@ function accountProfileToUser(profile: AccountProfile): User {
   };
 }
 
-function buildUserList(profiles = readRegisteredUsers(), overrides = readUserOverrides()) {
+function buildUserList(profiles = readRegisteredUsers(), overrides = readUserOverrides(), deletedUserIds = readDeletedUserIds()) {
+  const deletedIds = new Set(deletedUserIds);
   const seededUsers = initialUsers.map(user => {
     const override = overrides[user.id];
     if (!override) return user;
@@ -300,10 +320,10 @@ function buildUserList(profiles = readRegisteredUsers(), overrides = readUserOve
       ...override,
       email: override.email === null ? undefined : override.email ?? user.email,
     };
-  });
+  }).filter(user => !deletedIds.has(user.id));
   const seededIds = new Set(seededUsers.map(user => user.id));
   const registeredUsers = profiles
-    .filter(profile => !seededIds.has(profile.id))
+    .filter(profile => !seededIds.has(profile.id) && !deletedIds.has(profile.id))
     .map(accountProfileToUser);
 
   return [...seededUsers, ...registeredUsers];
@@ -1251,38 +1271,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteUserAccount = (userId: string) => {
-    const existingProfile = readRegisteredUsers().find(profile => profile.id === userId);
-    if (!existingProfile) {
-      const user = buildUserList().find(item => item.id === userId);
-      if (!user?.email) return;
+    const profiles = readRegisteredUsers();
+    const nextProfiles = profiles.filter(profile => profile.id !== userId);
+    const records = readRegisteredPasswords();
+    const nextRecords = Object.fromEntries(
+      Object.entries(records).filter(([, record]) => record.userId !== userId)
+    ) as Record<string, RegisteredPasswordRecord>;
+    const deletedUserIds = Array.from(new Set([...readDeletedUserIds(), userId]));
 
-      const records = readRegisteredPasswords();
-      const nextRecords = Object.fromEntries(
-        Object.entries(records).filter(([, record]) => record.userId !== userId)
-      ) as Record<string, RegisteredPasswordRecord>;
-      const overrides = readUserOverrides();
+    writeRegisteredUsers(nextProfiles);
+    writeRegisteredPasswords(nextRecords);
+    writeDeletedUserIds(deletedUserIds);
 
-      writeRegisteredPasswords(nextRecords);
-      writeUserOverrides({
-        ...overrides,
-        [userId]: {
-          id: userId,
-          email: null,
-          role: user.role,
-          requestedRole: user.requestedRole || user.role,
-          approvalStatus: user.approvalStatus,
-          jobTitle: user.jobTitle,
-          isAdmin: user.isAdmin,
-        },
-      });
-
-      const nextUserList = buildUserList(readRegisteredUsers());
-      setUserList(nextUserList);
-      return;
-    }
-
-    const { profiles: nextProfiles } = removeRegisteredAccountByUserId(userId);
-    const nextUserList = buildUserList(nextProfiles);
+    const nextUserList = buildUserList(nextProfiles, readUserOverrides(), deletedUserIds);
     setUserList(nextUserList);
     setAccountProfiles(nextProfiles);
 
