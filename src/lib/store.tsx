@@ -63,6 +63,7 @@ const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
 const REGISTERED_PASSWORDS_STORAGE_KEY = 'national-care-registered-passwords';
 const REGISTERED_USERS_STORAGE_KEY = 'national-care-registered-users';
 const USER_OVERRIDES_STORAGE_KEY = 'national-care-user-overrides';
+const CUSTOM_RESPONSIBILITIES_STORAGE_KEY = 'national-care-custom-responsibilities';
 const REMOVED_TEST_ACCOUNT_STORAGE_KEY = 'national-care-removed-minamagdy5555-account';
 const REMOVED_TEST_ACCOUNT_EMAIL = 'minamagdy5555@gmail.com';
 const DEMO_DISABLED_AFTER_SIGNUP_USER_IDS = new Set(['user_7', 'user_8']);
@@ -96,6 +97,7 @@ type RegisteredPasswordRecord = {
 
 type UserOverrideRecord = {
   id: string;
+  email?: string | null;
   role: Role;
   requestedRole?: Role;
   approvalStatus?: User['approvalStatus'];
@@ -229,6 +231,24 @@ function writeUserOverrides(overrides: Record<string, UserOverrideRecord>) {
   window.localStorage.setItem(USER_OVERRIDES_STORAGE_KEY, JSON.stringify(overrides));
 }
 
+function readCustomResponsibilities(): string[] {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_RESPONSIBILITIES_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as string[];
+    return Array.isArray(parsed) ? parsed.filter(item => typeof item === 'string' && item.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCustomResponsibilities(responsibilities: string[]) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(CUSTOM_RESPONSIBILITIES_STORAGE_KEY, JSON.stringify(Array.from(new Set(responsibilities.map(item => item.trim()).filter(Boolean)))));
+}
+
 export function isDemoShortcutDisabledForUser(user: Pick<User, 'id' | 'email'>) {
   if (!DEMO_DISABLED_AFTER_SIGNUP_USER_IDS.has(user.id) || !user.email) return false;
   return Boolean(readRegisteredPasswords()[normalizeEmail(user.email)]);
@@ -266,15 +286,21 @@ function accountProfileToUser(profile: AccountProfile): User {
     approvalStatus: profile.approvalStatus,
     isAdmin: profile.isAdmin,
     legacyId: profile.legacyId,
-    jobTitle: userRoleLabels[profile.role] || 'Team Member',
+    jobTitle: profile.jobTitle || userRoleLabels[profile.role] || 'Team Member',
   };
 }
 
 function buildUserList(profiles = readRegisteredUsers(), overrides = readUserOverrides()) {
-  const seededUsers = initialUsers.map(user => ({
-    ...user,
-    ...(overrides[user.id] || {}),
-  }));
+  const seededUsers = initialUsers.map(user => {
+    const override = overrides[user.id];
+    if (!override) return user;
+
+    return {
+      ...user,
+      ...override,
+      email: override.email === null ? undefined : override.email ?? user.email,
+    };
+  });
   const seededIds = new Set(seededUsers.map(user => user.id));
   const registeredUsers = profiles
     .filter(profile => !seededIds.has(profile.id))
@@ -677,6 +703,7 @@ interface AppState {
   authProfile: AccountProfile | null;
   authError: string | null;
   accountProfiles: AccountProfile[];
+  customResponsibilities: string[];
   environment: Environment;
   tasks: Task[];
   users: Record<string, User>;
@@ -716,6 +743,8 @@ interface AppContextType extends AppState {
   loginWithPassword: (identifier: string, password: string) => Promise<AuthActionResult>;
   signupWithEmail: (email: string, password: string, name?: string) => Promise<AuthActionResult>;
   updateUserRole: (userId: string, role: Role) => void;
+  updateUserResponsibility: (userId: string, responsibility: string, permissionRole?: Role) => void;
+  addCustomResponsibility: (responsibility: string) => void;
   deleteUserAccount: (userId: string) => void;
   logout: () => Promise<void>;
   archiveTask: (taskId: string, reason?: string) => void;
@@ -738,6 +767,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const pendingTaskBroadcastIdsRef = useRef<Set<string>>(new Set());
   const pendingNotificationBroadcastIdsRef = useRef<Set<string>>(new Set());
   const [accountProfiles, setAccountProfiles] = useState<AccountProfile[]>(() => readRegisteredUsers());
+  const [customResponsibilities, setCustomResponsibilities] = useState<string[]>(() => readCustomResponsibilities());
   const [authProfile, setAuthProfile] = useState<AccountProfile | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>(initialDemoUser.id === GUEST_USER.id ? 'signed_out' : 'approved');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -1116,6 +1146,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       email: normalizedEmail,
       name: (name || existingUser?.name || existingProfile?.name || nameFromEmail(normalizedEmail)).trim(),
       role,
+      jobTitle: existingUser?.jobTitle || existingProfile?.jobTitle || userRoleLabels[role] || 'Content Creator',
       requestedRole: existingProfile?.requestedRole || role,
       approvalStatus: 'approved',
       isAdmin: Boolean(existingUser?.isAdmin || existingProfile?.isAdmin),
@@ -1157,7 +1188,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const updateUserRole = (userId: string, role: Role) => {
+    updateUserResponsibility(userId, userRoleLabels[role] || role, role);
+  };
+
+  const updateUserResponsibility = (userId: string, responsibility: string, permissionRole: Role = 'team_member') => {
     const now = new Date().toISOString();
+    const jobTitle = responsibility.trim() || userRoleLabels[permissionRole] || 'Content Creator';
     const profiles = readRegisteredUsers();
     const existingProfile = profiles.find(profile => profile.id === userId);
     let nextProfiles = profiles;
@@ -1166,8 +1202,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       nextProfiles = profiles.map(profile => profile.id === userId
         ? {
             ...profile,
-            role,
-            requestedRole: role,
+            role: permissionRole,
+            jobTitle,
+            requestedRole: permissionRole,
             approvalStatus: 'approved',
             approvedBy: currentUser.id,
             approvedAt: profile.approvedAt || now,
@@ -1185,10 +1222,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ...overrides,
         [userId]: {
           id: userId,
-          role,
-          requestedRole: role,
+          email: user.email,
+          role: permissionRole,
+          requestedRole: permissionRole,
           approvalStatus: 'approved',
-          jobTitle: userRoleLabels[role] || user.jobTitle,
+          jobTitle,
           isAdmin: user.isAdmin,
         },
       });
@@ -1204,9 +1242,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const addCustomResponsibility = (responsibility: string) => {
+    const label = responsibility.trim();
+    if (!label) return;
+    const nextResponsibilities = Array.from(new Set([...readCustomResponsibilities(), label]));
+    writeCustomResponsibilities(nextResponsibilities);
+    setCustomResponsibilities(nextResponsibilities);
+  };
+
   const deleteUserAccount = (userId: string) => {
     const existingProfile = readRegisteredUsers().find(profile => profile.id === userId);
-    if (!existingProfile) return;
+    if (!existingProfile) {
+      const user = buildUserList().find(item => item.id === userId);
+      if (!user?.email) return;
+
+      const records = readRegisteredPasswords();
+      const nextRecords = Object.fromEntries(
+        Object.entries(records).filter(([, record]) => record.userId !== userId)
+      ) as Record<string, RegisteredPasswordRecord>;
+      const overrides = readUserOverrides();
+
+      writeRegisteredPasswords(nextRecords);
+      writeUserOverrides({
+        ...overrides,
+        [userId]: {
+          id: userId,
+          email: null,
+          role: user.role,
+          requestedRole: user.requestedRole || user.role,
+          approvalStatus: user.approvalStatus,
+          jobTitle: user.jobTitle,
+          isAdmin: user.isAdmin,
+        },
+      });
+
+      const nextUserList = buildUserList(readRegisteredUsers());
+      setUserList(nextUserList);
+      return;
+    }
 
     const { profiles: nextProfiles } = removeRegisteredAccountByUserId(userId);
     const nextUserList = buildUserList(nextProfiles);
@@ -1804,6 +1877,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       authProfile,
       authError,
       accountProfiles,
+      customResponsibilities,
       environment,
       tasks,
       users: usersObj,
@@ -1840,6 +1914,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       loginWithPassword,
       signupWithEmail,
       updateUserRole,
+      updateUserResponsibility,
+      addCustomResponsibility,
       deleteUserAccount,
       logout,
       archiveTask,

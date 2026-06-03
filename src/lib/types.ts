@@ -49,6 +49,7 @@ export interface AccountProfile {
   email: string;
   name: string;
   role: Role;
+  jobTitle?: string;
   requestedRole: Role;
   approvalStatus: AccountApprovalStatus;
   isAdmin: boolean;

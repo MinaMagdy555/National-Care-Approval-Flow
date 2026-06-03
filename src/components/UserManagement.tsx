@@ -1,22 +1,31 @@
-import { ShieldCheck, Trash2, UserRoundCog } from 'lucide-react';
+import { Plus, ShieldCheck, Trash2, UserRoundCog } from 'lucide-react';
+import { useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { userRoleLabels } from '../lib/mockData';
+import { initialUsers, userRoleLabels } from '../lib/mockData';
 import type { Role } from '../lib/types';
 import { CustomSelect } from './CustomSelect';
 
-const roleOptions: Role[] = [
-  'team_member',
-  'reviewer',
-  'art_director',
-  'team_leader',
-  'manager',
-  'developer',
-  'marketing_manager',
-  'admin',
+const permissionResponsibilities: Array<{ label: string; role: Role }> = [
+  { label: userRoleLabels.reviewer, role: 'reviewer' },
+  { label: userRoleLabels.art_director, role: 'art_director' },
+  { label: userRoleLabels.team_leader, role: 'team_leader' },
+  { label: userRoleLabels.manager, role: 'manager' },
+  { label: userRoleLabels.developer, role: 'developer' },
+  { label: userRoleLabels.marketing_manager, role: 'marketing_manager' },
+  { label: userRoleLabels.admin, role: 'admin' },
 ];
 
 export function UserManagement() {
-  const { currentUser, userList, accountProfiles, updateUserRole, deleteUserAccount } = useAppStore();
+  const {
+    currentUser,
+    userList,
+    accountProfiles,
+    customResponsibilities,
+    updateUserResponsibility,
+    addCustomResponsibility,
+    deleteUserAccount,
+  } = useAppStore();
+  const [newResponsibility, setNewResponsibility] = useState('');
   const canManageUsers = Boolean(currentUser.isAdmin) || currentUser.role === 'admin';
 
   if (!canManageUsers) {
@@ -30,11 +39,28 @@ export function UserManagement() {
   }
 
   const registeredIds = new Set(accountProfiles.map(profile => profile.id));
-  const selectOptions = roleOptions.map(role => ({ value: role, label: userRoleLabels[role] }));
+  const defaultResponsibilities = [
+    'Content Creator',
+    ...initialUsers.map(user => user.jobTitle || userRoleLabels[user.role]).filter(Boolean),
+    ...Object.values(userRoleLabels),
+  ];
+  const responsibilityLabels = Array.from(new Set([...defaultResponsibilities, ...customResponsibilities]));
+  const selectOptions = responsibilityLabels.map(label => ({ value: label, label }));
+
+  const getPermissionRoleForResponsibility = (responsibility: string) => (
+    permissionResponsibilities.find(item => item.label === responsibility)?.role || 'team_member'
+  );
 
   const confirmDelete = (userId: string, name: string) => {
-    if (!window.confirm(`Delete ${name}'s account? This removes their self-created login from this browser.`)) return;
+    if (!window.confirm(`Delete ${name}'s email/login access? Self-created accounts are removed from the list. Seeded users stay, but their email login is removed.`)) return;
     deleteUserAccount(userId);
+  };
+
+  const handleAddResponsibility = () => {
+    const label = newResponsibility.trim();
+    if (!label) return;
+    addCustomResponsibility(label);
+    setNewResponsibility('');
   };
 
   return (
@@ -53,6 +79,31 @@ export function UserManagement() {
           <ShieldCheck className="h-4 w-4" />
           Admin Access
         </div>
+      </div>
+
+      <div className="grid gap-2 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-[1fr,auto]">
+        <input
+          type="text"
+          value={newResponsibility}
+          onChange={event => setNewResponsibility(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              handleAddResponsibility();
+            }
+          }}
+          placeholder="Add role, e.g. Social Media Designer"
+          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+        />
+        <button
+          type="button"
+          onClick={handleAddResponsibility}
+          disabled={!newResponsibility.trim()}
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-black text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+        >
+          <Plus className="h-4 w-4" />
+          Add Role
+        </button>
       </div>
 
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -92,15 +143,15 @@ export function UserManagement() {
               <div>
                 <span className="mb-1 block text-[10px] font-black uppercase tracking-wider text-slate-400 lg:hidden">Responsibility</span>
                 <CustomSelect
-                  value={user.role}
-                  onChange={value => updateUserRole(user.id, value as Role)}
+                  value={user.jobTitle || userRoleLabels[user.role]}
+                  onChange={value => updateUserResponsibility(user.id, value, getPermissionRoleForResponsibility(value))}
                   options={selectOptions}
                   buttonClassName="min-h-10 rounded-xl border-slate-200 px-3 py-2.5 text-sm font-black text-slate-900 shadow-sm hover:bg-slate-50 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
                   menuClassName="rounded-xl border-slate-200 bg-white shadow-xl"
                 />
               </div>
               <div className="flex justify-start lg:justify-end">
-                {registeredIds.has(user.id) ? (
+                {(registeredIds.has(user.id) || user.email) ? (
                   <button
                     type="button"
                     onClick={() => confirmDelete(user.id, user.name)}
