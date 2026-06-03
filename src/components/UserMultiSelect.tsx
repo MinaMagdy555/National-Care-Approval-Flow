@@ -2,6 +2,7 @@ import React from 'react';
 import { Check } from 'lucide-react';
 import { User } from '../lib/types';
 import { cn } from '../lib/utils';
+import { userRoleLabels } from '../lib/mockData';
 
 export function UserMultiSelect({
   users,
@@ -60,7 +61,7 @@ export function UserMultiSelect({
             </span>
             <span className="min-w-0 flex-1">
               <span className="block text-sm font-black leading-tight">{user.name}</span>
-              <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-400">{user.role.replaceAll('_', ' ')}</span>
+              <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-400">{user.jobTitle || userRoleLabels[user.role]}</span>
             </span>
             <span className={cn(
               "flex h-5 w-5 shrink-0 items-center justify-center rounded-md border",

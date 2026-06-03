@@ -1487,7 +1487,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
 
-    const nextHandledBy = sanitizeHandledBy([task.createdBy, ...handledByIds], currentUser.id);
+    const nextHandledBy = sanitizeHandledBy(handledByIds, currentUser.id);
     const nextOwnerIds = normalizeOwnerIdsForRole(task.currentOwnerRole, currentOwnerUserIds, currentUser.id);
     const previousAssignees = new Set([...task.handledBy, ...getCurrentOwnerUserIds(task)]);
     const addedAssignees = uniqueIds([...nextHandledBy, ...nextOwnerIds]).filter(userId => !previousAssignees.has(userId));

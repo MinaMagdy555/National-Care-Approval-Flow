@@ -8,7 +8,7 @@ import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, Link2, Settings2
 import { FileContentThumbnail, FilePreview, isLocalOnlyFileUrl } from './FilePreview';
 import { uploadTaskFiles } from '../lib/driveDb';
 import { isTaskArchived } from '../lib/archiveUtils';
-import { AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID, MARWA_ID, isAssignableHandler } from '../lib/handlerUtils';
+import { canAssignContributors, getAssignableContributorsForTask, isAssignableHandler } from '../lib/handlerUtils';
 import { UserMultiSelect } from './UserMultiSelect';
 import { CustomSelect } from './CustomSelect';
 import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText } from '../lib/uploadLimits';
@@ -153,7 +153,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const canActAsReviewer = currentUser.role === 'reviewer' && isCurrentActiveOwner;
   const canActAsArtDirector = currentUser.role === 'art_director' && isCurrentActiveOwner;
   const canManageWorkflowSettings = canManageWorkflow(currentUser);
-  const canReassignTask = [DINA_ID, MARWA_ID, AHMED_SOBEEH_ID, FAWZY_ID].includes(currentUser.id);
+  const canReassignTask = canAssignContributors(currentUser.id);
   const canResubmitTask = !isReadOnlyObserver && (isSelfCreatedTask || task.handledBy.includes(currentUser.id) || currentOwnerIds.includes(currentUser.id));
   const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
   const canResubmitVersion = canResubmitTask && ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(task.status);
@@ -204,7 +204,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const selectedMinaFeedback = minaForwardableFeedback.filter(item => selectedMinaFeedbackIds.includes(item.id));
   const canSubmitADReject = adRejectComment.trim() || selectedMinaFeedback.length > 0 || adRejectNotes.some(section => section.note.trim() || section.imageUrl || section.localPreviewUrl || section.imageFile);
   const hasResubmitAttachments = resubmitLinks.length > 0;
-  const contributorOptions = userList.filter(user => isAssignableHandler(user.id, currentUser.id));
+  const contributorOptions = getAssignableContributorsForTask(userList, task.taskType, task.createdBy);
   const reviewModeOptions = [
     { value: 'full_review', label: 'Full Review' },
     { value: 'quick_look', label: 'Quick Look' },
@@ -212,7 +212,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   ];
 
   const saveAssignment = () => {
-    updateTaskAssignment(task.id, managedContributorIds, currentOwnerIds);
+    const availableContributorIds = new Set(contributorOptions.map(user => user.id));
+    updateTaskAssignment(task.id, managedContributorIds.filter(userId => availableContributorIds.has(userId)), currentOwnerIds);
   };
 
   const saveReviewRoute = () => {
@@ -760,7 +761,11 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                     <div className="space-y-2">
                       <div>
                         <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Assigned Contributors</label>
-                        <p className="mt-1 text-xs font-semibold text-slate-500">Only Dina, Marwa, Sobeeh, and Fawzy can reassign contributors. Managers, leadership, and assignment creators are not assignable task contributors.</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">
+                          {task.taskType === 'video'
+                            ? 'Only Mina, Dina, Marwa, Sobeeh, and Fawzy can assign contributors. Video tasks can assign Mina and Yomna only.'
+                            : 'Only Mina, Dina, Marwa, Sobeeh, and Fawzy can assign contributors. Non-video tasks can assign Mina and team contributors except Yomna.'}
+                        </p>
                       </div>
                       <UserMultiSelect
                         users={contributorOptions}

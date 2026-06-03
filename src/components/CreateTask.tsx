@@ -4,7 +4,7 @@ import { X, CheckCircle2, Link2, Plus } from 'lucide-react';
 import { Task, ReviewMode, Priority, TaskType, UploadedTaskFile } from '../lib/types';
 import { CustomSelect } from './CustomSelect';
 import { UserMultiSelect } from './UserMultiSelect';
-import { isAssignableHandler, sanitizeHandledBy } from '../lib/handlerUtils';
+import { canAssignContributors, getAssignableContributorsForTask, sanitizeHandledBy } from '../lib/handlerUtils';
 import { createLinkedTaskFile, getLinkHostLabel } from '../lib/linkAttachments';
 import { getReviewRouteTarget, uniqueIds } from '../lib/workflowUtils';
 import { canUploadWorkAssignment } from '../lib/workAssignmentUtils';
@@ -40,10 +40,13 @@ export function CreateTask({
   const isReviewerCreatedTask = selectedCreatorRole === 'reviewer' || selectedCreatorRole === 'admin';
   const effectiveReviewMode = isReviewerCreatedTask ? 'direct_to_ad' : reviewMode;
   const routeTarget = getReviewRouteTarget(effectiveReviewMode);
+  const canManageAssignedContributors = !isAssignmentUploadMode && canAssignContributors(currentUser.id);
   const creatorOptions = workspaceUsers
     .filter(user => ['team_member', 'reviewer', 'admin'].includes(user.role))
     .map(user => ({ value: user.id, label: user.name }));
-  const contributorOptions = workspaceUsers.filter(user => isAssignableHandler(user.id, currentUser.id) && user.id !== selectedCreatorId);
+  const contributorOptions = canManageAssignedContributors
+    ? getAssignableContributorsForTask(workspaceUsers, taskType, selectedCreatorId)
+    : [];
   const taskTypeOptions = [
     { value: 'video', label: 'Video' },
     { value: 'ai_packet', label: 'AI Packets' },
@@ -71,8 +74,9 @@ export function CreateTask({
   const hasAttachments = linkedFiles.length > 0;
 
   useEffect(() => {
-    setAssignedContributorIds(prev => prev.filter(userId => userId !== selectedCreatorId));
-  }, [selectedCreatorId]);
+    const availableContributorIds = new Set(contributorOptions.map(user => user.id));
+    setAssignedContributorIds(prev => prev.filter(userId => availableContributorIds.has(userId)));
+  }, [selectedCreatorId, taskType, canManageAssignedContributors, workspaceUsers.map(user => user.id).join('|')]);
 
   useEffect(() => {
     if (!assignmentTask) return;
@@ -151,7 +155,7 @@ export function CreateTask({
       : routeTarget.ownerRole === 'art_director'
         ? workspaceUsers.filter(user => user.role === 'art_director').map(user => user.id)
         : [];
-    const handledByIds = sanitizeHandledBy([selectedCreatorId, ...assignedContributorIds], currentUser.id);
+    const handledByIds = canManageAssignedContributors ? sanitizeHandledBy(assignedContributorIds, currentUser.id) : [];
 
     const newTask: Task = {
       id: newTaskId,
@@ -347,17 +351,21 @@ export function CreateTask({
                     <p className="mt-2 text-xs font-bold text-slate-500">Reviewer-created tasks go directly to the art director.</p>
                   )}
                 </div>
-                {!isAssignmentUploadMode && (
+                {canManageAssignedContributors && (
                 <div className="col-span-2 space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
                   <div>
                     <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Assigned Contributors</label>
-                    <p className="text-xs font-semibold text-slate-500">Assigned contributors can view this task and resubmit edits when it is returned.</p>
+                    <p className="text-xs font-semibold text-slate-500">
+                      {taskType === 'video'
+                        ? 'Video tasks can assign Mina and Yomna only.'
+                        : 'Non-video tasks can assign Mina and team contributors except Yomna.'}
+                    </p>
                   </div>
                   <UserMultiSelect
                     users={contributorOptions}
                     selectedIds={assignedContributorIds}
                     onChange={setAssignedContributorIds}
-                    emptyText="Select a creator first."
+                    emptyText="No contributors available for this task type."
                   />
                 </div>
                 )}
