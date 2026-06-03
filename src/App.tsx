@@ -12,6 +12,7 @@ import { UserManagement } from './components/UserManagement';
 import { isDueThisWeek, isDueToday } from './lib/deadlineUtils';
 import { isTaskArchived } from './lib/archiveUtils';
 import { canUserAccessTask, canUserActAsCurrentOwner, parsePublishDate, userCanViewFullWorkspace } from './lib/workflowUtils';
+import { Task } from './lib/types';
 import { Menu } from 'lucide-react';
 
 let notificationAudioContext: AudioContext | null = null;
@@ -49,6 +50,27 @@ function writeRouteToUrl(route: AppRoute, mode: 'push' | 'replace' = 'push') {
 
   const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
   window.history[mode === 'push' ? 'pushState' : 'replaceState'](route, '', nextUrl);
+}
+
+function decodeImportedTask(encodedTask: string): Task | null {
+  try {
+    const normalized = encodedTask.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), '=');
+    const binary = window.atob(padded);
+    const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+    const data = JSON.parse(new TextDecoder().decode(bytes)) as { task?: Task };
+    return data?.task && typeof data.task === 'object' ? data.task : null;
+  } catch {
+    return null;
+  }
+}
+
+function removeImportTaskFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('importTask')) return;
+  params.delete('importTask');
+  const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
+  window.history.replaceState(null, '', nextUrl);
 }
 
 async function playNotificationSound() {
@@ -113,6 +135,7 @@ function WorkspaceContent() {
   const [activeAssignmentId, setActiveAssignmentId] = useState<string | null>(initialRoute.assignmentId);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isUserManagementUnlocked, setIsUserManagementUnlocked] = useState(getStoredUserManagementUnlock);
+  const [handledImportTaskToken, setHandledImportTaskToken] = useState('');
   const {
     tasks,
     currentUser,
@@ -135,6 +158,7 @@ function WorkspaceContent() {
     chooseDriveRoot,
     importDriveTasks,
     markPublishReminderSent,
+    addTask,
     authStatus,
   } = useAppStore();
   const initialUnreadCountRef = useRef<number | null>(null);
@@ -250,6 +274,25 @@ function WorkspaceContent() {
       navigateTo({ view: 'dashboard', taskId: null, assignmentId: null }, 'replace');
     }
   }, [authStatus, currentView]);
+
+  useEffect(() => {
+    if (authStatus !== 'approved') return;
+
+    const params = new URLSearchParams(window.location.search);
+    const encodedTask = params.get('importTask');
+    if (!encodedTask || handledImportTaskToken === encodedTask) return;
+
+    const timeout = window.setTimeout(() => {
+      const importedTask = decodeImportedTask(encodedTask);
+      setHandledImportTaskToken(encodedTask);
+      removeImportTaskFromUrl();
+      if (!importedTask) return;
+      if (tasks.some(task => task.id === importedTask.id || task.code === importedTask.code)) return;
+      addTask(importedTask);
+    }, 1500);
+
+    return () => window.clearTimeout(timeout);
+  }, [authStatus, tasks, handledImportTaskToken, addTask]);
 
   useEffect(() => {
     if (currentView === 'users' && !canShowUserManagement) {
