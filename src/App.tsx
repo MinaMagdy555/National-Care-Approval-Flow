@@ -22,6 +22,16 @@ type AppRoute = {
   assignmentId: string | null;
 };
 
+const USER_MANAGEMENT_UNLOCK_STORAGE_KEY = 'national-care-user-management-unlocked';
+
+function getStoredUserManagementUnlock() {
+  try {
+    return window.sessionStorage.getItem(USER_MANAGEMENT_UNLOCK_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 function getRouteFromUrl(): AppRoute {
   const params = new URLSearchParams(window.location.search);
   return {
@@ -102,6 +112,7 @@ function WorkspaceContent() {
   const [activeTaskId, setActiveTaskId] = useState<string | null>(initialRoute.taskId);
   const [activeAssignmentId, setActiveAssignmentId] = useState<string | null>(initialRoute.assignmentId);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isUserManagementUnlocked, setIsUserManagementUnlocked] = useState(getStoredUserManagementUnlock);
   const {
     tasks,
     currentUser,
@@ -130,6 +141,8 @@ function WorkspaceContent() {
   const unreadNotificationIdsRef = useRef<Set<string>>(new Set());
   const unreadNotificationUserIdRef = useRef(currentUser.id);
   const mainRef = useRef<HTMLElement>(null);
+  const canManageUsers = Boolean(currentUser.isAdmin) || currentUser.role === 'admin';
+  const canShowUserManagement = canManageUsers && isUserManagementUnlocked;
 
   useEffect(() => {
     writeRouteToUrl({ view: currentView, taskId: activeTaskId, assignmentId: activeAssignmentId }, 'replace');
@@ -184,6 +197,25 @@ function WorkspaceContent() {
   }, []);
 
   useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || !event.altKey || event.key.toLowerCase() !== 'u') return;
+      event.preventDefault();
+      setIsUserManagementUnlocked(prev => {
+        const next = !prev;
+        try {
+          window.sessionStorage.setItem(USER_MANAGEMENT_UNLOCK_STORAGE_KEY, next ? '1' : '0');
+        } catch {
+          // Session storage can be unavailable in some private browsing modes.
+        }
+        return next;
+      });
+    };
+
+    window.addEventListener('keydown', handleShortcut);
+    return () => window.removeEventListener('keydown', handleShortcut);
+  }, []);
+
+  useEffect(() => {
     if (authStatus !== 'approved') return;
 
     const now = Date.now();
@@ -218,6 +250,12 @@ function WorkspaceContent() {
       navigateTo({ view: 'dashboard', taskId: null, assignmentId: null }, 'replace');
     }
   }, [authStatus, currentView]);
+
+  useEffect(() => {
+    if (currentView === 'users' && !canShowUserManagement) {
+      navigateTo({ view: 'dashboard', taskId: null, assignmentId: null }, 'replace');
+    }
+  }, [currentView, canShowUserManagement]);
 
   const handleOpenTask = (id: string) => {
     navigateTo({ view: 'task_detail', taskId: id, assignmentId: null });
@@ -268,7 +306,9 @@ function WorkspaceContent() {
       case 'campaign_scheduler':
         return <CampaignScheduler onOpenTask={handleOpenTask} />;
       case 'users':
-        return <UserManagement />;
+        return canShowUserManagement
+          ? <UserManagement />
+          : <Dashboard onOpenTask={handleOpenTask} onNavigate={handleNavigate} onOpenAssignmentUpload={handleOpenAssignmentUpload} />;
       case 'review_queue': {
         const needsFullReview = workflowVisibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status) && isScopedToCurrentOwner(t));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsFullReview} title="Needs Full Review" />;
@@ -341,6 +381,7 @@ function WorkspaceContent() {
         setView={handleNavigate}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
+        showUserManagement={canShowUserManagement}
       />
       <div className="flex min-h-[100dvh] flex-1 flex-col min-w-0 md:pl-64">
         <main ref={mainRef} className="flex-1 overflow-y-auto relative min-w-0 pt-16 md:pt-0">

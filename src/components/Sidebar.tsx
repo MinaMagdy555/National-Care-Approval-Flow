@@ -36,11 +36,13 @@ export function Sidebar({
   setView,
   isOpen,
   onClose,
+  showUserManagement,
 }: {
   currentView: string;
   setView: (v: string) => void;
   isOpen: boolean;
   onClose: () => void;
+  showUserManagement: boolean;
 }) {
   const { currentUser, notifications, logout, authStatus } = useAppStore();
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
@@ -86,7 +88,7 @@ export function Sidebar({
       { id: 'campaign_scheduler', label: 'Campaign Scheduler', icon: CalendarClock },
       { id: 'notifications', label: `Notifications${unreadCount > 0 ? ` (${unreadCount})` : ''}`, icon: Bell },
     ];
-    const adminItems = canManageUsers ? [{ id: 'users', label: 'Users & Roles', icon: UsersRound }] : [];
+    const adminItems = canManageUsers && showUserManagement ? [{ id: 'users', label: 'Users & Roles', icon: UsersRound }] : [];
 
     switch (currentUser.role) {
       case 'team_member':
