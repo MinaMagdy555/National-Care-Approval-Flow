@@ -1,13 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { Upload, X, File, Image as ImageIcon, FileVideo, CheckCircle2, Link2, Plus } from 'lucide-react';
+import { X, CheckCircle2, Link2, Plus } from 'lucide-react';
 import { Task, ReviewMode, Priority, TaskType, UploadedTaskFile } from '../lib/types';
 import { CustomSelect } from './CustomSelect';
 import { UserMultiSelect } from './UserMultiSelect';
-import { uploadTaskFiles } from '../lib/driveDb';
 import { isAssignableHandler, sanitizeHandledBy } from '../lib/handlerUtils';
-import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText, uploadLimitLabel } from '../lib/uploadLimits';
-import { addLowResPreviewsToFiles } from '../lib/previewUtils';
 import { createLinkedTaskFile, getLinkHostLabel } from '../lib/linkAttachments';
 import { getReviewRouteTarget, uniqueIds } from '../lib/workflowUtils';
 import { canUploadWorkAssignment } from '../lib/workAssignmentUtils';
@@ -29,12 +26,10 @@ export function CreateTask({
   const [assignedContributorIds, setAssignedContributorIds] = useState<string[]>([]);
   const [scheduledPublishAt, setScheduledPublishAt] = useState('');
   const [publishNote, setPublishNote] = useState('');
-  const [files, setFiles] = useState<File[]>([]);
   const [linkedFiles, setLinkedFiles] = useState<UploadedTaskFile[]>([]);
   const [linkUrl, setLinkUrl] = useState('');
   const [fileError, setFileError] = useState('');
   const [isSuccess, setIsSuccess] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const assignmentTask = assignmentTaskId ? tasks.find(task => task.id === assignmentTaskId && task.assignmentPeriod) : null;
   const isAssignmentUploadMode = Boolean(assignmentTask && assignmentTask.status === 'assigned_work');
   const canUploadAssignment = assignmentTask && assignmentTask.status === 'assigned_work' ? canUploadWorkAssignment(assignmentTask, currentUser) : false;
@@ -73,7 +68,7 @@ export function CreateTask({
   const isReviewer = !isAssignmentUploadMode && (currentUser.role === 'reviewer' || currentUser.role === 'admin');
   const [priority, setPriority] = useState<Priority | ''>('');
   const [deadline, setDeadline] = useState('');
-  const hasAttachments = files.length > 0 || linkedFiles.length > 0;
+  const hasAttachments = linkedFiles.length > 0;
 
   useEffect(() => {
     setAssignedContributorIds(prev => prev.filter(userId => userId !== selectedCreatorId));
@@ -87,38 +82,6 @@ export function CreateTask({
     setPriority(assignmentTask.priority === 'not_set' ? 'normal' : assignmentTask.priority);
     setDeadline(assignmentTask.deadlineText || '');
   }, [assignmentTask?.id]);
-
-  const appendValidFiles = (incomingFiles: File[]) => {
-    const validFiles = incomingFiles.filter(file => {
-      const extension = file.name.split('.').pop()?.toLowerCase() || '';
-      return ALLOWED_UPLOAD_EXTENSIONS.includes(extension) && file.size <= MAX_UPLOAD_SIZE_BYTES;
-    });
-
-    const rejectedCount = incomingFiles.length - validFiles.length;
-    setFileError(rejectedCount > 0 ? uploadLimitHelpText() : '');
-
-    if (validFiles.length > 0) {
-      setFiles(prev => [...prev, ...validFiles]);
-    }
-  };
-
-  const handleFileDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      appendValidFiles(Array.from(e.dataTransfer.files));
-    }
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      appendValidFiles(Array.from(e.target.files));
-    }
-    e.target.value = '';
-  };
-
-  const removeFile = (index: number) => {
-    setFiles(prev => prev.filter((_, i) => i !== index));
-  };
 
   const addLinkedFile = () => {
     try {
@@ -147,30 +110,7 @@ export function CreateTask({
     const creator = users[selectedCreatorId] || (selectedCreatorId === currentUser.id ? currentUser : undefined);
     const newTaskId = assignmentTask?.id || Math.random().toString(36).substring(7);
     const newTaskCode = assignmentTask?.code || `TSK-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
-    const localFiles: UploadedTaskFile[] = files.map(file => ({
-      id: Math.random().toString(36).substring(7),
-      name: file.name,
-      type: file.type,
-      size: file.size,
-      blob: file,
-      url: URL.createObjectURL(file),
-      storageProvider: 'local',
-    }));
-    let uploadedFiles: UploadedTaskFile[] = [];
-    try {
-      if (localFiles.length > 0) {
-        uploadedFiles = await uploadTaskFiles(newTaskId, localFiles, {
-          taskCode: newTaskCode,
-          taskName,
-        });
-        uploadedFiles = await addLowResPreviewsToFiles(newTaskId, uploadedFiles, localFiles);
-      }
-    } catch (error) {
-      console.error('Failed to upload task files', error);
-      setFileError(error instanceof Error ? error.message : 'Could not upload files. Please try again.');
-      return;
-    }
-    const taskFiles = [...uploadedFiles, ...linkedFiles];
+    const taskFiles = [...linkedFiles];
     const thumbnailFile = taskFiles.find(file => file.previewUrl && file.previewStoragePath);
 
     if (isAssignmentUploadMode && assignmentTask) {
@@ -197,7 +137,6 @@ export function CreateTask({
       setIsSuccess(true);
       setTimeout(() => {
         setIsSuccess(false);
-        setFiles([]);
         setLinkedFiles([]);
         setLinkUrl('');
         setFileError('');
@@ -275,7 +214,6 @@ export function CreateTask({
       setAssignedContributorIds([]);
       setScheduledPublishAt('');
       setPublishNote('');
-      setFiles([]);
       setLinkedFiles([]);
       setLinkUrl('');
       setFileError('');
@@ -321,7 +259,7 @@ export function CreateTask({
           {isAssignmentUploadMode ? 'Upload Assigned Work' : 'Create New Task'}
         </h2>
         <p className="text-slate-500 font-medium">
-          {isAssignmentUploadMode ? 'Submit the finished work into the review flow.' : 'Upload files or attach review links.'}
+          {isAssignmentUploadMode ? 'Submit a shared Drive link into the review flow.' : 'Attach a shared Drive link for review.'}
         </p>
       </div>
 
@@ -478,28 +416,12 @@ export function CreateTask({
             )}
 
             <div>
-              <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">{isAssignmentUploadMode ? 'Finished Files or Links *' : 'Files or Links *'}</label>
-              
-              <div 
-                className="cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-6 text-center transition-colors group hover:border-indigo-500 hover:bg-indigo-50/50 sm:p-10 lg:p-12"
-                onClick={() => fileInputRef.current?.click()}
-                onDragOver={e => e.preventDefault()}
-                onDrop={handleFileDrop}
-              >
-                <div className="w-16 h-16 bg-white rounded-full shadow-sm flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
-                  <Upload className="w-6 h-6 text-indigo-500" />
-                </div>
-                <p className="text-sm font-bold text-slate-900 mb-1">Click to upload or drag and drop</p>
-                <p className="text-xs font-semibold text-slate-500">PNG, JPG, MP4 or PDF (max. {uploadLimitLabel()})</p>
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  className="hidden" 
-                  multiple 
-                  accept=".png,.jpg,.jpeg,.mp4,.pdf,image/png,image/jpeg,video/mp4,application/pdf"
-                  onChange={handleFileSelect}
-                />
-              </div>
+              <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">
+                {isAssignmentUploadMode ? 'Finished Shared Drive Link *' : 'Shared Drive Link *'}
+              </label>
+              <p className="mb-3 text-xs font-semibold text-slate-500">
+                Paste a shared Google Drive or Google Docs link. The task preview opens inside this tool.
+              </p>
 
               <div className="mt-3 grid gap-2 sm:grid-cols-[1fr,auto]">
                 <div className="relative">
@@ -514,7 +436,7 @@ export function CreateTask({
                         addLinkedFile();
                       }
                     }}
-                    placeholder="Paste a Drive, image, video, or PDF link"
+                    placeholder="Paste shared Google Drive link"
                     className="w-full rounded-xl border border-slate-300 py-3 pl-10 pr-4 text-sm font-bold text-slate-900 outline-none transition-all placeholder:text-slate-400 placeholder:font-medium focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
@@ -525,35 +447,12 @@ export function CreateTask({
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white shadow-sm transition-colors hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   <Plus className="h-4 w-4" />
-                  Add Link
+                  Add Drive Link
                 </button>
               </div>
 
               {fileError && (
                 <p className="mt-3 text-sm font-bold text-rose-600">{fileError}</p>
-              )}
-
-              {files.length > 0 && (
-                <div className="mt-4 space-y-2">
-                  {files.map((file, i) => (
-                    <div key={i} className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="flex min-w-0 items-center gap-3">
-                        <div className="w-10 h-10 rounded-lg bg-white border border-slate-200 flex items-center justify-center">
-                          {file.type.includes('image') ? <ImageIcon className="w-5 h-5 text-indigo-500"/> : 
-                           file.type.includes('video') ? <FileVideo className="w-5 h-5 text-purple-500"/> :
-                           <File className="w-5 h-5 text-slate-500"/>}
-                        </div>
-                        <div className="flex min-w-0 flex-col">
-                          <span className="max-w-full truncate text-sm font-bold text-slate-900 sm:max-w-[220px]">{file.name}</span>
-                          <span className="text-xs font-semibold text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
-                        </div>
-                      </div>
-                      <button type="button" onClick={() => removeFile(i)} className="self-end p-2 text-slate-400 transition-colors hover:text-rose-500 sm:self-auto">
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
               )}
 
               {linkedFiles.length > 0 && (

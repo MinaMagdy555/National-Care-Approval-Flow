@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ExternalLink, FileText, FileWarning, Film, Image as ImageIcon, Link2 } from 'lucide-react';
+import { FileText, FileWarning, Film, Image as ImageIcon, Link2 } from 'lucide-react';
 import { Task, UploadedTaskFile } from '../lib/types';
 import {
   getExpectedFilePreview,
@@ -85,7 +85,6 @@ function LinkedFilePreview({
 }) {
   const kind = getFileKind(file);
   const embedUrl = getLinkedFileEmbedUrl(file.url);
-  const openUrl = file.webViewLink || file.url;
   const hostLabel = getLinkHostLabel(file.url);
 
   if (kind === 'image') {
@@ -94,16 +93,6 @@ function LinkedFilePreview({
         <button type="button" onClick={() => onImageClick?.(file.url)} className="flex h-full w-full items-center justify-center">
           <img src={file.url} alt={file.name} className="block max-h-full max-w-full object-contain" />
         </button>
-        <a
-          href={openUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900/90 text-white shadow-sm transition-colors hover:bg-slate-950"
-          aria-label="Open linked file"
-          title="Open linked file"
-        >
-          <ExternalLink className="h-4 w-4" />
-        </a>
       </div>
     );
   }
@@ -112,16 +101,6 @@ function LinkedFilePreview({
     return (
       <div className="relative flex h-full w-full items-center justify-center bg-black">
         <video src={file.url} controls className="block max-h-full max-w-full object-contain" />
-        <a
-          href={openUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-white/90 text-slate-900 shadow-sm transition-colors hover:bg-white"
-          aria-label="Open linked file"
-          title="Open linked file"
-        >
-          <ExternalLink className="h-4 w-4" />
-        </a>
       </div>
     );
   }
@@ -135,16 +114,6 @@ function LinkedFilePreview({
           className="h-full w-full border-0 bg-white"
           allow="autoplay; encrypted-media; fullscreen"
         />
-        <a
-          href={openUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900/90 text-white shadow-sm transition-colors hover:bg-slate-950"
-          aria-label="Open linked file"
-          title="Open linked file"
-        >
-          <ExternalLink className="h-4 w-4" />
-        </a>
       </div>
     );
   }
@@ -155,16 +124,8 @@ function LinkedFilePreview({
         <Link2 className="h-7 w-7 text-indigo-500" />
         <p className="max-w-full truncate text-sm font-black text-slate-900">{file.name}</p>
         <p className="text-xs font-bold text-slate-500">{hostLabel}</p>
+        <p className="text-xs font-semibold text-slate-400">Preview unavailable inside the tool.</p>
       </div>
-      <a
-        href={openUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white shadow-sm transition-colors hover:bg-black"
-      >
-        <ExternalLink className="h-4 w-4" />
-        Open Link
-      </a>
     </div>
   );
 }
@@ -447,8 +408,21 @@ export function FilePreview({
   }
 
   if (isDriveFile(file)) {
-    const openUrl = file.webViewLink || file.url;
+    const embedUrl = getLinkedFileEmbedUrl(file.webViewLink || file.url);
     const previewUrl = file.previewUrl;
+
+    if (embedUrl) {
+      return (
+        <div className="h-full w-full bg-slate-100">
+          <iframe
+            src={embedUrl}
+            title={file.name}
+            className="h-full w-full border-0 bg-white"
+            allow="autoplay; encrypted-media; fullscreen"
+          />
+        </div>
+      );
+    }
 
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-slate-100 p-4 text-center">
@@ -461,15 +435,7 @@ export function FilePreview({
             <LightweightFilePlaceholder file={file} />
           )}
         </div>
-        <a
-          href={openUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white shadow-sm transition-colors hover:bg-black"
-        >
-          <ExternalLink className="h-4 w-4" />
-          Open in Drive
-        </a>
+        <p className="text-xs font-semibold text-slate-500">Drive preview unavailable inside the tool.</p>
       </div>
     );
   }
@@ -489,24 +455,16 @@ export function FilePreview({
   if (kind === 'pdf') {
     return (
       <div className="relative h-full w-full">
-        <a
-          href={file.url}
-          target="_blank"
-          rel="noreferrer"
-          className="absolute right-3 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900/90 text-white shadow-sm transition-colors hover:bg-slate-950"
-          aria-label="Open PDF in new tab"
-          title="Open PDF in new tab"
-        >
-          <ExternalLink className="h-4 w-4" />
-        </a>
         <PdfCanvasPreview file={file} />
       </div>
     );
   }
 
   return (
-    <a href={file.url} target="_blank" rel="noreferrer" className="rounded-xl bg-white px-5 py-3 text-sm font-black text-indigo-600 shadow-sm">
-      Open {file.name}
-    </a>
+    <div className="flex h-full w-full items-center justify-center bg-slate-100 p-4">
+      <div className="rounded-xl bg-white px-5 py-3 text-sm font-black text-slate-600 shadow-sm">
+        Preview unavailable for {file.name}
+      </div>
+    </div>
   );
 }

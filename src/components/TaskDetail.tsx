@@ -4,14 +4,14 @@ import { Priority, ReviewMode, TaskCommentSection, UploadedTaskFile } from '../l
 import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
-import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, File as FileIcon, Link2, Settings2 } from 'lucide-react';
+import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, Link2, Settings2 } from 'lucide-react';
 import { FileContentThumbnail, FilePreview, isLocalOnlyFileUrl } from './FilePreview';
 import { uploadTaskFiles } from '../lib/driveDb';
 import { isTaskArchived } from '../lib/archiveUtils';
 import { AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID, MARWA_ID, isAssignableHandler } from '../lib/handlerUtils';
 import { UserMultiSelect } from './UserMultiSelect';
 import { CustomSelect } from './CustomSelect';
-import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText, uploadLimitLabel } from '../lib/uploadLimits';
+import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText } from '../lib/uploadLimits';
 import { createLinkedTaskFile, getLinkHostLabel } from '../lib/linkAttachments';
 import { canManageWorkflow, canUserAccessTask, canUserActAsCurrentOwner, getCurrentOwnerUserIds, userCanViewFullWorkspace } from '../lib/workflowUtils';
 import {
@@ -61,7 +61,6 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [adRejectComment, setAdRejectComment] = useState('');
   const [adRejectNotes, setAdRejectNotes] = useState<ReviewNoteSection[]>([{ id: 'ad_note_1', note: '' }]);
   const [selectedMinaFeedbackIds, setSelectedMinaFeedbackIds] = useState<string[]>([]);
-  const [resubmitFiles, setResubmitFiles] = useState<File[]>([]);
   const [resubmitLinks, setResubmitLinks] = useState<UploadedTaskFile[]>([]);
   const [resubmitLinkUrl, setResubmitLinkUrl] = useState('');
   const [resubmitNote, setResubmitNote] = useState('');
@@ -75,7 +74,6 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [managedReviewMode, setManagedReviewMode] = useState<ReviewMode>('full_review');
   const [managedPublishAt, setManagedPublishAt] = useState('');
   const [managedPublishNote, setManagedPublishNote] = useState('');
-  const resubmitInputRef = useRef<HTMLInputElement>(null);
   const repairInputRef = useRef<HTMLInputElement>(null);
   const previewOptimizationAttemptedRef = useRef<Set<string>>(new Set());
   const updateTaskMediaPreviewsRef = useRef(updateTaskMediaPreviews);
@@ -205,7 +203,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   });
   const selectedMinaFeedback = minaForwardableFeedback.filter(item => selectedMinaFeedbackIds.includes(item.id));
   const canSubmitADReject = adRejectComment.trim() || selectedMinaFeedback.length > 0 || adRejectNotes.some(section => section.note.trim() || section.imageUrl || section.localPreviewUrl || section.imageFile);
-  const hasResubmitAttachments = resubmitFiles.length > 0 || resubmitLinks.length > 0;
+  const hasResubmitAttachments = resubmitLinks.length > 0;
   const contributorOptions = userList.filter(user => isAssignableHandler(user.id, currentUser.id));
   const reviewModeOptions = [
     { value: 'full_review', label: 'Full Review' },
@@ -226,20 +224,6 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       scheduledPublishAt: managedPublishAt || null,
       publishNote: managedPublishNote || null,
     });
-  };
-
-  const appendResubmitFiles = (incomingFiles: File[]) => {
-    const validFiles = incomingFiles.filter(file => {
-      const extension = file.name.split('.').pop()?.toLowerCase() || '';
-      return ALLOWED_UPLOAD_EXTENSIONS.includes(extension) && file.size <= MAX_UPLOAD_SIZE_BYTES;
-    });
-
-    const rejectedCount = incomingFiles.length - validFiles.length;
-    setResubmitError(rejectedCount > 0 ? uploadLimitHelpText() : '');
-
-    if (validFiles.length > 0) {
-      setResubmitFiles(prev => [...prev, ...validFiles]);
-    }
   };
 
   const addResubmitLink = () => {
@@ -265,27 +249,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     setResubmitError('');
 
     const nextVersionNumber = Math.max(0, ...task.versions.map(version => version.versionNumber)) + 1;
-    const localFiles: UploadedTaskFile[] = resubmitFiles.map(file => ({
-      id: Math.random().toString(36).substring(7),
-      name: file.name,
-      type: file.type,
-      size: file.size,
-      blob: file,
-      url: URL.createObjectURL(file),
-      storageProvider: 'local',
-    }));
-
     try {
-      let uploadedFiles: UploadedTaskFile[] = [];
-      if (localFiles.length > 0) {
-        uploadedFiles = await uploadTaskFiles(task.id, localFiles, {
-          taskCode: task.code,
-          taskName: task.name,
-          taskFolderId: task.driveFolderId,
-        });
-        uploadedFiles = await addLowResPreviewsToFiles(task.id, uploadedFiles, localFiles);
-      }
-      const versionFiles = [...uploadedFiles, ...resubmitLinks];
+      const versionFiles = [...resubmitLinks];
       addTaskVersion(task.id, {
         id: Math.random().toString(36).substring(7),
         versionNumber: nextVersionNumber,
@@ -296,13 +261,12 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
         createdAt: new Date().toISOString(),
       });
       setSelectedFileIndex(0);
-      setResubmitFiles([]);
       setResubmitLinks([]);
       setResubmitLinkUrl('');
       setResubmitNote('');
     } catch (error) {
-      console.error('Failed to upload revised task files', error);
-      setResubmitError('Could not upload the revised files. Please try again.');
+      console.error('Failed to submit revised task link', error);
+      setResubmitError('Could not submit the revised Drive link. Please try again.');
     } finally {
       setIsResubmitting(false);
     }
@@ -884,38 +848,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               <div>
                 <h3 className="text-sm font-black text-indigo-950">Upload New Version</h3>
                 <p className="mt-1 text-xs font-semibold text-indigo-800/70">
-                  Add edited files or links here. This keeps the same task and creates V{Math.max(0, ...task.versions.map(version => version.versionNumber)) + 1}.
+                  Paste the shared Drive link for the edited work. This keeps the same task and creates V{Math.max(0, ...task.versions.map(version => version.versionNumber)) + 1}.
                 </p>
-              </div>
-
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => resubmitInputRef.current?.click()}
-                onKeyDown={event => {
-                  if (event.key === 'Enter' || event.key === ' ') resubmitInputRef.current?.click();
-                }}
-                onDragOver={event => event.preventDefault()}
-                onDrop={event => {
-                  event.preventDefault();
-                  appendResubmitFiles(Array.from(event.dataTransfer.files || []));
-                }}
-                className="cursor-pointer rounded-xl border-2 border-dashed border-indigo-200 bg-white p-5 text-center transition-colors hover:border-indigo-500 hover:bg-indigo-50"
-              >
-                <Upload className="mx-auto mb-2 h-6 w-6 text-indigo-500" />
-                <p className="text-sm font-black text-slate-900">Upload revised files</p>
-                <p className="mt-1 text-xs font-semibold text-slate-500">PNG, JPG, MP4 or PDF (max. {uploadLimitLabel()})</p>
-                <input
-                  ref={resubmitInputRef}
-                  type="file"
-                  multiple
-                  accept=".png,.jpg,.jpeg,.mp4,.pdf,image/png,image/jpeg,video/mp4,application/pdf"
-                  className="hidden"
-                  onChange={event => {
-                    appendResubmitFiles(Array.from(event.target.files || []));
-                    event.target.value = '';
-                  }}
-                />
               </div>
 
               <div className="grid gap-2 sm:grid-cols-[1fr,auto]">
@@ -931,7 +865,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                         addResubmitLink();
                       }
                     }}
-                    placeholder="Paste a Drive, image, video, or PDF link"
+                    placeholder="Paste shared Google Drive link"
                     className="w-full rounded-xl border border-slate-300 py-3 pl-10 pr-4 text-sm font-bold text-slate-900 outline-none transition-all placeholder:text-slate-400 placeholder:font-medium focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
@@ -942,30 +876,9 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white shadow-sm transition-colors hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   <Plus className="h-4 w-4" />
-                  Add Link
+                  Add Drive Link
                 </button>
               </div>
-
-              {resubmitFiles.length > 0 && (
-                <div className="space-y-2">
-                  {resubmitFiles.map((file, index) => (
-                    <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <FileIcon className="h-4 w-4 shrink-0 text-indigo-500" />
-                        <span className="truncate text-xs font-bold text-slate-800">{file.name}</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setResubmitFiles(prev => prev.filter((_, fileIndex) => fileIndex !== index))}
-                        className="rounded-md p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                        aria-label={`Remove ${file.name}`}
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
 
               {resubmitLinks.length > 0 && (
                 <div className="space-y-2">

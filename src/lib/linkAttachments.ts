@@ -18,6 +18,11 @@ function normalizeLinkedUrl(rawUrl: string) {
   return url;
 }
 
+function isGoogleDriveHost(url: URL) {
+  const host = url.hostname.toLowerCase();
+  return host === 'drive.google.com' || host.endsWith('.drive.google.com') || host === 'docs.google.com' || host.endsWith('.docs.google.com');
+}
+
 function getGoogleDriveFileId(url: URL) {
   const host = url.hostname.toLowerCase();
   const path = url.pathname;
@@ -94,12 +99,24 @@ export function inferLinkedFileType(rawUrl: string) {
 
 export function getLinkedFileName(rawUrl: string) {
   const url = normalizeLinkedUrl(rawUrl);
+  const driveFileId = getGoogleDriveFileId(url);
+  if (driveFileId && isGoogleDriveHost(url)) {
+    if (url.hostname.toLowerCase().includes('docs.google.com')) return 'Google Docs file';
+    if (url.pathname.includes('/folders/')) return 'Google Drive folder';
+    return 'Google Drive file';
+  }
+
   const lastPathPart = decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || '');
   return lastPathPart || url.hostname.replace(/^www\./, '');
 }
 
 export function createLinkedTaskFile(rawUrl: string): UploadedTaskFile {
-  const url = normalizeLinkedUrl(rawUrl).toString();
+  const parsedUrl = normalizeLinkedUrl(rawUrl);
+  if (!isGoogleDriveHost(parsedUrl) || !getGoogleDriveFileId(parsedUrl)) {
+    throw new Error('Paste a shared Google Drive or Google Docs link.');
+  }
+
+  const url = parsedUrl.toString();
   const type = inferLinkedFileType(url);
   const thumbnailUrl = getLinkedFileThumbnailUrl(url) || (type.startsWith('image/') ? url : undefined);
   const id = Math.random().toString(36).substring(7);
