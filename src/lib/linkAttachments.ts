@@ -1,7 +1,19 @@
 import { UploadedTaskFile } from './types';
+import { ensureDriveAccessToken, googleApiKey, hasUsableDriveToken } from './driveAuth';
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif']);
 const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v']);
+const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
+
+type DriveLinkMetadata = {
+  id: string;
+  name?: string;
+  mimeType?: string;
+  size?: string;
+  webViewLink?: string;
+  webContentLink?: string;
+  thumbnailLink?: string;
+};
 
 function getUrlExtension(url: URL) {
   const cleanPath = url.pathname.split('/').pop() || '';
@@ -44,6 +56,30 @@ function getGoogleDriveFileId(url: URL) {
   }
 
   return null;
+}
+
+async function fetchDriveLinkMetadata(fileId: string): Promise<DriveLinkMetadata | null> {
+  const params = new URLSearchParams({
+    fields: 'id,name,mimeType,size,webViewLink,webContentLink,thumbnailLink',
+    supportsAllDrives: 'true',
+  });
+
+  const headers: HeadersInit = {};
+  if (hasUsableDriveToken()) {
+    try {
+      const accessToken = await ensureDriveAccessToken();
+      headers.Authorization = `Bearer ${accessToken}`;
+    } catch {
+      // Public Drive links may still resolve with the API key fallback.
+      if (googleApiKey) params.set('key', googleApiKey);
+    }
+  } else if (googleApiKey) {
+    params.set('key', googleApiKey);
+  }
+
+  const response = await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?${params.toString()}`, { headers });
+  if (!response.ok) return null;
+  return response.json() as Promise<DriveLinkMetadata>;
 }
 
 function getGoogleDocsPreviewUrl(url: URL) {
@@ -97,6 +133,10 @@ export function inferLinkedFileType(rawUrl: string) {
   return 'text/uri-list';
 }
 
+function getTypeFromMetadata(metadata: DriveLinkMetadata | null, fallbackUrl: string) {
+  return metadata?.mimeType || inferLinkedFileType(fallbackUrl);
+}
+
 export function getLinkedFileName(rawUrl: string) {
   const url = normalizeLinkedUrl(rawUrl);
   const driveFileId = getGoogleDriveFileId(url);
@@ -134,8 +174,82 @@ export function createLinkedTaskFile(rawUrl: string): UploadedTaskFile {
   };
 }
 
+export async function createLinkedTaskFileWithMetadata(rawUrl: string): Promise<UploadedTaskFile> {
+  const parsedUrl = normalizeLinkedUrl(rawUrl);
+  if (!isGoogleDriveHost(parsedUrl)) {
+    throw new Error('Paste a shared Google Drive or Google Docs link.');
+  }
+
+  const driveFileId = getGoogleDriveFileId(parsedUrl);
+  if (!driveFileId) {
+    throw new Error('Paste a shared Google Drive or Google Docs link.');
+  }
+
+  const fallbackFile = createLinkedTaskFile(rawUrl);
+  const metadata = await fetchDriveLinkMetadata(driveFileId).catch(() => null);
+  const previewUrl = metadata?.thumbnailLink || fallbackFile.previewUrl;
+  const url = metadata?.webViewLink || fallbackFile.url;
+
+  return {
+    ...fallbackFile,
+    id: driveFileId,
+    name: metadata?.name || fallbackFile.name,
+    type: getTypeFromMetadata(metadata, url),
+    size: Number(metadata?.size || fallbackFile.size || 0),
+    url,
+    storagePath: driveFileId,
+    previewUrl,
+    previewStoragePath: previewUrl ? `drive-thumbnail:${driveFileId}` : fallbackFile.previewStoragePath,
+    driveFileId,
+    webViewLink: metadata?.webViewLink || fallbackFile.webViewLink,
+    downloadUrl: metadata?.webContentLink,
+  };
+}
+
 export function isLinkedTaskFile(file?: Pick<UploadedTaskFile, 'storageProvider'>) {
   return file?.storageProvider === 'link';
+}
+
+export function needsLinkedTaskFileMetadata(file: UploadedTaskFile) {
+  return isLinkedTaskFile(file) && (
+    !file.driveFileId ||
+    !file.previewUrl ||
+    file.name === 'Google Drive file' ||
+    file.name === 'Google Docs file' ||
+    file.name === 'Google Drive folder'
+  );
+}
+
+export async function enrichLinkedTaskFileMetadata(file: UploadedTaskFile): Promise<UploadedTaskFile> {
+  if (!needsLinkedTaskFileMetadata(file)) return file;
+
+  const parsedUrl = normalizeLinkedUrl(file.webViewLink || file.url);
+  const driveFileId = getGoogleDriveFileId(parsedUrl);
+  if (!driveFileId) return file;
+
+  const metadata = await fetchDriveLinkMetadata(driveFileId).catch(() => null);
+  if (!metadata) return {
+    ...file,
+    driveFileId,
+    storagePath: file.storagePath || driveFileId,
+  };
+
+  const previewUrl = metadata.thumbnailLink || file.previewUrl || getLinkedFileThumbnailUrl(file.webViewLink || file.url) || undefined;
+  const url = metadata.webViewLink || file.webViewLink || file.url;
+
+  return {
+    ...file,
+    name: metadata.name || file.name,
+    type: getTypeFromMetadata(metadata, url),
+    size: Number(metadata.size || file.size || 0),
+    url,
+    storagePath: file.storagePath || driveFileId,
+    previewUrl,
+    previewStoragePath: previewUrl ? `drive-thumbnail:${driveFileId}` : file.previewStoragePath,
+    driveFileId,
+    webViewLink: metadata.webViewLink || file.webViewLink,
+    downloadUrl: metadata.webContentLink || file.downloadUrl,
+  };
 }
 
 export function getLinkHostLabel(rawUrl?: string) {

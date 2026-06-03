@@ -4,6 +4,7 @@ import { demoAccounts, initialUsers, initialTasks, userRoleLabels } from './mock
 import { clearAppState, loadAppState, saveAppState } from './localDb';
 import { shouldAutoArchiveTask } from './archiveUtils';
 import { sanitizeHandledBy } from './handlerUtils';
+import { enrichLinkedTaskFileMetadata, needsLinkedTaskFileMetadata } from './linkAttachments';
 import {
   ART_DIRECTOR_WAITING_STATUSES,
   CLOSED_STATUSES,
@@ -794,6 +795,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const sharedDataLoadFailedRef = useRef(false);
   const pendingTaskBroadcastIdsRef = useRef<Set<string>>(new Set());
   const pendingNotificationBroadcastIdsRef = useRef<Set<string>>(new Set());
+  const linkedMetadataBackfillAttemptsRef = useRef<Set<string>>(new Set());
   const [accountProfiles, setAccountProfiles] = useState<AccountProfile[]>(() => readRegisteredUsers());
   const [customResponsibilities, setCustomResponsibilities] = useState<string[]>(() => readCustomResponsibilities());
   const [authProfile, setAuthProfile] = useState<AccountProfile | null>(null);
@@ -899,6 +901,75 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         : task
     )));
+  }, [tasks, authStatus]);
+
+  useEffect(() => {
+    if (authStatus !== 'approved' || !hasLoadedPersistedState.current || tasks.length === 0) return;
+
+    const candidates = tasks.flatMap(task => (
+      task.versions.flatMap(version => (
+        (version.files || [])
+          .filter(file => needsLinkedTaskFileMetadata(file))
+          .map(file => ({ taskId: task.id, fileId: file.id, fileKey: file.driveFileId || file.webViewLink || file.url }))
+      ))
+    )).filter(candidate => !linkedMetadataBackfillAttemptsRef.current.has(`${candidate.taskId}:${candidate.fileKey}`));
+
+    if (candidates.length === 0) return;
+
+    candidates.forEach(candidate => linkedMetadataBackfillAttemptsRef.current.add(`${candidate.taskId}:${candidate.fileKey}`));
+    let isCancelled = false;
+
+    Promise.all(candidates.map(async candidate => {
+      const task = tasks.find(item => item.id === candidate.taskId);
+      const file = task?.versions.flatMap(version => version.files || []).find(item => item.id === candidate.fileId);
+      if (!task || !file) return null;
+
+      const enrichedFile = await enrichLinkedTaskFileMetadata(file);
+      const changed = [
+        'name',
+        'type',
+        'size',
+        'url',
+        'previewUrl',
+        'previewStoragePath',
+        'driveFileId',
+        'webViewLink',
+        'downloadUrl',
+      ].some(key => String(file[key as keyof UploadedTaskFile] || '') !== String(enrichedFile[key as keyof UploadedTaskFile] || ''));
+
+      return changed ? { taskId: task.id, fileId: file.id, file: enrichedFile } : null;
+    })).then(updates => {
+      if (isCancelled) return;
+      const validUpdates = updates.filter(Boolean) as Array<{ taskId: string; fileId: string; file: UploadedTaskFile }>;
+      if (validUpdates.length === 0) return;
+
+      const updatedTaskIds = new Set(validUpdates.map(update => update.taskId));
+      updatedTaskIds.forEach(queueTaskBroadcast);
+      setTasks(prev => prev.map(task => {
+        const taskUpdates = validUpdates.filter(update => update.taskId === task.id);
+        if (taskUpdates.length === 0) return task;
+
+        const versions = task.versions.map(version => ({
+          ...version,
+          files: version.files?.map(file => taskUpdates.find(update => update.fileId === file.id)?.file || file),
+        }));
+        const thumbnailFile = versions[0]?.files?.find(file => file.previewUrl && file.previewStoragePath);
+
+        return {
+          ...task,
+          versions,
+          thumbnailUrl: thumbnailFile?.previewUrl || task.thumbnailUrl,
+          thumbnailStoragePath: thumbnailFile?.previewStoragePath || task.thumbnailStoragePath,
+          updatedAt: new Date().toISOString(),
+        };
+      }));
+    }).catch(error => {
+      console.warn('Could not update linked Drive metadata', error);
+    });
+
+    return () => {
+      isCancelled = true;
+    };
   }, [tasks, authStatus]);
 
   useEffect(() => {

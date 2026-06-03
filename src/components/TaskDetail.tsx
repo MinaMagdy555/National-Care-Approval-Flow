@@ -12,7 +12,7 @@ import { canAssignContributors, getAssignableContributorsForTask, isAssignableHa
 import { UserMultiSelect } from './UserMultiSelect';
 import { CustomSelect } from './CustomSelect';
 import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText } from '../lib/uploadLimits';
-import { createLinkedTaskFile, getLinkHostLabel } from '../lib/linkAttachments';
+import { createLinkedTaskFileWithMetadata, getLinkHostLabel } from '../lib/linkAttachments';
 import { canManageWorkflow, canUserAccessTask, canUserActAsCurrentOwner, getCurrentOwnerUserIds, userCanViewFullWorkspace } from '../lib/workflowUtils';
 import {
   addLowResPreviewsToFiles,
@@ -65,6 +65,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [resubmitLinkUrl, setResubmitLinkUrl] = useState('');
   const [resubmitNote, setResubmitNote] = useState('');
   const [resubmitError, setResubmitError] = useState('');
+  const [isAddingResubmitLink, setIsAddingResubmitLink] = useState(false);
   const [isResubmitting, setIsResubmitting] = useState(false);
   const [repairError, setRepairError] = useState('');
   const [isRepairingFiles, setIsRepairingFiles] = useState(false);
@@ -227,11 +228,13 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     });
   };
 
-  const addResubmitLink = () => {
+  const addResubmitLink = async () => {
+    if (!resubmitLinkUrl.trim() || isAddingResubmitLink) return;
+    setIsAddingResubmitLink(true);
     try {
-      const linkedFile = createLinkedTaskFile(resubmitLinkUrl);
+      const linkedFile = await createLinkedTaskFileWithMetadata(resubmitLinkUrl);
       setResubmitLinks(prev => (
-        prev.some(file => file.url === linkedFile.url)
+        prev.some(file => file.url === linkedFile.url || (file.driveFileId && file.driveFileId === linkedFile.driveFileId))
           ? prev
           : [...prev, linkedFile]
       ));
@@ -239,6 +242,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       setResubmitError('');
     } catch (error) {
       setResubmitError(error instanceof Error ? error.message : 'Enter a valid link.');
+    } finally {
+      setIsAddingResubmitLink(false);
     }
   };
 
@@ -867,7 +872,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                     onKeyDown={event => {
                       if (event.key === 'Enter' && resubmitLinkUrl.trim()) {
                         event.preventDefault();
-                        addResubmitLink();
+                        void addResubmitLink();
                       }
                     }}
                     placeholder="Paste shared Google Drive link"
@@ -876,12 +881,12 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 </div>
                 <button
                   type="button"
-                  onClick={addResubmitLink}
-                  disabled={!resubmitLinkUrl.trim()}
+                  onClick={() => void addResubmitLink()}
+                  disabled={!resubmitLinkUrl.trim() || isAddingResubmitLink}
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white shadow-sm transition-colors hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   <Plus className="h-4 w-4" />
-                  Add Drive Link
+                  {isAddingResubmitLink ? 'Reading Link...' : 'Add Drive Link'}
                 </button>
               </div>
 

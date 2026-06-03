@@ -5,7 +5,7 @@ import { Task, ReviewMode, Priority, TaskType, UploadedTaskFile } from '../lib/t
 import { CustomSelect } from './CustomSelect';
 import { UserMultiSelect } from './UserMultiSelect';
 import { canAssignContributors, getAssignableContributorsForTask, sanitizeHandledBy } from '../lib/handlerUtils';
-import { createLinkedTaskFile, getLinkHostLabel } from '../lib/linkAttachments';
+import { createLinkedTaskFileWithMetadata, getLinkHostLabel } from '../lib/linkAttachments';
 import { getReviewRouteTarget, uniqueIds } from '../lib/workflowUtils';
 import { canUploadWorkAssignment } from '../lib/workAssignmentUtils';
 
@@ -29,6 +29,7 @@ export function CreateTask({
   const [linkedFiles, setLinkedFiles] = useState<UploadedTaskFile[]>([]);
   const [linkUrl, setLinkUrl] = useState('');
   const [fileError, setFileError] = useState('');
+  const [isAddingLink, setIsAddingLink] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const assignmentTask = assignmentTaskId ? tasks.find(task => task.id === assignmentTaskId && task.assignmentPeriod) : null;
   const isAssignmentUploadMode = Boolean(assignmentTask && assignmentTask.status === 'assigned_work');
@@ -87,11 +88,13 @@ export function CreateTask({
     setDeadline(assignmentTask.deadlineText || '');
   }, [assignmentTask?.id]);
 
-  const addLinkedFile = () => {
+  const addLinkedFile = async () => {
+    if (!linkUrl.trim() || isAddingLink) return;
+    setIsAddingLink(true);
     try {
-      const linkedFile = createLinkedTaskFile(linkUrl);
+      const linkedFile = await createLinkedTaskFileWithMetadata(linkUrl);
       setLinkedFiles(prev => (
-        prev.some(file => file.url === linkedFile.url)
+        prev.some(file => file.url === linkedFile.url || (file.driveFileId && file.driveFileId === linkedFile.driveFileId))
           ? prev
           : [...prev, linkedFile]
       ));
@@ -99,6 +102,8 @@ export function CreateTask({
       setFileError('');
     } catch (error) {
       setFileError(error instanceof Error ? error.message : 'Enter a valid link.');
+    } finally {
+      setIsAddingLink(false);
     }
   };
 
@@ -441,7 +446,7 @@ export function CreateTask({
                     onKeyDown={event => {
                       if (event.key === 'Enter' && linkUrl.trim()) {
                         event.preventDefault();
-                        addLinkedFile();
+                        void addLinkedFile();
                       }
                     }}
                     placeholder="Paste shared Google Drive link"
@@ -450,12 +455,12 @@ export function CreateTask({
                 </div>
                 <button
                   type="button"
-                  onClick={addLinkedFile}
-                  disabled={!linkUrl.trim()}
+                  onClick={() => void addLinkedFile()}
+                  disabled={!linkUrl.trim() || isAddingLink}
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white shadow-sm transition-colors hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   <Plus className="h-4 w-4" />
-                  Add Drive Link
+                  {isAddingLink ? 'Reading Link...' : 'Add Drive Link'}
                 </button>
               </div>
 

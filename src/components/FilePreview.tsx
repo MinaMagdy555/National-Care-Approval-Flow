@@ -254,6 +254,21 @@ export function FileContentThumbnail({
     );
   }
 
+  if (isLinkedTaskFile(file)) {
+    const embedUrl = getLinkedFileEmbedUrl(file.webViewLink || file.url);
+    if (embedUrl) {
+      return (
+        <iframe
+          src={embedUrl}
+          title={alt}
+          className={className || 'h-full w-full border-0 bg-white object-cover'}
+          loading="lazy"
+          tabIndex={-1}
+        />
+      );
+    }
+  }
+
   if (allowLocalFile && isLocalOnlyFileUrl(file.url)) {
     const kind = getFileKind(file);
     if (kind === 'image') {
