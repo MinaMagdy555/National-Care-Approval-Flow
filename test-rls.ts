@@ -10,11 +10,11 @@ const key = process.env.VITE_SUPABASE_ANON_KEY || '';
 const supabase = createClient(url, key);
 
 async function test() {
-  const { data, error } = await supabase.from('profiles').select('*');
+  const { data, error } = await supabase.from('app_settings').select('*');
   if (error) {
-    console.error('Error fetching profiles:', error.message);
+    console.error('Error fetching settings:', error.message);
   } else {
-    console.log('Success! Profiles fetched successfully:', data);
+    console.log('Success! Settings fetched successfully:', JSON.stringify(data, null, 2));
   }
 }
 

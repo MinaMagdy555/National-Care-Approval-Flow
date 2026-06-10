@@ -12,6 +12,13 @@ import {
   mergeAppSettings,
   normalizeSettingId,
   sanitizeHandledByWithSettings,
+  resolveAppSettingsWithRealIds,
+  resolveLegacyIds,
+  MINA_ID,
+  MARWA_ID,
+  DINA_ID,
+  AHMED_SOBEEH_ID,
+  FAWZY_ID,
 } from './appSettings';
 import { enrichLinkedTaskFileMetadata, needsLinkedTaskFileMetadata } from './linkAttachments';
 import {
@@ -1610,11 +1617,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
     const recipients = uniqueIds([
       ...getTaskParticipantIds(task, teamLeaderIds),
-      'user_1', // Mina
-      'user_2', // Marwa
-      'user_3', // Dina
-      'user_9', // Sobeeh
-      'user_7', // Fawzy
+      MINA_ID,
+      MARWA_ID,
+      DINA_ID,
+      AHMED_SOBEEH_ID,
+      FAWZY_ID,
     ]);
     const publishDate = new Date(task.scheduledPublishAt!);
     const eventTypeLabel = task.taskType === 'media_buying' ? 'Media buying event' : 'Campaign publish';
@@ -1678,11 +1685,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
     const recipients = uniqueIds([
       ...teamLeaderIds,
-      'user_1', // Mina
-      'user_2', // Marwa
-      'user_3', // Dina
-      'user_9', // Sobeeh
-      'user_7', // Fawzy
+      MINA_ID,
+      MARWA_ID,
+      DINA_ID,
+      AHMED_SOBEEH_ID,
+      FAWZY_ID,
     ]).filter(id => id !== currentUser.id);
 
     const typeLabel = input.taskType === 'media_buying' ? 'Media Buying Ad' : 'Campaign';
@@ -1723,11 +1730,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
     const recipients = uniqueIds([
       ...teamLeaderIds,
-      'user_1', // Mina
-      'user_2', // Marwa
-      'user_3', // Dina
-      'user_9', // Sobeeh
-      'user_7', // Fawzy
+      MINA_ID,
+      MARWA_ID,
+      DINA_ID,
+      AHMED_SOBEEH_ID,
+      FAWZY_ID,
     ]).filter(id => id !== currentUser.id);
 
     const typeLabel = input.taskType === 'media_buying' ? 'Media Buying Ad' : 'Campaign';
@@ -2111,7 +2118,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       authError,
       accountProfiles,
       customResponsibilities,
-      appSettings,
+      appSettings: resolveAppSettingsWithRealIds(appSettings, userList),
       canManageSettings,
       environment,
       tasks,

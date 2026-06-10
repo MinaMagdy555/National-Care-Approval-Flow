@@ -135,7 +135,7 @@ export function Sidebar({
       taskCenterChildren.push({ id: 'ad_queue', label: 'Waiting for Final Rev.', icon: FilePenLine });
     }
 
-    const isDina = currentUser.id === 'user_3';
+    const isDina = currentUser.id === 'user_3' || currentUser.name.toLowerCase().includes('dina') || currentUser.email?.toLowerCase().includes('dina.');
     const showMyTasks = !(appSettings.neverHandlerIds || []).includes(currentUser.id) &&
       (!isFirstRev && !isFinalRev || isDina);
 

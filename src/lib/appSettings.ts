@@ -1,17 +1,17 @@
 import { AppSettings, Priority, PriorityOption, PriorityTone, ResponsibilityOption, Role, TaskType, User } from './types';
 
-export const MINA_ID = 'user_1';
-export const MARWA_ID = 'user_2';
-export const DINA_ID = 'user_3';
-export const MARIAM_ID = 'user_4';
-export const NOREEN_ID = 'user_5';
-export const YOMNA_ID = 'user_6';
-export const FAWZY_ID = 'user_7';
-export const OMAR_ID = 'user_8';
-export const AHMED_SOBEEH_ID = 'user_9';
-export const SAMA_ID = 'user_10';
-export const HANEEN_ID = 'user_11';
-export const REEM_ID = 'user_12';
+export const MINA_ID = '83e02bb4-11f9-41b0-becb-33e6c4c52b2a';
+export const MARWA_ID = 'd65ea68d-1749-45b9-b0f9-1fdaf23b8f94';
+export const DINA_ID = '094d2844-ca2f-401b-8819-b464eace00d2';
+export const MARIAM_ID = 'e0489354-0692-4781-b5cb-b343fd7d278f';
+export const NOREEN_ID = '007c342a-a023-4dcf-844d-c3945c5e27e0';
+export const YOMNA_ID = '8410313e-ed44-43f2-bc74-69d75c53012b';
+export const FAWZY_ID = '6d7f8829-23f3-40d3-ba30-b079fda01899';
+export const OMAR_ID = 'c78ab974-1a47-468f-93b8-a3ebfc4cfdc3';
+export const AHMED_SOBEEH_ID = '697a804f-d7b0-4edb-9a0a-b42f0e7f8b53';
+export const SAMA_ID = '2baf5b98-3788-4bec-a3e4-6d7cfe32c637';
+export const HANEEN_ID = 'c4274078-418a-47b9-a2be-98e75ed89aae';
+export const REEM_ID = 'e620c5ca-fd56-45ba-99a1-33b56be69e48';
 
 const now = new Date().toISOString();
 
@@ -264,4 +264,46 @@ export function priorityToneClasses(tone: PriorityTone, solid = false) {
     purple: 'bg-purple-100 text-purple-700 border-purple-200',
   };
   return classes[tone];
+}
+
+export function resolveLegacyIds(ids: string[], userList: User[]): string[] {
+  if (!userList || userList.length === 0) return ids;
+  return ids.map(id => {
+    if (id === 'user_1') {
+      return userList.find(u => u.email?.toLowerCase().includes('minamagdy5555') || u.name.toLowerCase().includes('mina'))?.id || id;
+    }
+    if (id === 'user_2') {
+      return userList.find(u => u.email?.toLowerCase().includes('marwa.elkady') || u.name.toLowerCase().includes('marwa'))?.id || id;
+    }
+    if (id === 'user_3') {
+      return userList.find(u => u.email?.toLowerCase().includes('dina.') || u.name.toLowerCase().includes('dina'))?.id || id;
+    }
+    if (id === 'user_7') {
+      return userList.find(u => u.email?.toLowerCase().includes('fawzy') || u.name.toLowerCase().includes('fawzy'))?.id || id;
+    }
+    if (id === 'user_8') {
+      return userList.find(u => u.email?.toLowerCase().includes('omarmansoour') || u.name.toLowerCase().includes('omar'))?.id || id;
+    }
+    if (id === 'user_9') {
+      return userList.find(u => u.email?.toLowerCase().includes('sobeeh') || u.name.toLowerCase().includes('sobeeh'))?.id || id;
+    }
+    return id;
+  });
+}
+
+export function resolveAppSettingsWithRealIds(settings: AppSettings, userList: User[]): AppSettings {
+  if (!userList || userList.length === 0) return settings;
+
+  return {
+    ...settings,
+    settingsManagerUserIds: resolveLegacyIds(settings.settingsManagerUserIds, userList),
+    workAssignmentCreatorIds: resolveLegacyIds(settings.workAssignmentCreatorIds, userList),
+    contributorAssignerIds: resolveLegacyIds(settings.contributorAssignerIds, userList),
+    neverHandlerIds: resolveLegacyIds(settings.neverHandlerIds, userList),
+    selfAssignmentBlockedIds: resolveLegacyIds(settings.selfAssignmentBlockedIds, userList),
+    alwaysAssignableHandlerIds: resolveLegacyIds(settings.alwaysAssignableHandlerIds, userList),
+    firstReviewerUserIds: resolveLegacyIds(settings.firstReviewerUserIds, userList),
+    finalReviewerUserIds: resolveLegacyIds(settings.finalReviewerUserIds, userList),
+    viewAllWorkloadUserIds: resolveLegacyIds(settings.viewAllWorkloadUserIds, userList),
+  };
 }
