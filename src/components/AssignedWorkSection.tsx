@@ -6,28 +6,15 @@ import { canCreateWorkAssignment, canManageWorkAssignment, canUploadWorkAssignme
 import { getPriorityLabel } from '../lib/taskUtils';
 import { CustomSelect } from './CustomSelect';
 import { UserMultiSelect } from './UserMultiSelect';
+import { ThemedDatePicker } from './ThemedDatePicker';
+import { ThemedTimePicker } from './ThemedTimePicker';
 import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
+import { getActivePriorityOptions, getPriorityTone, isDeadlineInsideBusinessHours, priorityToneClasses } from '../lib/appSettings';
+import { userCanViewFullWorkspace } from '../lib/workflowUtils';
 
 const CONTROL_CLASS = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10';
 const SELECT_BUTTON_CLASS = 'rounded-xl border-slate-200 px-3 py-2.5 text-sm font-black text-slate-900 shadow-sm hover:bg-slate-50 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10';
-
-const priorityOptions = [
-  { value: 'low', label: 'Low' },
-  { value: 'normal', label: 'Normal' },
-  { value: 'high', label: 'High' },
-  { value: 'urgent', label: 'Urgent' },
-];
-
-function priorityBadgeClass(priority: Priority) {
-  switch (priority) {
-    case 'urgent': return 'bg-rose-100 text-rose-700 border-rose-200';
-    case 'high': return 'bg-amber-100 text-amber-800 border-amber-200';
-    case 'normal': return 'bg-slate-100 text-slate-700 border-slate-200';
-    case 'low': return 'bg-emerald-50 text-emerald-700 border-emerald-100';
-    default: return 'bg-slate-100 text-slate-500 border-slate-200';
-  }
-}
 
 function getUserName(users: ReturnType<typeof useAppStore>['users'], userId: string) {
   return users[userId]?.name || initialUsers.find(user => user.id === userId)?.name || userId;
@@ -66,10 +53,10 @@ function combineDeadline(date: string, time: string) {
   return isDateValue(date) && isTimeValue(time) ? `${date}T${time}` : '';
 }
 
-function getAssignmentGroups(tasks: Task[], users: ReturnType<typeof useAppStore>['users'], currentUserId: string) {
+function getAssignmentGroups(tasks: Task[], users: ReturnType<typeof useAppStore>['users'], currentUserId: string, appSettings: ReturnType<typeof useAppStore>['appSettings']) {
   const groups = new Map<string, Task[]>();
 
-  sortWorkAssignments(tasks).forEach(task => {
+  sortWorkAssignments(tasks, appSettings).forEach(task => {
     task.handledBy.forEach(userId => {
       groups.set(userId, [...(groups.get(userId) || []), task]);
     });
@@ -79,7 +66,7 @@ function getAssignmentGroups(tasks: Task[], users: ReturnType<typeof useAppStore
     .map(([userId, groupTasks]) => ({
       userId,
       name: getUserName(users, userId),
-      tasks: sortWorkAssignments(groupTasks),
+      tasks: sortWorkAssignments(groupTasks, appSettings),
     }))
     .sort((a, b) => {
       if (a.userId === currentUserId) return -1;
@@ -91,27 +78,62 @@ function getAssignmentGroups(tasks: Task[], users: ReturnType<typeof useAppStore
 export function AssignedWorkSection({
   tasks,
   onOpenAssignmentUpload,
+  onOpenTask,
 }: {
   tasks: Task[];
   onOpenAssignmentUpload: (taskId: string) => void;
+  onOpenTask?: (taskId: string) => void;
 }) {
-  const { currentUser, userList, users, createWorkAssignment, updateWorkAssignment } = useAppStore();
+  const { currentUser, userList, users, appSettings, updateAppSettings, createWorkAssignment, updateWorkAssignment } = useAppStore();
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<Priority>('normal');
   const [deadlineDate, setDeadlineDate] = useState('');
   const [deadlineTime, setDeadlineTime] = useState('');
+  const [isOvertime, setIsOvertime] = useState(false);
+  const [needsContentRevision, setNeedsContentRevision] = useState(false);
+  const [taskType, setTaskType] = useState<string>('video');
+  const [showAllUsers, setShowAllUsers] = useState(false);
   const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
   const [links, setLinks] = useState<string[]>([]);
   const [linkInput, setLinkInput] = useState('');
-  const canCreate = canCreateWorkAssignment(currentUser);
-  const assigneeOptions = userList.filter(user => user.id !== 'guest' && isWorkAssignmentAssignee(user, currentUser.id));
-  const assignmentGroups = getAssignmentGroups(tasks, users, currentUser.id);
-  const deadlineAt = combineDeadline(deadlineDate, deadlineTime);
-  const shouldShow = canCreate || tasks.length > 0;
+  const [deadlineError, setDeadlineError] = useState('');
+  const canCreate = canCreateWorkAssignment(currentUser, appSettings);
+  const priorityOptions = getActivePriorityOptions(appSettings);
+  const assigneeOptions = userList.filter(user => {
+    if (user.id === 'guest') return false;
+    return isWorkAssignmentAssignee(user, currentUser.id, appSettings);
+  });
+  
+  const suggestedUsers = assigneeOptions.filter(user => {
+    const isVideoHandler = appSettings.videoOnlyHandlerIds.includes(user.id);
+    if (taskType === 'video') {
+      return isVideoHandler;
+    } else {
+      return !isVideoHandler;
+    }
+  });
 
-  if (!shouldShow) return null;
+  const otherUsers = assigneeOptions.filter(user => !suggestedUsers.some(su => su.id === user.id));
+
+  const canViewAllWorkload = userCanViewFullWorkspace(currentUser, appSettings);
+
+  const visibleTasks = tasks.filter(task => {
+    return canViewAllWorkload || task.handledBy.includes(currentUser.id) || task.createdBy === currentUser.id;
+  });
+
+  const assignmentGroups = getAssignmentGroups(visibleTasks, users, currentUser.id, appSettings);
+  const deadlineAt = combineDeadline(deadlineDate, deadlineTime);
+  const deadlineValidation = deadlineAt ? isDeadlineInsideBusinessHours(appSettings, deadlineAt, new Date(), isOvertime) : { ok: false, message: 'Select a deadline.' };
+
+  const normalizeSettingId = (value: string) => {
+    return value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '') || `custom_${Date.now().toString(36)}`;
+  };
 
   const resetForm = () => {
     setEditingTaskId(null);
@@ -120,9 +142,14 @@ export function AssignedWorkSection({
     setPriority('normal');
     setDeadlineDate('');
     setDeadlineTime('');
+    setIsOvertime(false);
+    setNeedsContentRevision(false);
+    setTaskType('video');
+    setShowAllUsers(false);
     setAssigneeIds([]);
     setLinks([]);
     setLinkInput('');
+    setDeadlineError('');
   };
 
   const addLink = () => {
@@ -134,6 +161,12 @@ export function AssignedWorkSection({
 
   const submitAssignment = (event: React.FormEvent) => {
     event.preventDefault();
+    const validation = isDeadlineInsideBusinessHours(appSettings, deadlineAt, new Date(), isOvertime);
+    if (!validation.ok) {
+      setDeadlineError(validation.message);
+      return;
+    }
+
     const input = {
       name,
       description,
@@ -141,6 +174,9 @@ export function AssignedWorkSection({
       deadlineAt,
       assignmentLinks: normalizeLinks(links),
       handledByIds: assigneeIds,
+      isOvertime,
+      taskType,
+      needsContentRevision,
     };
 
     if (editingTaskId) {
@@ -159,11 +195,24 @@ export function AssignedWorkSection({
     setPriority(task.priority === 'not_set' ? 'normal' : task.priority);
     setDeadlineDate(deadline.date);
     setDeadlineTime(deadline.time);
+    setIsOvertime(task.isOvertime || false);
+    setNeedsContentRevision(task.needsContentRevision || false);
+    setTaskType(task.taskType || 'video');
     setAssigneeIds(task.handledBy);
     setLinks(task.assignmentLinks || []);
   };
 
-  const formIsValid = name.trim() && description.trim() && deadlineAt && assigneeIds.length > 0;
+  const handleCardClick = (task: Task, canUpload: boolean, isUploaded: boolean) => {
+    if (isUploaded) {
+      onOpenTask?.(task.id);
+    } else if (canUpload) {
+      onOpenAssignmentUpload(task.id);
+    } else {
+      onOpenTask?.(task.id);
+    }
+  };
+
+  const formIsValid = name.trim() && description.trim() && deadlineAt && deadlineValidation.ok && assigneeIds.length > 0;
 
   return (
     <section className="space-y-4">
@@ -238,6 +287,43 @@ export function AssignedWorkSection({
 
             <div className="space-y-3">
               <div>
+                <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Task Type *</label>
+                <div className="flex gap-2 items-center">
+                  <div className="flex-1">
+                    <CustomSelect
+                      value={taskType}
+                      onChange={value => setTaskType(value)}
+                      options={(appSettings.taskTypes || []).map(t => ({ value: t, label: t.toUpperCase().replace('_', ' ') }))}
+                      buttonClassName={SELECT_BUTTON_CLASS}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newType = prompt('Enter new task type name:');
+                      if (!newType || !newType.trim()) return;
+                      const normalized = normalizeSettingId(newType);
+                      updateAppSettings(settings => {
+                        const current = settings.taskTypes || [];
+                        if (current.includes(normalized)) {
+                          alert('This task type already exists.');
+                          return settings;
+                        }
+                        return {
+                          ...settings,
+                          taskTypes: [...current, normalized]
+                        };
+                      });
+                      setTaskType(normalized);
+                    }}
+                    className="h-11 px-3 rounded-xl border border-slate-200 hover:bg-slate-50 text-xs font-black uppercase tracking-wider text-slate-500 hover:text-slate-800 transition-colors shrink-0"
+                    title="Add new task type"
+                  >
+                    + Add Type
+                  </button>
+                </div>
+              </div>
+              <div>
                 <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Priority *</label>
                 <CustomSelect
                   value={priority}
@@ -248,39 +334,86 @@ export function AssignedWorkSection({
               </div>
               <div>
                 <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Deadline *</label>
-                <div className="grid gap-2 sm:grid-cols-[1fr,120px]">
-                  <div className="relative">
-                    <CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={deadlineDate}
-                      onChange={event => setDeadlineDate(event.target.value)}
-                      placeholder="YYYY-MM-DD"
-                      className={`${CONTROL_CLASS} pl-10`}
-                    />
-                  </div>
-                  <div className="relative">
-                    <Clock3 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={deadlineTime}
-                      onChange={event => setDeadlineTime(event.target.value)}
-                      placeholder="HH:MM"
-                      className={`${CONTROL_CLASS} pl-10`}
-                    />
+                <div className="grid gap-2 sm:grid-cols-[1fr,140px]">
+                  <ThemedDatePicker
+                    value={deadlineDate}
+                    onChange={val => {
+                      setDeadlineDate(val);
+                      setDeadlineError('');
+                    }}
+                  />
+                  <ThemedTimePicker
+                    value={deadlineTime}
+                    onChange={val => {
+                      setDeadlineTime(val);
+                      setDeadlineError('');
+                    }}
+                  />
+                </div>
+                {(deadlineError || (deadlineAt && !deadlineValidation.ok)) && (
+                  <p className="mt-1.5 text-xs font-bold text-rose-600">{deadlineError || deadlineValidation.message}</p>
+                )}
+                <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold text-slate-400">
+                    Working hours: {appSettings.businessCalendar.startTime} - {appSettings.businessCalendar.endTime}
+                  </p>
+                  <div className="flex gap-2">
+                    <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-0.5 text-[11px] font-black uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={isOvertime}
+                        onChange={event => {
+                          setIsOvertime(event.target.checked);
+                          setDeadlineError('');
+                        }}
+                        className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      Overtime Task
+                    </label>
+                    <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-0.5 text-[11px] font-black uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={needsContentRevision}
+                        onChange={event => {
+                          setNeedsContentRevision(event.target.checked);
+                        }}
+                        className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      Needs Content Revision
+                    </label>
                   </div>
                 </div>
               </div>
               <div className="space-y-2">
-                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Assignees *</label>
+                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Suggested Assignees (based on Task Type) *</label>
                 <UserMultiSelect
-                  users={assigneeOptions}
+                  users={suggestedUsers}
                   selectedIds={assigneeIds}
                   onChange={setAssigneeIds}
-                  emptyText="No users available"
+                  emptyText="No suggested users available"
                 />
+
+                {otherUsers.length > 0 && (
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowAllUsers(!showAllUsers)}
+                      className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-slate-400 hover:text-indigo-600 transition-colors"
+                    >
+                      {showAllUsers ? '- Hide other team members' : '+ Show other team members (outside filter)'}
+                    </button>
+                    {showAllUsers && (
+                      <div className="mt-2 animate-in fade-in duration-200">
+                        <UserMultiSelect
+                          users={otherUsers}
+                          selectedIds={assigneeIds}
+                          onChange={setAssigneeIds}
+                          emptyText="No other users available"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="flex flex-col gap-2 sm:flex-row">
                 <button
@@ -326,16 +459,23 @@ export function AssignedWorkSection({
                 const creatorName = getUserName(users, task.createdBy);
                 const isUploaded = Boolean(task.assignmentUploadedAt || task.status !== 'assigned_work');
                 const canUpload = canUploadWorkAssignment(task, currentUser);
-                const canEdit = canManageWorkAssignment(task, currentUser);
+                const canEdit = canManageWorkAssignment(task, currentUser, appSettings);
                 const teamStatus = assigneeNames.length > 1 ? `Team task (${assigneeNames.length} people)` : 'Solo task';
 
                 return (
-                  <article key={`${group.userId}-${task.id}`} className={cn('rounded-2xl border bg-white p-4 shadow-sm transition-colors', isUploaded ? 'border-emerald-100 bg-emerald-50/30' : 'border-slate-200')}>
+                  <article
+                    key={`${group.userId}-${task.id}`}
+                    onClick={() => handleCardClick(task, canUpload, isUploaded)}
+                    className={cn(
+                      'rounded-2xl border bg-white p-4 shadow-sm transition-all cursor-pointer hover:border-indigo-300 hover:shadow-md hover:-translate-y-0.5',
+                      isUploaded ? 'border-emerald-100 bg-emerald-50/30' : 'border-slate-200'
+                    )}
+                  >
                     <div className="mb-3 flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="mb-2 flex flex-wrap items-center gap-2">
-                          <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide', priorityBadgeClass(task.priority))}>
-                            {getPriorityLabel(task.priority)}
+                          <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide', priorityToneClasses(getPriorityTone(appSettings, task.priority)))}>
+                            {getPriorityLabel(task.priority, appSettings)}
                           </span>
                           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-slate-500">
                             {teamStatus}
@@ -352,7 +492,10 @@ export function AssignedWorkSection({
                       {canEdit && (
                         <button
                           type="button"
-                          onClick={() => startEditing(task)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            startEditing(task);
+                          }}
                           className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-indigo-600"
                           aria-label={`Edit ${task.name}`}
                         >
@@ -372,7 +515,14 @@ export function AssignedWorkSection({
                     {(task.assignmentLinks || []).length > 0 && (
                       <div className="mb-3 flex flex-wrap gap-2">
                         {(task.assignmentLinks || []).map(link => (
-                          <a key={link} href={link} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-black text-indigo-600 hover:bg-indigo-50">
+                          <a
+                            key={link}
+                            href={link}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(event) => event.stopPropagation()}
+                            className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-black text-indigo-600 hover:bg-indigo-50"
+                          >
                             <Link2 className="h-3.5 w-3.5 shrink-0" />
                             <span className="truncate">{link}</span>
                           </a>
@@ -382,7 +532,10 @@ export function AssignedWorkSection({
 
                     <button
                       type="button"
-                      onClick={() => onOpenAssignmentUpload(task.id)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onOpenAssignmentUpload(task.id);
+                      }}
                       disabled={isUploaded || !canUpload}
                       className={cn(
                         'inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-black transition-colors',

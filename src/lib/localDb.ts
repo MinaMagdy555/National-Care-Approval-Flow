@@ -1,4 +1,4 @@
-import { Notification, Task } from './types';
+import { AppSettings, Notification, Task } from './types';
 
 const DB_NAME = 'national-care-approval-flow';
 const DB_VERSION = 1;
@@ -8,6 +8,7 @@ const STATE_KEY = 'current';
 export interface PersistedAppState {
   tasks: Task[];
   notifications: Notification[];
+  settings?: AppSettings;
 }
 
 function openDatabase(): Promise<IDBDatabase> {

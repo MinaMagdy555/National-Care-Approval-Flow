@@ -8,6 +8,7 @@ import { canAssignContributors, getAssignableContributorsForTask, sanitizeHandle
 import { createLinkedTaskFileWithMetadata, getLinkHostLabel } from '../lib/linkAttachments';
 import { getReviewRouteTarget, uniqueIds } from '../lib/workflowUtils';
 import { canUploadWorkAssignment } from '../lib/workAssignmentUtils';
+import { getTaskTypeLabel } from '../lib/taskUtils';
 
 const FORM_SELECT_BUTTON_CLASS = 'rounded-xl border-slate-300 px-4 py-3 text-sm font-bold text-slate-900 shadow-none hover:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500';
 
@@ -18,7 +19,7 @@ export function CreateTask({
   assignmentTaskId?: string | null;
   onAssignmentUploaded?: (taskId: string) => void;
 }) {
-  const { tasks, currentUser, userList, users, environment, addTask, addNotification, submitWorkAssignmentUpload } = useAppStore();
+  const { tasks, currentUser, userList, users, environment, addTask, addNotification, submitWorkAssignmentUpload, appSettings } = useAppStore();
   const [taskName, setTaskName] = useState('');
   const [createdBy, setCreatedBy] = useState('');
   const [taskType, setTaskType] = useState<TaskType>('video');
@@ -28,6 +29,7 @@ export function CreateTask({
   const [publishNote, setPublishNote] = useState('');
   const [linkedFiles, setLinkedFiles] = useState<UploadedTaskFile[]>([]);
   const [linkUrl, setLinkUrl] = useState('');
+  const [customFileName, setCustomFileName] = useState('');
   const [fileError, setFileError] = useState('');
   const [isAddingLink, setIsAddingLink] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
@@ -41,21 +43,17 @@ export function CreateTask({
   const isReviewerCreatedTask = selectedCreatorRole === 'reviewer' || selectedCreatorRole === 'admin';
   const effectiveReviewMode = isReviewerCreatedTask ? 'direct_to_ad' : reviewMode;
   const routeTarget = getReviewRouteTarget(effectiveReviewMode);
-  const canManageAssignedContributors = !isAssignmentUploadMode && canAssignContributors(currentUser.id);
+  const canManageAssignedContributors = !isAssignmentUploadMode && canAssignContributors(currentUser.id, appSettings);
   const creatorOptions = workspaceUsers
     .filter(user => ['team_member', 'reviewer', 'admin'].includes(user.role))
     .map(user => ({ value: user.id, label: user.name }));
   const contributorOptions = canManageAssignedContributors
-    ? getAssignableContributorsForTask(workspaceUsers, taskType, selectedCreatorId)
+    ? getAssignableContributorsForTask(workspaceUsers, taskType, selectedCreatorId, appSettings)
     : [];
-  const taskTypeOptions = [
-    { value: 'video', label: 'Video' },
-    { value: 'ai_packet', label: 'AI Packets' },
-    { value: 'sales_material', label: 'Sales Material' },
-    { value: 'website_material', label: 'Website Material' },
-    { value: 'campaign', label: 'Campaign' },
-    { value: 'others', label: 'Others' },
-  ];
+  const taskTypeOptions = (appSettings?.taskTypes || ['video', 'ai_packet', 'sales_material', 'website_material', 'campaign', 'others']).map(t => ({
+    value: t,
+    label: getTaskTypeLabel(t)
+  }));
   const reviewModeOptions = [
     { value: 'full_review', label: 'Full Review' },
     { value: 'quick_look', label: 'Quick Look' },
@@ -86,6 +84,9 @@ export function CreateTask({
     setAssignedContributorIds([]);
     setPriority(assignmentTask.priority === 'not_set' ? 'normal' : assignmentTask.priority);
     setDeadline(assignmentTask.deadlineText || '');
+    if (assignmentTask.taskType) {
+      setTaskType(assignmentTask.taskType as TaskType);
+    }
   }, [assignmentTask?.id]);
 
   const addLinkedFile = async () => {
@@ -93,12 +94,22 @@ export function CreateTask({
     setIsAddingLink(true);
     try {
       const linkedFile = await createLinkedTaskFileWithMetadata(linkUrl);
+      if (taskType === 'video' && !linkedFile.type.startsWith('video/')) {
+        throw new Error('This is a video task. Please provide a link to a video file.');
+      }
+      if (customFileName.trim()) {
+        linkedFile.name = customFileName.trim();
+      } else if (!linkedFile.name || linkedFile.name === 'Google Drive file' || linkedFile.name === 'Google Docs file' || linkedFile.name === 'Google Drive folder' || linkedFile.name === 'Uploaded file') {
+        const nextIndex = linkedFiles.length + 1;
+        linkedFile.name = taskName ? (linkedFiles.length > 0 ? `${taskName} (${nextIndex})` : taskName) : 'Attachment';
+      }
       setLinkedFiles(prev => (
         prev.some(file => file.url === linkedFile.url || (file.driveFileId && file.driveFileId === linkedFile.driveFileId))
           ? prev
           : [...prev, linkedFile]
       ));
       setLinkUrl('');
+      setCustomFileName('');
       setFileError('');
     } catch (error) {
       setFileError(error instanceof Error ? error.message : 'Enter a valid link.');
@@ -116,10 +127,15 @@ export function CreateTask({
     if (!taskName || !selectedCreatorId || !hasAttachments) return;
     if (isAssignmentUploadMode && (!assignmentTask || !canUploadAssignment)) return;
 
+    const taskFiles = [...linkedFiles];
+    if (taskType === 'video' && !taskFiles.some(file => file.type.startsWith('video/'))) {
+      setFileError('This is a video task. Please provide a link to a video file.');
+      return;
+    }
+
     const creator = users[selectedCreatorId] || (selectedCreatorId === currentUser.id ? currentUser : undefined);
     const newTaskId = assignmentTask?.id || Math.random().toString(36).substring(7);
     const newTaskCode = assignmentTask?.code || `TSK-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
-    const taskFiles = [...linkedFiles];
     const thumbnailFile = taskFiles.find(file => file.previewUrl && file.previewStoragePath);
 
     if (isAssignmentUploadMode && assignmentTask) {
@@ -160,7 +176,7 @@ export function CreateTask({
       : routeTarget.ownerRole === 'art_director'
         ? workspaceUsers.filter(user => user.role === 'art_director').map(user => user.id)
         : [];
-    const handledByIds = canManageAssignedContributors ? sanitizeHandledBy(assignedContributorIds, currentUser.id) : [];
+    const handledByIds = canManageAssignedContributors ? sanitizeHandledBy(assignedContributorIds, currentUser.id, appSettings) : [];
 
     const newTask: Task = {
       id: newTaskId,
@@ -342,6 +358,7 @@ export function CreateTask({
                     onChange={value => setTaskType(value as TaskType)}
                     options={taskTypeOptions}
                     buttonClassName={FORM_SELECT_BUTTON_CLASS}
+                    disabled={isAssignmentUploadMode}
                   />
                 </div>
                 <div className="col-span-2">
@@ -361,9 +378,7 @@ export function CreateTask({
                   <div>
                     <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Assigned Contributors</label>
                     <p className="text-xs font-semibold text-slate-500">
-                      {taskType === 'video'
-                        ? 'Video tasks can assign Mina and Yomna only.'
-                        : 'Non-video tasks can assign Mina and team contributors except Yomna.'}
+                      Select team members to work on this task. Suggestions are based on task type and user settings.
                     </p>
                   </div>
                   <UserMultiSelect
@@ -382,7 +397,10 @@ export function CreateTask({
                         type="datetime-local"
                         value={scheduledPublishAt}
                         onChange={event => setScheduledPublishAt(event.target.value)}
-                        className="w-full rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 outline-none transition-all focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500"
+                        onClick={(e) => {
+                          try { e.currentTarget.showPicker(); } catch (err) {}
+                        }}
+                        className="w-full rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 outline-none transition-all focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500 cursor-pointer"
                       />
                     </div>
                     <div>
@@ -400,10 +418,12 @@ export function CreateTask({
               </div>
             </div>
 
-            {isReviewer && (
+            {(isReviewer || isAssignmentUploadMode) && (
               <div className="grid grid-cols-1 gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
                  <div className="col-span-2 mb-1">
-                   <h4 className="text-xs font-black text-slate-900 uppercase tracking-widest">Moderator Setup</h4>
+                   <h4 className="text-xs font-black text-slate-900 uppercase tracking-widest">
+                     {isAssignmentUploadMode ? 'Assignment Info' : 'Moderator Setup'}
+                   </h4>
                  </div>
                  <div>
                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Priority *</label>
@@ -413,16 +433,18 @@ export function CreateTask({
                       options={priorityOptions}
                       placeholder="Select priority"
                       buttonClassName="rounded-lg border-slate-300 px-3 py-2 text-sm font-bold text-slate-900 shadow-none hover:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      disabled={isAssignmentUploadMode}
                     />
                  </div>
                  <div>
                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Deadline</label>
                     <input 
                       type="text" 
+                      readOnly={isAssignmentUploadMode}
                       value={deadline}
                       onChange={e => setDeadline(e.target.value)}
                       placeholder="e.g. End of day tomorrow" 
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all placeholder:font-medium"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all placeholder:font-medium read-only:bg-slate-100 read-only:text-slate-500"
                     />
                  </div>
               </div>
@@ -435,6 +457,16 @@ export function CreateTask({
               <p className="mb-3 text-xs font-semibold text-slate-500">
                 Paste a shared Google Drive or Google Docs link. The task preview opens inside this tool.
               </p>
+
+              <div className="mb-3">
+                <input
+                  type="text"
+                  value={customFileName}
+                  onChange={e => setCustomFileName(e.target.value)}
+                  placeholder="File Name (Optional)"
+                  className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm font-bold text-slate-900 outline-none transition-all placeholder:text-slate-400 placeholder:font-medium focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
 
               <div className="mt-3 grid gap-2 sm:grid-cols-[1fr,auto]">
                 <div className="relative">

@@ -1,16 +1,12 @@
 export type Role = 'team_member' | 'reviewer' | 'art_director' | 'team_leader' | 'manager' | 'developer' | 'marketing_manager' | 'admin';
 export type Environment = 'production' | 'demo' | 'archived';
 export type ReviewMode = 'full_review' | 'quick_look' | 'direct_to_ad';
-export type Priority = 'low' | 'normal' | 'high' | 'urgent' | 'not_set';
+export type Priority = string;
 export type AssignmentPeriod = 'day' | 'week' | 'month';
+export type PriorityTone = 'emerald' | 'slate' | 'amber' | 'rose' | 'blue' | 'indigo' | 'purple';
 
-export type TaskType = 
-  | 'video' 
-  | 'ai_packet'
-  | 'sales_material'
-  | 'website_material'
-  | 'campaign'
-  | 'others';
+
+export type TaskType = string;
 
 export type TaskStatus = 
   | 'draft'
@@ -27,7 +23,10 @@ export type TaskStatus =
   | 'team_leader_notified'
   | 'completed'
   | 'archived'
-  | 'reopened_after_approval';
+  | 'reopened_after_approval'
+  | 'on_hold'
+  | 'waiting_content_revision'
+  | 'changes_requested_by_content';
 
 export interface User {
   id: string;
@@ -57,6 +56,51 @@ export interface AccountProfile {
   approvedBy?: string | null;
   approvedAt?: string | null;
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface ResponsibilityOption {
+  id: string;
+  label: string;
+  permissionRole: Role;
+  grantsSettingsAccess?: boolean;
+}
+
+export interface PriorityOption {
+  id: string;
+  label: string;
+  tone: PriorityTone;
+  sortOrder: number;
+  active: boolean;
+}
+
+export interface BusinessCalendarSettings {
+  timezone: string;
+  workdays: number[];
+  startTime: string;
+  endTime: string;
+}
+
+export interface AppSettings {
+  responsibilities: ResponsibilityOption[];
+  priorities: PriorityOption[];
+  businessCalendar: BusinessCalendarSettings;
+  settingsManagerUserIds: string[];
+  settingsManagerResponsibilityIds: string[];
+  workAssignmentCreatorIds: string[];
+  contributorAssignerIds: string[];
+  neverHandlerIds: string[];
+  selfAssignmentBlockedIds: string[];
+  videoOnlyHandlerIds: string[];
+  alwaysAssignableHandlerIds: string[];
+  flowLabels: Record<string, string>;
+  customPermissions?: Array<{ id: string; label: string; userIds: string[] }>;
+  taskTypes?: string[];
+  campaignPlatforms?: string[];
+  hiddenColumns?: string[];
+  firstReviewerUserIds?: string[];
+  finalReviewerUserIds?: string[];
+  viewAllWorkloadUserIds?: string[];
   updatedAt: string;
 }
 
@@ -109,6 +153,16 @@ export interface TaskCommentSection {
   imageStoragePath?: string;
 }
 
+export interface TaskCommentEditVersion {
+  id: string;
+  previousMessage?: string;
+  previousSections: TaskCommentSection[];
+  nextMessage?: string;
+  nextSections: TaskCommentSection[];
+  editedBy: string;
+  editedAt: string;
+}
+
 export interface TaskComment {
   id: string;
   authorId: string;
@@ -117,16 +171,26 @@ export interface TaskComment {
     | 'request_edits'
     | 'sent_to_marwa'
     | 'marwa_rejection'
+    | 'content_approved'
+    | 'content_rejected'
     | 'assignment_change'
     | 'review_route_change'
     | 'publish_schedule_change'
     | 'campaign_published'
     | 'work_assignment_created'
     | 'work_assignment_updated'
-    | 'work_assignment_uploaded';
+    | 'work_assignment_uploaded'
+    | 'version_added';
   message?: string;
   sections: TaskCommentSection[];
   createdAt: string;
+  updatedAt?: string;
+  editedBy?: string;
+  isEdited?: boolean;
+  editHistory?: TaskCommentEditVersion[];
+  deletedAt?: string;
+  deletedBy?: string;
+  isDeleted?: boolean;
 }
 
 export interface Task {
@@ -153,6 +217,10 @@ export interface Task {
   publishNote?: string | null;
   publishedAt?: string | null;
   publishReminderSentAt?: string | null;
+  platform?: string | null;
+  weekReminderSentAt?: string | null;
+  budgetAmount?: number | null;
+  budgetCurrency?: string | null;
   versions: TaskVersion[];
   comments?: TaskComment[];
   thumbnailUrl: string;
@@ -161,6 +229,9 @@ export interface Task {
   driveMetadataFileId?: string;
   archivedAt?: string | null;
   archivedReason?: string | null;
+  isOvertime?: boolean | null;
+  needsContentRevision?: boolean | null;
+  previousStatusBeforeHold?: TaskStatus | null;
   createdAt: string;
   updatedAt: string;
 }

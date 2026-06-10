@@ -1,9 +1,18 @@
 import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
-import { AccountProfile, AuthStatus, User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile, ReviewMode } from './types';
-import { demoAccounts, initialUsers, initialTasks, userRoleLabels } from './mockData';
+import { AccountProfile, AppSettings, AuthStatus, User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile, ReviewMode } from './types';
+import { initialUsers, initialTasks, userRoleLabels } from './mockData';
+import { supabase } from './supabaseClient';
 import { clearAppState, loadAppState, saveAppState } from './localDb';
 import { shouldAutoArchiveTask } from './archiveUtils';
 import { sanitizeHandledBy } from './handlerUtils';
+import {
+  canManageAppSettings,
+  defaultAppSettings,
+  getResponsibilityLabelForRole,
+  mergeAppSettings,
+  normalizeSettingId,
+  sanitizeHandledByWithSettings,
+} from './appSettings';
 import { enrichLinkedTaskFileMetadata, needsLinkedTaskFileMetadata } from './linkAttachments';
 import {
   ART_DIRECTOR_WAITING_STATUSES,
@@ -19,12 +28,15 @@ import {
 import { canCreateWorkAssignment, canManageWorkAssignment, getAssignmentPeriodFromDeadline } from './workAssignmentUtils';
 import {
   fetchDriveNotifications,
+  fetchDriveSettings,
   fetchDriveTasks,
   importDriveSelectionToTasks,
   uploadTaskFiles,
+  upsertDriveSettings,
   upsertDriveNotifications,
   upsertDriveTask,
   USE_SHARED_DRIVE_DATA,
+  deleteDriveTask,
 } from './driveDb';
 import {
   clearDriveSession,
@@ -47,6 +59,9 @@ type WorkAssignmentInput = {
   deadlineAt: string;
   assignmentLinks: string[];
   handledByIds: string[];
+  isOvertime?: boolean;
+  taskType?: string;
+  needsContentRevision?: boolean;
 };
 
 type WorkAssignmentUploadPayload = {
@@ -60,17 +75,16 @@ type WorkAssignmentUploadPayload = {
   driveFolderId?: string;
 };
 
-const CURRENT_USER_STORAGE_KEY = 'national-care-current-user-id';
-const REGISTERED_PASSWORDS_STORAGE_KEY = 'national-care-registered-passwords';
-const REGISTERED_USERS_STORAGE_KEY = 'national-care-registered-users';
-const USER_OVERRIDES_STORAGE_KEY = 'national-care-user-overrides';
-const CUSTOM_RESPONSIBILITIES_STORAGE_KEY = 'national-care-custom-responsibilities';
-const DELETED_USER_IDS_STORAGE_KEY = 'national-care-deleted-user-ids';
-const REMOVED_TEST_ACCOUNT_STORAGE_KEY = 'national-care-removed-minamagdy5555-account';
-const REMOVED_TEST_ACCOUNT_EMAIL = 'minamagdy5555@gmail.com';
-const DEMO_DISABLED_AFTER_SIGNUP_USER_IDS = new Set(['user_7', 'user_8']);
 const SHARED_DATA_POLL_INTERVAL_MS = 60 * 1000;
 const GUEST_SEED_ID_PREFIX = 'guest_seed_';
+const HUMAN_COMMENT_ACTIONS = new Set<TaskComment['action']>([
+  'review_note',
+  'request_edits',
+  'sent_to_marwa',
+  'marwa_rejection',
+  'content_approved',
+  'content_rejected',
+]);
 const GUEST_USER: User = {
   id: 'guest',
   name: 'Guest',
@@ -86,25 +100,6 @@ type AuthActionResult = {
   ok: boolean;
   message?: string;
   needsEmailConfirmation?: boolean;
-};
-
-type RegisteredPasswordRecord = {
-  userId: string;
-  email: string;
-  salt: string;
-  passwordHash: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type UserOverrideRecord = {
-  id: string;
-  email?: string | null;
-  role: Role;
-  requestedRole?: Role;
-  approvalStatus?: User['approvalStatus'];
-  jobTitle?: string;
-  isAdmin?: boolean;
 };
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -134,297 +129,7 @@ function normalizeEmail(value: string) {
   return value.trim().toLowerCase();
 }
 
-function readRegisteredPasswords(): Record<string, RegisteredPasswordRecord> {
-  if (typeof window === 'undefined') return {};
 
-  try {
-    const raw = window.localStorage.getItem(REGISTERED_PASSWORDS_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, RegisteredPasswordRecord>;
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function readRegisteredUsers(): AccountProfile[] {
-  if (typeof window === 'undefined') return [];
-
-  try {
-    const raw = window.localStorage.getItem(REGISTERED_USERS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as AccountProfile[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeRegisteredUsers(profiles: AccountProfile[]) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(REGISTERED_USERS_STORAGE_KEY, JSON.stringify(profiles));
-}
-
-function removeRegisteredAccountByUserId(userId: string) {
-  const profiles = readRegisteredUsers();
-  const profile = profiles.find(item => item.id === userId);
-  if (!profile) return { profiles, removed: false };
-
-  const nextProfiles = profiles.filter(item => item.id !== userId);
-  const records = readRegisteredPasswords();
-  const nextRecords = Object.fromEntries(
-    Object.entries(records).filter(([email, record]) => record.userId !== userId && normalizeEmail(email) !== normalizeEmail(profile.email))
-  ) as Record<string, RegisteredPasswordRecord>;
-
-  writeRegisteredUsers(nextProfiles);
-  writeRegisteredPasswords(nextRecords);
-  return { profiles: nextProfiles, removed: true };
-}
-
-function removeRegisteredAccountByEmail(email: string) {
-  const normalizedEmail = normalizeEmail(email);
-  const profiles = readRegisteredUsers();
-  const profile = profiles.find(item => normalizeEmail(item.email) === normalizedEmail);
-  const records = readRegisteredPasswords();
-  const record = records[normalizedEmail];
-  const userId = profile?.id || record?.userId;
-
-  if (userId) return removeRegisteredAccountByUserId(userId);
-
-  if (record) {
-    const nextRecords = { ...records };
-    delete nextRecords[normalizedEmail];
-    writeRegisteredPasswords(nextRecords);
-    return { profiles, removed: true };
-  }
-
-  return { profiles, removed: false };
-}
-
-function removeRequestedTestAccountOnce() {
-  if (typeof window === 'undefined') return;
-  if (window.localStorage.getItem(REMOVED_TEST_ACCOUNT_STORAGE_KEY)) return;
-
-  const { removed } = removeRegisteredAccountByEmail(REMOVED_TEST_ACCOUNT_EMAIL);
-  window.localStorage.setItem(REMOVED_TEST_ACCOUNT_STORAGE_KEY, '1');
-
-  if (removed && window.localStorage.getItem(CURRENT_USER_STORAGE_KEY)) {
-    const currentUserId = window.localStorage.getItem(CURRENT_USER_STORAGE_KEY);
-    const stillExists = buildUserList().some(user => user.id === currentUserId);
-    if (!stillExists) window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
-  }
-}
-
-function readUserOverrides(): Record<string, UserOverrideRecord> {
-  if (typeof window === 'undefined') return {};
-
-  try {
-    const raw = window.localStorage.getItem(USER_OVERRIDES_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, UserOverrideRecord>;
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeUserOverrides(overrides: Record<string, UserOverrideRecord>) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(USER_OVERRIDES_STORAGE_KEY, JSON.stringify(overrides));
-}
-
-function readCustomResponsibilities(): string[] {
-  if (typeof window === 'undefined') return [];
-
-  try {
-    const raw = window.localStorage.getItem(CUSTOM_RESPONSIBILITIES_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as string[];
-    return Array.isArray(parsed) ? parsed.filter(item => typeof item === 'string' && item.trim()) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeCustomResponsibilities(responsibilities: string[]) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(CUSTOM_RESPONSIBILITIES_STORAGE_KEY, JSON.stringify(Array.from(new Set(responsibilities.map(item => item.trim()).filter(Boolean)))));
-}
-
-function readDeletedUserIds(): string[] {
-  if (typeof window === 'undefined') return [];
-
-  try {
-    const raw = window.localStorage.getItem(DELETED_USER_IDS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as string[];
-    return Array.isArray(parsed) ? parsed.filter(item => typeof item === 'string' && item.trim()) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeDeletedUserIds(userIds: string[]) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(DELETED_USER_IDS_STORAGE_KEY, JSON.stringify(Array.from(new Set(userIds.filter(Boolean)))));
-}
-
-export function isDemoShortcutDisabledForUser(user: Pick<User, 'id' | 'email'>) {
-  if (!DEMO_DISABLED_AFTER_SIGNUP_USER_IDS.has(user.id) || !user.email) return false;
-  return Boolean(readRegisteredPasswords()[normalizeEmail(user.email)]);
-}
-
-function writeRegisteredPasswords(records: Record<string, RegisteredPasswordRecord>) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(REGISTERED_PASSWORDS_STORAGE_KEY, JSON.stringify(records));
-}
-
-function createUserId() {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return `user_${crypto.randomUUID()}`;
-  }
-
-  return `user_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function nameFromEmail(email: string) {
-  const localPart = email.split('@')[0] || 'New User';
-  return localPart
-    .replace(/[._-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/\b\w/g, letter => letter.toUpperCase()) || 'New User';
-}
-
-function accountProfileToUser(profile: AccountProfile): User {
-  return {
-    id: profile.id,
-    email: profile.email,
-    name: profile.name,
-    role: profile.role,
-    requestedRole: profile.requestedRole,
-    approvalStatus: profile.approvalStatus,
-    isAdmin: profile.isAdmin,
-    legacyId: profile.legacyId,
-    jobTitle: profile.jobTitle || userRoleLabels[profile.role] || 'Team Member',
-  };
-}
-
-function buildUserList(profiles = readRegisteredUsers(), overrides = readUserOverrides(), deletedUserIds = readDeletedUserIds()) {
-  const deletedIds = new Set(deletedUserIds);
-  const seededUsers = initialUsers.map(user => {
-    const override = overrides[user.id];
-    if (!override) return user;
-
-    return {
-      ...user,
-      ...override,
-      email: override.email === null ? undefined : override.email ?? user.email,
-    };
-  }).filter(user => !deletedIds.has(user.id));
-  const seededIds = new Set(seededUsers.map(user => user.id));
-  const registeredUsers = profiles
-    .filter(profile => !seededIds.has(profile.id) && !deletedIds.has(profile.id))
-    .map(accountProfileToUser);
-
-  return [...seededUsers, ...registeredUsers];
-}
-
-function createPasswordSalt() {
-  const bytes = new Uint8Array(16);
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    crypto.getRandomValues(bytes);
-    return Array.from(bytes).map(byte => byte.toString(16).padStart(2, '0')).join('');
-  }
-
-  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
-}
-
-function fallbackHash(value: string) {
-  let hash = 5381;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
-  }
-  return `fallback_${(hash >>> 0).toString(16)}`;
-}
-
-async function hashPassword(password: string, salt: string) {
-  const value = `${salt}:${password}`;
-  if (typeof crypto !== 'undefined' && crypto.subtle) {
-    const bytes = new TextEncoder().encode(value);
-    const digest = await crypto.subtle.digest('SHA-256', bytes);
-    return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
-  }
-
-  return fallbackHash(value);
-}
-
-function getInvitedUserByEmail(email: string) {
-  const normalizedEmail = normalizeEmail(email);
-  return buildUserList().find(user => user.email && normalizeEmail(user.email) === normalizedEmail) || null;
-}
-
-async function findRegisteredAccount(identifier: string, password: string) {
-  const normalizedEmail = normalizeEmail(identifier);
-  if (!normalizedEmail.includes('@')) return null;
-
-  const records = readRegisteredPasswords();
-  const record = records[normalizedEmail];
-  if (!record) return null;
-
-  const passwordHash = await hashPassword(password, record.salt);
-  if (passwordHash !== record.passwordHash) return null;
-
-  const user = buildUserList().find(item => item.id === record.userId && item.email && normalizeEmail(item.email) === normalizedEmail);
-  return user ? { user } : null;
-}
-
-function findDemoAccount(identifier: string, password: string) {
-  const normalizedIdentifier = normalizeCredentialValue(identifier);
-  const normalizedPassword = normalizeCredentialValue(password);
-
-  const account = demoAccounts.find(item => {
-    const user = item.user;
-    const acceptedNames = (user.email
-      ? [user.email]
-      : [
-          user.id,
-          user.name,
-          user.name.split(/\s+/)[0],
-        ]
-    ).filter(Boolean).map(normalizeCredentialValue);
-
-    return acceptedNames.includes(normalizedIdentifier) && normalizeCredentialValue(item.password) === normalizedPassword;
-  }) || null;
-
-  if (!account || isDemoShortcutDisabledForUser(account.user)) return null;
-  return account;
-}
-
-function findDemoAccountIncludingDisabled(identifier: string, password: string) {
-  const normalizedIdentifier = normalizeCredentialValue(identifier);
-  const normalizedPassword = normalizeCredentialValue(password);
-
-  return demoAccounts.find(account => {
-    const user = account.user;
-    const acceptedNames = (user.email
-      ? [user.email]
-      : [
-          user.id,
-          user.name,
-          user.name.split(/\s+/)[0],
-        ]
-    ).filter(Boolean).map(normalizeCredentialValue);
-
-    return acceptedNames.includes(normalizedIdentifier) && normalizeCredentialValue(account.password) === normalizedPassword;
-  }) || null;
-}
-
-function getStoredDemoUser() {
-  if (typeof window === 'undefined') return GUEST_USER;
-  const storedUserId = window.localStorage.getItem(CURRENT_USER_STORAGE_KEY);
-  return buildUserList().find(user => user.id === storedUserId) || demoAccounts.find(account => account.user.id === storedUserId)?.user || GUEST_USER;
-}
 
 function isGuestSeedTask(task: Pick<Task, 'id' | 'code'> | null | undefined) {
   return Boolean(task?.id?.startsWith(GUEST_SEED_ID_PREFIX) || task?.code?.startsWith('GST-'));
@@ -436,6 +141,47 @@ function isPlaceholderTask(task: Pick<Task, 'id' | 'code' | 'name'> | null | und
     task?.code?.startsWith('TMP-') ||
     task?.name?.startsWith('Placeholder - ')
   );
+}
+
+function isAdminUser(user: Pick<User, 'role' | 'isAdmin'>) {
+  return Boolean(user.isAdmin) || user.role === 'admin';
+}
+
+function canEditOrDeleteComment(comment: TaskComment, user: Pick<User, 'id' | 'role' | 'isAdmin'>) {
+  if (comment.isDeleted) return false;
+  return HUMAN_COMMENT_ACTIONS.has(comment.action)
+    ? comment.authorId === user.id
+    : isAdminUser(user);
+}
+
+function cloneCommentSections(sections: TaskComment['sections']) {
+  return sections.map(section => ({ ...section }));
+}
+
+function coerceTaskComment(comment: Partial<TaskComment> & { id?: string }, fallbackAuthorId: string): TaskComment | null {
+  if (!comment || !comment.id) return null;
+
+  return {
+    id: comment.id,
+    authorId: comment.authorId || fallbackAuthorId,
+    action: comment.action || 'review_note',
+    message: comment.message,
+    sections: Array.isArray(comment.sections) ? comment.sections.map(section => ({ ...section })) : [],
+    createdAt: comment.createdAt || new Date().toISOString(),
+    updatedAt: comment.updatedAt,
+    editedBy: comment.editedBy,
+    isEdited: Boolean(comment.isEdited || (Array.isArray(comment.editHistory) && comment.editHistory.length > 0)),
+    editHistory: Array.isArray(comment.editHistory)
+      ? comment.editHistory.map(version => ({
+          ...version,
+          previousSections: Array.isArray(version.previousSections) ? cloneCommentSections(version.previousSections) : [],
+          nextSections: Array.isArray(version.nextSections) ? cloneCommentSections(version.nextSections) : [],
+        }))
+      : [],
+    deletedAt: comment.deletedAt,
+    deletedBy: comment.deletedBy,
+    isDeleted: Boolean(comment.isDeleted || comment.deletedAt),
+  };
 }
 
 function isGuestSeedNotification(notification: Notification | null | undefined) {
@@ -539,7 +285,9 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
     publishedAt: task.publishedAt ?? null,
     publishReminderSentAt: task.publishReminderSentAt ?? null,
     versions,
-    comments: Array.isArray(task.comments) ? task.comments : [],
+    comments: Array.isArray(task.comments)
+      ? task.comments.map(comment => coerceTaskComment(comment, task.createdBy || initialUsers[0]?.id || 'unknown_user')).filter(Boolean)
+      : [],
     thumbnailUrl: task.thumbnailUrl || '',
     thumbnailStoragePath: task.thumbnailStoragePath,
     driveFolderId: task.driveFolderId,
@@ -554,11 +302,18 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
 function reviveTaskFiles(tasks: Task[], users: Record<string, User> = {}): Task[] {
   return tasks.map(task => coerceTask(task)).filter(Boolean).map(task => {
     const versions = task.versions.map(version => {
-      const files = version.files?.map(file => ({
-        ...file,
-        storageProvider: file.storageProvider || (file.driveFileId ? 'drive' : file.blob || file.url?.startsWith('blob:') ? 'local' : file.storageProvider),
-        url: file.blob ? URL.createObjectURL(file.blob) : file.url,
-      }));
+      const files = version.files?.map((file, idx) => {
+        let name = file.name;
+        if (!name || name === 'Google Drive file' || name === 'Google Docs file' || name === 'Google Drive folder' || name === 'Uploaded file' || name === 'Drive file') {
+          name = version.files && version.files.length > 1 ? `${task.name} (${idx + 1})` : task.name;
+        }
+        return {
+          ...file,
+          name,
+          storageProvider: file.storageProvider || (file.driveFileId ? 'drive' : file.blob || file.url?.startsWith('blob:') ? 'local' : file.storageProvider),
+          url: file.blob ? URL.createObjectURL(file.blob) : file.url,
+        };
+      });
 
       return {
         ...version,
@@ -733,6 +488,8 @@ interface AppState {
   authError: string | null;
   accountProfiles: AccountProfile[];
   customResponsibilities: string[];
+  appSettings: AppSettings;
+  canManageSettings: boolean;
   environment: Environment;
   tasks: Task[];
   users: Record<string, User>;
@@ -753,16 +510,22 @@ interface AppState {
 interface AppContextType extends AppState {
   setEnvironment: (env: Environment) => void;
   updateTaskStatus: (taskId: string, newStatus: TaskStatus, newOwnerRole: Role | null, newOwnerUserIds?: string[]) => void;
+  toggleTaskHold: (taskId: string) => void;
   updateTaskPriority: (taskId: string, priority: Priority, deadline: string | null) => void;
   updateTaskAssignment: (taskId: string, handledByIds: string[], currentOwnerUserIds: string[]) => void;
   updateTaskReviewMode: (taskId: string, reviewMode: ReviewMode) => void;
   updateTaskPublishSchedule: (taskId: string, schedule: { scheduledPublishAt: string | null; publishNote: string | null }) => void;
   markCampaignPublished: (taskId: string) => void;
   markPublishReminderSent: (taskId: string) => void;
+  markWeekReminderSent: (taskId: string) => void;
+  submitScheduledCampaign: (input: { name: string; taskType: 'campaign' | 'media_buying'; scheduledPublishAt: string; publishNote?: string | null; platform?: string | null; budgetAmount?: number | null; budgetCurrency?: string | null }) => void;
+  editScheduledCampaign: (taskId: string, input: { name: string; taskType: 'campaign' | 'media_buying'; scheduledPublishAt: string; publishNote?: string | null; platform?: string | null; budgetAmount?: number | null; budgetCurrency?: string | null }) => void;
   createWorkAssignment: (input: WorkAssignmentInput) => void;
   updateWorkAssignment: (taskId: string, input: WorkAssignmentInput) => void;
   submitWorkAssignmentUpload: (taskId: string, payload: WorkAssignmentUploadPayload) => void;
   addTaskComment: (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => void;
+  updateTaskComment: (taskId: string, commentId: string, changes: Pick<TaskComment, 'message' | 'sections'>) => void;
+  deleteTaskComment: (taskId: string, commentId: string) => void;
   addTaskVersion: (taskId: string, version: TaskVersion) => void;
   replaceTaskVersionFiles: (taskId: string, versionId: string, files: UploadedTaskFile[]) => void;
   updateTaskMediaPreviews: (taskId: string, updates: { versions: TaskVersion[]; comments?: TaskComment[]; thumbnailUrl: string; thumbnailStoragePath?: string }) => void;
@@ -774,10 +537,12 @@ interface AppContextType extends AppState {
   updateUserRole: (userId: string, role: Role) => void;
   updateUserResponsibility: (userId: string, responsibility: string, permissionRole?: Role) => void;
   addCustomResponsibility: (responsibility: string) => void;
+  updateAppSettings: (updater: AppSettings | ((settings: AppSettings) => AppSettings)) => void;
   deleteUserAccount: (userId: string) => void;
   logout: () => Promise<void>;
   archiveTask: (taskId: string, reason?: string) => void;
   unarchiveTask: (taskId: string) => void;
+  deleteTask: (taskId: string) => void;
   connectGoogleDrive: () => Promise<void>;
   disconnectGoogleDrive: () => void;
   chooseDriveRoot: () => Promise<void>;
@@ -789,25 +554,25 @@ interface AppContextType extends AppState {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  removeRequestedTestAccountOnce();
-  const initialDemoUser = getStoredDemoUser();
   const hasLoadedPersistedState = useRef(false);
   const sharedDataLoadFailedRef = useRef(false);
   const pendingTaskBroadcastIdsRef = useRef<Set<string>>(new Set());
   const pendingNotificationBroadcastIdsRef = useRef<Set<string>>(new Set());
+  const pendingSettingsBroadcastRef = useRef(false);
   const linkedMetadataBackfillAttemptsRef = useRef<Set<string>>(new Set());
-  const [accountProfiles, setAccountProfiles] = useState<AccountProfile[]>(() => readRegisteredUsers());
-  const [customResponsibilities, setCustomResponsibilities] = useState<string[]>(() => readCustomResponsibilities());
+  const [accountProfiles, setAccountProfiles] = useState<AccountProfile[]>([]);
+  const [customResponsibilities, setCustomResponsibilities] = useState<string[]>([]);
+  const [appSettings, setAppSettings] = useState<AppSettings>(() => mergeAppSettings(defaultAppSettings));
   const [authProfile, setAuthProfile] = useState<AccountProfile | null>(null);
-  const [authStatus, setAuthStatus] = useState<AuthStatus>(initialDemoUser.id === GUEST_USER.id ? 'signed_out' : 'approved');
+  const [authStatus, setAuthStatus] = useState<AuthStatus>('loading');
   const [authError, setAuthError] = useState<string | null>(null);
-  const [userList, setUserList] = useState<User[]>(() => buildUserList());
+  const [userList, setUserList] = useState<User[]>([]);
   const usersObj = userList.reduce((acc, user) => {
     acc[user.id] = user;
     return acc;
   }, {} as Record<string, User>);
 
-  const [currentUserState, setCurrentUserState] = useState<User>(initialDemoUser);
+  const [currentUserState, setCurrentUserState] = useState<User>(GUEST_USER);
   const [environment, setEnvironment] = useState<Environment>('production');
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -820,13 +585,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isConnectingDrive, setIsConnectingDrive] = useState(false);
   const [isChoosingDriveRoot, setIsChoosingDriveRoot] = useState(false);
   const [isImportingDriveTasks, setIsImportingDriveTasks] = useState(false);
+  const [isMinaSettingsUnlocked, setIsMinaSettingsUnlocked] = useState(() => {
+    try {
+      return window.sessionStorage.getItem('national-care-settings-unlocked-for-mina') === '1';
+    } catch {
+      return false;
+    }
+  });
   const currentUser = currentUserState;
+  const canManageSettings = (() => {
+    const isMina = currentUser.email === 'minamagdy5555@gmail.com' || currentUser.id === 'user_1';
+    if (isMina) {
+      return isMinaSettingsUnlocked;
+    }
+    return canManageAppSettings(currentUser, appSettings);
+  })();
   const isSharedWorkspaceActive = isSharedWorkspaceStatus(authStatus);
   const isDriveWorkspaceReady = isSharedWorkspaceActive && hasDriveToken && Boolean(driveRootFolder);
   const driveStatus: DriveAuthStatus = !USE_SHARED_DRIVE_DATA
     ? 'disabled'
     : !isGoogleDriveConfigured
-      ? 'needs_config'
+      ? 'needs_auth'
       : !hasDriveToken
         ? 'needs_auth'
         : !driveRootFolder
@@ -842,15 +621,140 @@ export function AppProvider({ children }: { children: ReactNode }) {
     pendingNotificationBroadcastIdsRef.current.add(notificationId);
   };
 
+  const queueSettingsBroadcast = () => {
+    pendingSettingsBroadcastRef.current = true;
+  };
+
+  const fetchProfiles = async () => {
+    try {
+      const { data, error } = await supabase.from('profiles').select('*');
+      if (error) {
+        console.error('Error fetching profiles from Supabase:', error.message);
+        return;
+      }
+      if (data) {
+        const list: User[] = data.map(profile => ({
+          id: profile.id,
+          email: profile.email,
+          name: profile.name,
+          role: profile.role as Role,
+          jobTitle: profile.job_title || userRoleLabels[profile.role] || 'Content Creator',
+          isAdmin: profile.is_admin,
+        }));
+        setUserList(list);
+        
+        const profilesList: AccountProfile[] = data.map(profile => ({
+          id: profile.id,
+          email: profile.email,
+          name: profile.name,
+          role: profile.role as Role,
+          jobTitle: profile.job_title || userRoleLabels[profile.role] || 'Content Creator',
+          requestedRole: profile.role as Role,
+          approvalStatus: 'approved',
+          isAdmin: profile.is_admin,
+          approvedBy: 'system',
+          approvedAt: profile.created_at,
+          createdAt: profile.created_at,
+          updatedAt: profile.updated_at,
+        }));
+        setAccountProfiles(profilesList);
+      }
+    } catch (err) {
+      console.error('Exception fetching profiles from Supabase:', err);
+    }
+  };
+
+  const fetchSettings = async () => {
+    try {
+      const { data, error } = await supabase.from('app_settings').select('settings').eq('id', 'current').single();
+      if (data?.settings) {
+        setAppSettings(mergeAppSettings(data.settings));
+      } else {
+        setAppSettings(defaultAppSettings);
+      }
+    } catch (err) {
+      console.warn('Exception loading settings from Supabase, using defaults:', err);
+      setAppSettings(defaultAppSettings);
+    }
+  };
+
   useEffect(() => {
-    const storedDemoUser = getStoredDemoUser();
-    setCurrentUserState(storedDemoUser);
-    setUserList(buildUserList());
-    setAccountProfiles(readRegisteredUsers());
-    setAuthProfile(null);
-    setAuthStatus(storedDemoUser.id === GUEST_USER.id ? 'signed_out' : 'approved');
-    setAuthError(null);
+    let isMounted = true;
+    
+    fetchProfiles();
+    fetchSettings();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!isMounted) return;
+
+      if (session?.user) {
+        try {
+          const { data: profile, error } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', session.user.id)
+            .maybeSingle();
+
+          if (profile) {
+            const user: User = {
+              id: profile.id,
+              email: profile.email,
+              name: profile.name,
+              role: profile.role as Role,
+              jobTitle: profile.job_title || userRoleLabels[profile.role] || 'Content Creator',
+              isAdmin: profile.is_admin,
+            };
+            setCurrentUserState(user);
+            setAuthStatus('approved');
+          } else {
+            const user: User = {
+              id: session.user.id,
+              email: session.user.email || '',
+              name: session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'User',
+              role: session.user.email === 'minamagdy5555@gmail.com' ? 'reviewer' : 'team_member',
+              jobTitle: session.user.email === 'minamagdy5555@gmail.com' ? 'Senior Brand Designer & Video Editor' : 'Content Creator',
+              isAdmin: session.user.email === 'minamagdy5555@gmail.com',
+            };
+            setCurrentUserState(user);
+            setAuthStatus('approved');
+            setTimeout(() => {
+              fetchProfiles();
+            }, 1000);
+          }
+        } catch (err) {
+          console.error('Error loading session profile:', err);
+          setAuthStatus('signed_out');
+        }
+      } else {
+        setCurrentUserState(GUEST_USER);
+        setAuthStatus('signed_out');
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || !event.altKey || event.key.toLowerCase() !== 's') return;
+      const isMina = currentUser.email === 'minamagdy5555@gmail.com' || currentUser.id === 'user_1';
+      if (!isMina) return;
+      event.preventDefault();
+      setIsMinaSettingsUnlocked(prev => {
+        const next = !prev;
+        try {
+          window.sessionStorage.setItem('national-care-settings-unlocked-for-mina', next ? '1' : '0');
+        } catch {}
+
+        return next;
+      });
+    };
+    window.addEventListener('keydown', handleShortcut);
+    return () => window.removeEventListener('keydown', handleShortcut);
+  }, [currentUser.email, currentUser.id]);
 
   useEffect(() => {
     if (!isLocalWorkspaceActive) return;
@@ -864,6 +768,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!isMounted) return;
 
         const localTasks = Array.isArray(localState?.tasks) && localState.tasks.length > 0 ? localState.tasks : initialTasks;
+        setAppSettings(mergeAppSettings(localState?.settings));
         setTasks(reviveWorkspaceTasks(localTasks, usersObj));
         setNotifications(Array.isArray(localState?.notifications) ? removeGuestSeedNotifications(localState.notifications) : []);
         setLocalMigrationState(null);
@@ -988,16 +893,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     sharedDataLoadFailedRef.current = false;
     hasLoadedPersistedState.current = false;
 
-    Promise.all([fetchDriveTasks(), fetchDriveNotifications(), loadAppState()])
-      .then(([loadedTasks, loadedNotifications, localState]) => {
+    Promise.all([fetchDriveTasks(), fetchDriveNotifications(), fetchDriveSettings(), loadAppState()])
+      .then(([loadedTasks, loadedNotifications, loadedSettings, localState]) => {
         if (!isMounted) return;
 
         const sharedTasks = reviveWorkspaceTasks(loadedTasks.length > 0 ? loadedTasks : initialTasks, usersObj);
         const sharedNotifications = removeGuestSeedNotifications(loadedNotifications);
+        const sharedSettings = mergeAppSettings(loadedSettings || localState?.settings);
         const localTasks = Array.isArray(localState?.tasks) ? localState.tasks.filter(task => !isGuestSeedTask(task) && !isPlaceholderTask(task)) : [];
         const localNotifications = Array.isArray(localState?.notifications) ? removeGuestSeedNotifications(localState.notifications) : [];
 
         sharedDataLoadFailedRef.current = false;
+        setAppSettings(sharedSettings);
         setTasks(sharedTasks);
         setNotifications(sharedNotifications);
         setLocalMigrationState(localTasks.length || localNotifications.length
@@ -1027,10 +934,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     const pendingTaskIds = Array.from(pendingTaskBroadcastIdsRef.current);
     const pendingNotificationIds = Array.from(pendingNotificationBroadcastIdsRef.current);
-    if (pendingTaskIds.length === 0 && pendingNotificationIds.length === 0) return;
+    const hasPendingSettings = pendingSettingsBroadcastRef.current;
+    if (pendingTaskIds.length === 0 && pendingNotificationIds.length === 0 && !hasPendingSettings) return;
 
     pendingTaskBroadcastIdsRef.current.clear();
     pendingNotificationBroadcastIdsRef.current.clear();
+    pendingSettingsBroadcastRef.current = false;
 
     const pendingTasks = pendingTaskIds
       .map(taskId => tasks.find(item => item.id === taskId))
@@ -1042,6 +951,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const saveState = Promise.all([
       ...pendingTasks.map(task => upsertDriveTask(task)),
       upsertDriveNotifications(pendingNotifications),
+      ...(hasPendingSettings ? [upsertDriveSettings(appSettings)] : []),
     ]);
 
     saveState
@@ -1052,14 +962,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
         console.error('Failed to save app state', error);
         pendingTaskIds.forEach(taskId => pendingTaskBroadcastIdsRef.current.add(taskId));
         pendingNotificationIds.forEach(notificationId => pendingNotificationBroadcastIdsRef.current.add(notificationId));
+        if (hasPendingSettings) pendingSettingsBroadcastRef.current = true;
         setPersistenceError(getSharedDataErrorMessage(error, 'Failed to save app state.'));
       });
-  }, [tasks, notifications, isDriveWorkspaceReady]);
+  }, [tasks, notifications, appSettings, isDriveWorkspaceReady]);
 
   useEffect(() => {
     if (!isLocalWorkspaceActive || !hasLoadedPersistedState.current) return;
 
-    saveAppState({ tasks, notifications })
+    saveAppState({ tasks, notifications, settings: appSettings })
       .then(() => {
         setPersistenceError(null);
       })
@@ -1067,7 +978,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         console.error('Failed to save local demo workspace', error);
         setPersistenceError(getErrorMessage(error, 'Failed to save local demo workspace.'));
       });
-  }, [tasks, notifications, isLocalWorkspaceActive]);
+  }, [tasks, notifications, appSettings, isLocalWorkspaceActive]);
 
   useEffect(() => {
     if (!isDriveWorkspaceReady) return;
@@ -1145,12 +1056,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (role === 'reviewer') return getUserIdsByRole(userList, ['reviewer', 'admin']);
     if (role === 'art_director') return getUserIdsByRole(userList, ['art_director']);
     if (role === 'team_leader') return getUserIdsByRole(userList, ['team_leader']);
-    if (role === 'team_member' && task) return sanitizeHandledBy([task.createdBy, ...task.handledBy]);
+    if (role === 'team_member' && task) return sanitizeHandledByWithSettings(appSettings, [task.createdBy, ...task.handledBy]);
     return [];
   };
 
   const normalizeOwnerIdsForRole = (role: Role | null, ids: string[], assignerId?: string) => (
-    role === 'team_member' ? sanitizeHandledBy(ids, assignerId) : uniqueIds(ids)
+    role === 'team_member' ? sanitizeHandledByWithSettings(appSettings, ids, assignerId) : uniqueIds(ids)
   );
 
   const addAuditComment = (task: Task, authorId: string, action: TaskComment['action'], message: string, createdAt = new Date().toISOString()): Task => ({
@@ -1164,6 +1075,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         message,
         sections: [],
         createdAt,
+        editHistory: [],
+        isDeleted: false,
       },
     ],
   });
@@ -1181,43 +1094,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return { ok: false, message: 'Enter your email or account name and password.' };
     }
 
-    const registeredAccount = await findRegisteredAccount(identifier, password);
-    if (registeredAccount) {
-      window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, registeredAccount.user.id);
-      setAuthProfile(null);
-      setCurrentUserState(registeredAccount.user);
-      setUserList(buildUserList());
-      setAccountProfiles(readRegisteredUsers());
-      setAuthStatus('approved');
-      setAuthError(null);
-      return { ok: true };
-    }
-
-    const account = findDemoAccount(identifier, password);
-    if (!account) {
-      const disabledDemoAccount = findDemoAccountIncludingDisabled(identifier, password);
-      if (disabledDemoAccount && isDemoShortcutDisabledForUser(disabledDemoAccount.user)) {
-        return { ok: false, message: 'This demo password was disabled after signup. Use the Gmail address and created password.' };
+    let email = identifier.trim();
+    if (!email.includes('@')) {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('email')
+        .ilike('name', email)
+        .limit(1);
+      
+      if (data && data.length > 0) {
+        email = data[0].email;
       }
-      return { ok: false, message: 'That email/account and password do not match.' };
     }
 
-    const demoUserList = buildUserList();
-    const demoUser = demoUserList.find(user => user.id === account.user.id) || account.user;
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
-    window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, demoUser.id);
-    setAuthProfile(null);
-    setCurrentUserState(demoUser);
-    setUserList(demoUserList);
-    setAccountProfiles(readRegisteredUsers());
-    setAuthStatus('approved');
-    setAuthError(null);
+    if (error) {
+      return { ok: false, message: error.message };
+    }
+
     return { ok: true };
   };
 
   const signupWithEmail = async (email: string, password: string, name?: string): Promise<AuthActionResult> => {
-    const normalizedEmail = normalizeEmail(email);
-    const existingUser = getInvitedUserByEmail(normalizedEmail);
+    const normalizedEmail = email.trim().toLowerCase();
 
     if (!normalizedEmail || !password.trim()) {
       return { ok: false, message: 'Enter your email address and create a password.' };
@@ -1231,162 +1134,129 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return { ok: false, message: 'Password must be at least 8 characters.' };
     }
 
-    const records = readRegisteredPasswords();
-    const profiles = readRegisteredUsers();
-    const now = new Date().toISOString();
-    const existingRecord = records[normalizedEmail];
-    const existingProfile = profiles.find(profile => normalizeEmail(profile.email) === normalizedEmail);
-    const salt = existingRecord?.salt || createPasswordSalt();
-    const passwordHash = await hashPassword(password, salt);
-    const userId = existingUser?.id || existingProfile?.id || existingRecord?.userId || createUserId();
-    const role = existingUser?.role || existingProfile?.role || 'team_member';
-    const profile: AccountProfile = {
-      id: userId,
+    const { data, error } = await supabase.auth.signUp({
       email: normalizedEmail,
-      name: (name || existingUser?.name || existingProfile?.name || nameFromEmail(normalizedEmail)).trim(),
-      role,
-      jobTitle: existingUser?.jobTitle || existingProfile?.jobTitle || userRoleLabels[role] || 'Content Creator',
-      requestedRole: existingProfile?.requestedRole || role,
-      approvalStatus: 'approved',
-      isAdmin: Boolean(existingUser?.isAdmin || existingProfile?.isAdmin),
-      legacyId: existingUser?.legacyId || existingProfile?.legacyId || null,
-      approvedBy: existingProfile?.approvedBy || 'self_signup',
-      approvedAt: existingProfile?.approvedAt || now,
-      createdAt: existingProfile?.createdAt || now,
-      updatedAt: now,
-    };
-    const nextProfiles = [
-      ...profiles.filter(item => normalizeEmail(item.email) !== normalizedEmail && item.id !== userId),
-      profile,
-    ];
-
-    writeRegisteredPasswords({
-      ...records,
-      [normalizedEmail]: {
-        userId,
-        email: normalizedEmail,
-        salt,
-        passwordHash,
-        createdAt: existingRecord?.createdAt || now,
-        updatedAt: now,
-      },
+      password,
+      options: {
+        data: {
+          name: name || normalizedEmail.split('@')[0],
+        }
+      }
     });
-    writeRegisteredUsers(nextProfiles);
 
-    const nextUserList = buildUserList(nextProfiles);
-    const signedUpUser = nextUserList.find(user => user.id === userId) || accountProfileToUser(profile);
-
-    window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, userId);
-    setAuthProfile(null);
-    setCurrentUserState(signedUpUser);
-    setUserList(nextUserList);
-    setAccountProfiles(nextProfiles);
-    setAuthStatus('approved');
-    setAuthError(null);
-    return { ok: true, message: 'Account created. Welcome in.' };
-  };
-
-  const updateUserRole = (userId: string, role: Role) => {
-    updateUserResponsibility(userId, userRoleLabels[role] || role, role);
-  };
-
-  const updateUserResponsibility = (userId: string, responsibility: string, permissionRole: Role = 'team_member') => {
-    const now = new Date().toISOString();
-    const jobTitle = responsibility.trim() || userRoleLabels[permissionRole] || 'Content Creator';
-    const profiles = readRegisteredUsers();
-    const existingProfile = profiles.find(profile => profile.id === userId);
-    let nextProfiles = profiles;
-
-    if (existingProfile) {
-      nextProfiles = profiles.map(profile => profile.id === userId
-        ? {
-            ...profile,
-            role: permissionRole,
-            jobTitle,
-            requestedRole: permissionRole,
-            approvalStatus: 'approved',
-            approvedBy: currentUser.id,
-            approvedAt: profile.approvedAt || now,
-            updatedAt: now,
-          }
-        : profile
-      );
-      writeRegisteredUsers(nextProfiles);
-    } else {
-      const overrides = readUserOverrides();
-      const user = buildUserList(profiles, overrides).find(item => item.id === userId);
-      if (!user) return;
-
-      writeUserOverrides({
-        ...overrides,
-        [userId]: {
-          id: userId,
-          email: user.email,
-          role: permissionRole,
-          requestedRole: permissionRole,
-          approvalStatus: 'approved',
-          jobTitle,
-          isAdmin: user.isAdmin,
-        },
-      });
+    if (error) {
+      return { ok: false, message: error.message };
     }
 
-    const nextUserList = buildUserList(nextProfiles);
-    setUserList(nextUserList);
-    setAccountProfiles(nextProfiles);
+    return { ok: true, message: 'Account created successfully! Welcome.' };
+  };
 
+  const updateUserRole = async (userId: string, role: Role) => {
+    const jobTitle = getResponsibilityLabelForRole(appSettings, role) || role;
+    await updateUserResponsibility(userId, jobTitle, role);
+  };
+
+  const updateUserResponsibility = async (userId: string, responsibility: string, permissionRole: Role = 'team_member') => {
+    const jobTitle = responsibility.trim() || getResponsibilityLabelForRole(appSettings, permissionRole) || 'Content Creator';
+    
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        role: permissionRole,
+        job_title: jobTitle,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', userId);
+      
+    if (error) {
+      console.error('Failed to update user profile in Supabase', error);
+      return;
+    }
+    
+    await fetchProfiles();
+    
     if (currentUser.id === userId) {
-      const nextCurrentUser = nextUserList.find(user => user.id === userId);
-      if (nextCurrentUser) setCurrentUserState(nextCurrentUser);
+      setCurrentUserState(prev => ({
+        ...prev,
+        role: permissionRole,
+        jobTitle,
+      }));
     }
   };
 
-  const addCustomResponsibility = (responsibility: string) => {
+  const addCustomResponsibility = async (responsibility: string) => {
     const label = responsibility.trim();
     if (!label) return;
-    const nextResponsibilities = Array.from(new Set([...readCustomResponsibilities(), label]));
-    writeCustomResponsibilities(nextResponsibilities);
-    setCustomResponsibilities(nextResponsibilities);
+    
+    const nextAppSettings = mergeAppSettings({
+      ...appSettings,
+      responsibilities: [
+        ...appSettings.responsibilities.filter(item => item.label.trim().toLowerCase() !== label.toLowerCase()),
+        {
+          id: normalizeSettingId(label),
+          label,
+          permissionRole: 'team_member',
+        }
+      ],
+      updatedAt: new Date().toISOString()
+    });
+    
+    setAppSettings(nextAppSettings);
+    setCustomResponsibilities(prev => Array.from(new Set([...prev, label])));
+    
+    await supabase.from('app_settings').upsert({
+      id: 'current',
+      settings: nextAppSettings,
+      updated_at: new Date().toISOString()
+    });
   };
 
-  const deleteUserAccount = (userId: string) => {
-    const profiles = readRegisteredUsers();
-    const nextProfiles = profiles.filter(profile => profile.id !== userId);
-    const records = readRegisteredPasswords();
-    const nextRecords = Object.fromEntries(
-      Object.entries(records).filter(([, record]) => record.userId !== userId)
-    ) as Record<string, RegisteredPasswordRecord>;
-    const deletedUserIds = Array.from(new Set([...readDeletedUserIds(), userId]));
+  const updateAppSettings = async (updater: AppSettings | ((settings: AppSettings) => AppSettings)) => {
+    if (!canManageSettings) return;
+    
+    let nextSettings: AppSettings;
+    if (typeof updater === 'function') {
+      nextSettings = updater(appSettings);
+    } else {
+      nextSettings = updater;
+    }
+    
+    const merged = mergeAppSettings({
+      ...nextSettings,
+      updatedAt: new Date().toISOString(),
+    });
+    
+    setAppSettings(merged);
+    
+    await supabase.from('app_settings').upsert({
+      id: 'current',
+      settings: merged,
+      updated_at: new Date().toISOString()
+    });
+  };
 
-    writeRegisteredUsers(nextProfiles);
-    writeRegisteredPasswords(nextRecords);
-    writeDeletedUserIds(deletedUserIds);
-
-    const nextUserList = buildUserList(nextProfiles, readUserOverrides(), deletedUserIds);
-    setUserList(nextUserList);
-    setAccountProfiles(nextProfiles);
-
+  const deleteUserAccount = async (userId: string) => {
+    const { error } = await supabase
+      .from('profiles')
+      .delete()
+      .eq('id', userId);
+      
+    if (error) {
+      console.error('Failed to delete profile from Supabase', error);
+      return;
+    }
+    
+    await fetchProfiles();
+    
     if (currentUser.id === userId) {
-      window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
-      hasLoadedPersistedState.current = false;
-      setAuthProfile(null);
-      setCurrentUserState(GUEST_USER);
-      setAuthStatus('signed_out');
-      setAuthError(null);
+      await logout();
     }
   };
 
   const logout = async () => {
-    window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
-    hasLoadedPersistedState.current = false;
-    setAuthProfile(null);
+    await supabase.auth.signOut();
     setCurrentUserState(GUEST_USER);
-    setUserList(buildUserList());
-    setAccountProfiles(readRegisteredUsers());
-    setLocalMigrationState(null);
-    setPersistenceError(null);
     setAuthStatus('signed_out');
-    setAuthError(null);
   };
 
   const connectGoogleDrive = async () => {
@@ -1480,9 +1350,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ));
   };
 
+  const deleteTask = (taskId: string) => {
+    setTasks(prev => prev.filter(task => task.id !== taskId));
+    if (isDriveWorkspaceReady) {
+      deleteDriveTask(taskId).catch(error => console.error('Failed to delete task from Drive', error));
+    }
+  };
+
   const migrateLocalDataToDrive = async () => {
     if (!isDriveWorkspaceReady || !localMigrationState || isMigratingLocalData) return;
-
     setIsMigratingLocalData(true);
     setPersistenceError(null);
 
@@ -1552,6 +1428,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }));
   };
 
+  const toggleTaskHold = (taskId: string) => {
+    const taskIndex = tasks.findIndex(t => t.id === taskId);
+    if (taskIndex === -1) return;
+    const task = tasks[taskIndex];
+    const isOnHold = task.status === 'on_hold';
+    
+    const newStatus = isOnHold 
+      ? (task.previousStatusBeforeHold || 'submitted') 
+      : 'on_hold';
+
+    const reviewerIds = getUserIdsByRole(userList, ['reviewer', 'admin']);
+    const artDirectorIds = getUserIdsByRole(userList, ['art_director']);
+    const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
+    const contributorIds = uniqueIds([task.createdBy, ...task.handledBy]);
+    
+    if (newStatus === 'on_hold') {
+      addNotifications([...artDirectorIds, ...teamLeaderIds, ...reviewerIds, ...contributorIds], taskId, `"${task.name}" has been placed ON HOLD.`);
+    } else {
+      addNotifications([...artDirectorIds, ...teamLeaderIds, ...reviewerIds, ...contributorIds], taskId, `"${task.name}" has been RESUMED.`);
+    }
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => {
+      if (t.id === taskId) {
+        return {
+          ...t,
+          status: newStatus,
+          previousStatusBeforeHold: isOnHold ? null : t.status,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return t;
+    }));
+  };
+
   const updateTaskPriority = (taskId: string, priority: Priority, deadline: string | null) => {
     queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(t => {
@@ -1566,7 +1477,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
 
-    const nextHandledBy = sanitizeHandledBy(handledByIds, currentUser.id);
+    const nextHandledBy = sanitizeHandledByWithSettings(appSettings, handledByIds, currentUser.id);
     const nextOwnerIds = normalizeOwnerIdsForRole(task.currentOwnerRole, currentOwnerUserIds, currentUser.id);
     const previousAssignees = new Set([...task.handledBy, ...getCurrentOwnerUserIds(task)]);
     const addedAssignees = uniqueIds([...nextHandledBy, ...nextOwnerIds]).filter(userId => !previousAssignees.has(userId));
@@ -1675,13 +1586,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const markPublishReminderSent = (taskId: string) => {
     const task = tasks.find(t => t.id === taskId);
-    if (!task || task.taskType !== 'campaign' || !task.scheduledPublishAt || task.publishedAt || task.publishReminderSentAt) return;
+    if (!task || (task.taskType !== 'campaign' && task.taskType !== 'media_buying') || !task.scheduledPublishAt || task.publishedAt || task.publishReminderSentAt) return;
 
     const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
     const recipients = getTaskParticipantIds(task, teamLeaderIds);
     const publishDate = new Date(task.scheduledPublishAt);
     const isOverdue = publishDate.getTime() < Date.now();
-    addNotifications(recipients, taskId, `${isOverdue ? 'Overdue' : 'Upcoming'} campaign publish: "${task.name}" is scheduled for ${publishDate.toLocaleString()}.`);
+    const eventTypeLabel = task.taskType === 'media_buying' ? 'media buying event' : 'campaign publish';
+    addNotifications(recipients, taskId, `${isOverdue ? 'Overdue' : 'Upcoming'} ${eventTypeLabel}: "${task.name}" is scheduled for ${publishDate.toLocaleString()}.`);
 
     queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(t => (
@@ -1691,10 +1603,145 @@ export function AppProvider({ children }: { children: ReactNode }) {
     )));
   };
 
-  const createWorkAssignment = (input: WorkAssignmentInput) => {
-    if (!canCreateWorkAssignment(currentUser)) return;
+  const markWeekReminderSent = (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || task.publishedAt || task.weekReminderSentAt) return;
 
-    const handledBy = sanitizeHandledBy(input.handledByIds, currentUser.id);
+    const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
+    const recipients = uniqueIds([
+      ...getTaskParticipantIds(task, teamLeaderIds),
+      'user_1', // Mina
+      'user_2', // Marwa
+      'user_3', // Dina
+      'user_9', // Sobeeh
+      'user_7', // Fawzy
+    ]);
+    const publishDate = new Date(task.scheduledPublishAt!);
+    const eventTypeLabel = task.taskType === 'media_buying' ? 'Media buying event' : 'Campaign publish';
+    addNotifications(
+      recipients.filter(id => id !== currentUser.id),
+      taskId,
+      `Upcoming 1-week reminder: "${task.name}" (${eventTypeLabel}) is scheduled for ${publishDate.toLocaleString()}.`
+    );
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => (
+      t.id === taskId
+        ? { ...t, weekReminderSentAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+        : t
+    )));
+  };
+
+  const submitScheduledCampaign = (input: {
+    name: string;
+    taskType: 'campaign' | 'media_buying';
+    scheduledPublishAt: string;
+    publishNote?: string | null;
+    platform?: string | null;
+    budgetAmount?: number | null;
+    budgetCurrency?: string | null;
+  }) => {
+    const now = new Date().toISOString();
+    const taskId = Math.random().toString(36).substring(7);
+    const newCampaign: Task = {
+      id: taskId,
+      code: createTaskCode(input.taskType === 'media_buying' ? 'MDB' : 'CMP'),
+      name: input.name.trim(),
+      description: input.publishNote?.trim() || null,
+      taskType: input.taskType,
+      reviewMode: 'full_review',
+      environment,
+      createdBy: currentUser.id,
+      handledBy: [],
+      status: 'completed',
+      currentOwnerRole: 'team_leader',
+      currentOwnerUserId: null,
+      currentOwnerUserIds: [],
+      priority: 'normal',
+      deadlineText: null,
+      deadlineAt: null,
+      scheduledPublishAt: input.scheduledPublishAt,
+      publishNote: input.publishNote || null,
+      platform: input.platform || null,
+      budgetAmount: input.budgetAmount || null,
+      budgetCurrency: input.budgetCurrency || null,
+      versions: [],
+      comments: [],
+      thumbnailUrl: '',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => [newCampaign, ...prev]);
+
+    const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
+    const recipients = uniqueIds([
+      ...teamLeaderIds,
+      'user_1', // Mina
+      'user_2', // Marwa
+      'user_3', // Dina
+      'user_9', // Sobeeh
+      'user_7', // Fawzy
+    ]).filter(id => id !== currentUser.id);
+
+    const typeLabel = input.taskType === 'media_buying' ? 'Media Buying Ad' : 'Campaign';
+    addNotifications(
+      recipients,
+      taskId,
+      `New ${typeLabel} scheduled for ${new Date(input.scheduledPublishAt).toLocaleString()}: "${input.name}".`
+    );
+  };
+
+  const editScheduledCampaign = (taskId: string, input: {
+    name: string;
+    taskType: 'campaign' | 'media_buying';
+    scheduledPublishAt: string;
+    publishNote?: string | null;
+    platform?: string | null;
+    budgetAmount?: number | null;
+    budgetCurrency?: string | null;
+  }) => {
+    setTasks(prev => prev.map(t => (
+      t.id === taskId
+        ? {
+            ...t,
+            name: input.name.trim(),
+            taskType: input.taskType,
+            scheduledPublishAt: input.scheduledPublishAt,
+            publishNote: input.publishNote || null,
+            platform: input.platform || null,
+            budgetAmount: input.budgetAmount || null,
+            budgetCurrency: input.budgetCurrency || null,
+            description: input.publishNote?.trim() || null,
+            updatedAt: new Date().toISOString()
+          }
+        : t
+    )));
+    queueTaskBroadcast(taskId);
+
+    const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
+    const recipients = uniqueIds([
+      ...teamLeaderIds,
+      'user_1', // Mina
+      'user_2', // Marwa
+      'user_3', // Dina
+      'user_9', // Sobeeh
+      'user_7', // Fawzy
+    ]).filter(id => id !== currentUser.id);
+
+    const typeLabel = input.taskType === 'media_buying' ? 'Media Buying Ad' : 'Campaign';
+    addNotifications(
+      recipients,
+      taskId,
+      `Scheduled ${typeLabel} "${input.name}" has been updated.`
+    );
+  };
+
+  const createWorkAssignment = (input: WorkAssignmentInput) => {
+    if (!canCreateWorkAssignment(currentUser, appSettings)) return;
+
+    const handledBy = sanitizeHandledByWithSettings(appSettings, input.handledByIds, currentUser.id);
     if (!input.name.trim() || !input.description.trim() || !input.deadlineAt || handledBy.length === 0) return;
 
     const now = new Date().toISOString();
@@ -1707,7 +1754,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       code: createTaskCode('WRK'),
       name: input.name.trim(),
       description: input.description.trim() || null,
-      taskType: 'others',
+      taskType: (input.taskType as TaskType) || 'others',
       reviewMode: 'full_review',
       environment,
       createdBy: currentUser.id,
@@ -1729,6 +1776,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       versions: [],
       comments: [],
       thumbnailUrl: '',
+      isOvertime: input.isOvertime || false,
+      needsContentRevision: input.needsContentRevision || false,
       createdAt: now,
       updatedAt: now,
     };
@@ -1743,9 +1792,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const updateWorkAssignment = (taskId: string, input: WorkAssignmentInput) => {
     const task = tasks.find(t => t.id === taskId);
-    if (!task || !canManageWorkAssignment(task, currentUser)) return;
+    if (!task || !canManageWorkAssignment(task, currentUser, appSettings)) return;
 
-    const handledBy = sanitizeHandledBy(input.handledByIds, currentUser.id);
+    const handledBy = sanitizeHandledByWithSettings(appSettings, input.handledByIds, currentUser.id);
     if (!input.name.trim() || !input.description.trim() || !input.deadlineAt || handledBy.length === 0) return;
 
     const previousAssignees = new Set(task.handledBy);
@@ -1766,6 +1815,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ...t,
         name: input.name.trim(),
         description: input.description.trim() || null,
+        taskType: (input.taskType as TaskType) || t.taskType,
         handledBy,
         currentOwnerRole: 'team_member',
         currentOwnerUserId: handledBy[0] || null,
@@ -1775,6 +1825,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         assignmentPeriod,
         assignmentLinks: normalizedLinks,
         deadlineAt: input.deadlineAt || null,
+        isOvertime: input.isOvertime || false,
+        needsContentRevision: input.needsContentRevision || false,
         updatedAt: now,
       }, currentUser.id, 'work_assignment_updated', message, now);
     }));
@@ -1785,10 +1837,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!task || task.status !== 'assigned_work') return;
 
     const target = getReviewRouteTarget(payload.reviewMode);
-    const nextOwnerIds = getDefaultOwnerIdsForRole(target.ownerRole, task);
+    const contentCreatorIds = userList.filter(user => user.jobTitle === 'Content Creator' || (user.role === 'team_member' && user.jobTitle === 'Content Creator')).map(user => user.id);
+    const contentReviewerIds = contentCreatorIds.length > 0 ? contentCreatorIds : getUserIdsByRole(userList, ['team_leader']);
+    
+    const isContentRevNeeded = task.needsContentRevision;
+    const nextStatus = isContentRevNeeded ? 'waiting_content_revision' : target.status;
+    const nextOwnerRole = isContentRevNeeded ? 'team_member' : target.ownerRole;
+    const nextOwnerUserIds = isContentRevNeeded ? contentReviewerIds : getDefaultOwnerIdsForRole(target.ownerRole, task);
+
     const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
     const recipients = uniqueIds([
-      ...nextOwnerIds,
+      ...nextOwnerUserIds,
       ...teamLeaderIds,
       task.createdBy,
       ...task.handledBy,
@@ -1804,10 +1863,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ...t,
         taskType: payload.taskType,
         reviewMode: payload.reviewMode,
-        status: target.status,
-        currentOwnerRole: target.ownerRole,
-        currentOwnerUserId: nextOwnerIds[0] || null,
-        currentOwnerUserIds: nextOwnerIds,
+        status: nextStatus,
+        currentOwnerRole: nextOwnerRole,
+        currentOwnerUserId: nextOwnerUserIds[0] || null,
+        currentOwnerUserIds: nextOwnerUserIds,
         scheduledPublishAt: payload.taskType === 'campaign' ? payload.scheduledPublishAt : null,
         publishNote: payload.taskType === 'campaign' ? payload.publishNote : null,
         publishedAt: null,
@@ -1820,7 +1879,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         updatedAt: now,
       };
 
-      return addAuditComment(updatedTask, payload.version.submittedBy, 'work_assignment_uploaded', 'Finished work uploaded and sent into the normal review flow.', now);
+      const auditMsg = isContentRevNeeded 
+        ? 'Finished work uploaded and sent into the Content Revision flow.' 
+        : 'Finished work uploaded and sent into the normal review flow.';
+
+      return addAuditComment(updatedTask, payload.version.submittedBy, 'work_assignment_uploaded', auditMsg, now);
     }));
   };
 
@@ -1841,21 +1904,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
 
-    const sendToMarwa = isReviewerCreatedTask(task, usersObj) || task.status === 'changes_requested_by_art_director' || task.reviewMode === 'direct_to_ad';
-    const nextStatus: TaskStatus = sendToMarwa
-      ? 'sent_to_art_director'
-      : task.reviewMode === 'quick_look'
-        ? 'waiting_reviewer_quick_look'
-        : 'waiting_reviewer_full_review';
-    const nextOwnerRole: Role = sendToMarwa ? 'art_director' : 'reviewer';
-    const nextOwnerIds = getDefaultOwnerIdsForRole(nextOwnerRole, task);
+    const isContentRevNeeded = task.needsContentRevision && (task.status === 'waiting_content_revision' || task.status === 'changes_requested_by_content');
+    
+    let nextStatus: TaskStatus;
+    let nextOwnerRole: Role;
+    let nextOwnerIds: string[];
+    let auditMsg = '';
+    let sendToMarwa = false;
+
+    if (isContentRevNeeded) {
+      const contentCreatorIds = userList.filter(user => user.jobTitle === 'Content Creator' || (user.role === 'team_member' && user.jobTitle === 'Content Creator')).map(user => user.id);
+      nextOwnerIds = contentCreatorIds.length > 0 ? contentCreatorIds : getUserIdsByRole(userList, ['team_leader']);
+      nextStatus = 'waiting_content_revision';
+      nextOwnerRole = 'team_member';
+      auditMsg = 'New version resubmitted for Content Revision.';
+    } else {
+      sendToMarwa = isReviewerCreatedTask(task, usersObj) || task.status === 'changes_requested_by_art_director' || task.reviewMode === 'direct_to_ad';
+      nextStatus = sendToMarwa
+        ? 'sent_to_art_director'
+        : task.reviewMode === 'quick_look'
+          ? 'waiting_reviewer_quick_look'
+          : 'waiting_reviewer_full_review';
+      nextOwnerRole = sendToMarwa ? 'art_director' : 'reviewer';
+      nextOwnerIds = getDefaultOwnerIdsForRole(nextOwnerRole, task);
+      auditMsg = `New version resubmitted for ${nextOwnerRole === 'art_director' ? 'Final' : 'First'} Review.`;
+    }
+
     const creatorName = usersObj[task.createdBy]?.name || 'Someone';
     const reviewerIds = getUserIdsByRole(userList, ['reviewer', 'admin']);
     const artDirectorIds = getUserIdsByRole(userList, ['art_director']);
     const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
-    const recipients = (sendToMarwa
-      ? [...nextOwnerIds, ...artDirectorIds, ...teamLeaderIds, ...reviewerIds]
-      : [...nextOwnerIds, ...reviewerIds, ...teamLeaderIds]
+    const recipients = (isContentRevNeeded
+      ? [...nextOwnerIds, ...teamLeaderIds]
+      : sendToMarwa
+        ? [...nextOwnerIds, ...artDirectorIds, ...teamLeaderIds, ...reviewerIds]
+        : [...nextOwnerIds, ...reviewerIds, ...teamLeaderIds]
     ).filter(userId => userId !== task.createdBy);
 
     addNotifications(recipients, taskId, `${creatorName} uploaded V${version.versionNumber} for "${task.name}".`);
@@ -1867,10 +1950,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const thumbnailFile = version.files?.find(file => file.type.startsWith('image/'));
       const previewFile = version.files?.find(file => file.previewUrl && file.previewStoragePath);
 
-      return {
+      const updatedTask: Task = {
         ...t,
         versions: [version, ...t.versions],
-        handledBy: sanitizeHandledBy([...t.handledBy, version.submittedBy]),
+        handledBy: sanitizeHandledByWithSettings(appSettings, [...t.handledBy, version.submittedBy]),
         status: nextStatus,
         currentOwnerRole: nextOwnerRole,
         currentOwnerUserId: nextOwnerIds[0] || null,
@@ -1879,6 +1962,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         thumbnailStoragePath: previewFile?.previewStoragePath || thumbnailFile?.previewStoragePath,
         updatedAt: new Date().toISOString(),
       };
+
+      return addAuditComment(updatedTask, version.submittedBy, 'version_added', auditMsg, new Date().toISOString());
     }));
   };
 
@@ -1940,6 +2025,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ...comment,
         id: Math.random().toString(36).substring(7),
         createdAt: new Date().toISOString(),
+        editHistory: [],
+        isDeleted: false,
       };
 
       return {
@@ -1947,6 +2034,72 @@ export function AppProvider({ children }: { children: ReactNode }) {
         comments: [...(task.comments || []), newComment],
         updatedAt: new Date().toISOString(),
       };
+    }));
+  };
+
+  const updateTaskComment = (taskId: string, commentId: string, changes: Pick<TaskComment, 'message' | 'sections'>) => {
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(task => {
+      if (task.id !== taskId) return task;
+
+      let didUpdate = false;
+      const now = new Date().toISOString();
+      const comments = (task.comments || []).map(comment => {
+        if (comment.id !== commentId || !canEditOrDeleteComment(comment, currentUser)) return comment;
+        didUpdate = true;
+        const nextMessage = changes.message?.trim() || undefined;
+        const nextSections = cloneCommentSections(changes.sections || []);
+
+        return {
+          ...comment,
+          message: nextMessage,
+          sections: nextSections,
+          updatedAt: now,
+          editedBy: currentUser.id,
+          isEdited: true,
+          editHistory: [
+            ...(comment.editHistory || []),
+            {
+              id: Math.random().toString(36).substring(7),
+              previousMessage: comment.message,
+              previousSections: cloneCommentSections(comment.sections || []),
+              nextMessage,
+              nextSections: cloneCommentSections(nextSections),
+              editedBy: currentUser.id,
+              editedAt: now,
+            },
+          ],
+        };
+      });
+
+      return didUpdate
+        ? { ...task, comments, updatedAt: now }
+        : task;
+    }));
+  };
+
+  const deleteTaskComment = (taskId: string, commentId: string) => {
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(task => {
+      if (task.id !== taskId) return task;
+
+      let didDelete = false;
+      const now = new Date().toISOString();
+      const comments = (task.comments || []).map(comment => {
+        if (comment.id !== commentId || !canEditOrDeleteComment(comment, currentUser)) return comment;
+        didDelete = true;
+        return {
+          ...comment,
+          deletedAt: now,
+          deletedBy: currentUser.id,
+          isDeleted: true,
+          updatedAt: now,
+        };
+      });
+
+      return didDelete
+        ? { ...task, comments, updatedAt: now }
+        : task;
     }));
   };
 
@@ -1958,6 +2111,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       authError,
       accountProfiles,
       customResponsibilities,
+      appSettings,
+      canManageSettings,
       environment,
       tasks,
       users: usersObj,
@@ -1975,16 +2130,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       isImportingDriveTasks,
       setEnvironment,
       updateTaskStatus,
+      toggleTaskHold,
       updateTaskPriority,
       updateTaskAssignment,
       updateTaskReviewMode,
       updateTaskPublishSchedule,
       markCampaignPublished,
       markPublishReminderSent,
+      markWeekReminderSent,
+      submitScheduledCampaign,
+      editScheduledCampaign,
       createWorkAssignment,
       updateWorkAssignment,
       submitWorkAssignmentUpload,
       addTaskComment,
+      updateTaskComment,
+      deleteTaskComment,
       addTaskVersion,
       replaceTaskVersionFiles,
       updateTaskMediaPreviews,
@@ -1996,10 +2157,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateUserRole,
       updateUserResponsibility,
       addCustomResponsibility,
+      updateAppSettings,
       deleteUserAccount,
       logout,
       archiveTask,
       unarchiveTask,
+      deleteTask,
       connectGoogleDrive,
       disconnectGoogleDrive,
       chooseDriveRoot,

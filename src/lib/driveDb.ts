@@ -1,4 +1,4 @@
-import { Environment, Notification, Task, UploadedTaskFile, User } from './types';
+import { AppSettings, Environment, Notification, Task, UploadedTaskFile, User } from './types';
 import {
   DrivePickerDocument,
   ensureDriveAccessToken,
@@ -11,12 +11,14 @@ const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 const TASK_METADATA_NAME = '.approval-flow-task.json';
+const SETTINGS_METADATA_NAME = '.approval-flow-settings.json';
 const SYSTEM_FOLDER_NAME = '_approval-flow';
 const NOTIFICATIONS_FOLDER_NAME = 'notifications';
 const APP_PROPERTY_KEY = 'approvalFlow';
 const ROOT_PROPERTY_KEY = 'approvalFlowRootId';
 const TASK_ID_PROPERTY_KEY = 'approvalFlowTaskId';
 const NOTIFICATION_ID_PROPERTY_KEY = 'approvalFlowNotificationId';
+const SETTINGS_PROPERTY_KEY = 'approvalFlowSettings';
 const FOLDER_ROLE_PROPERTY_KEY = 'approvalFlowFolderRole';
 const DRIVE_FILE_FIELDS = 'id,name,mimeType,size,parents,webViewLink,webContentLink,thumbnailLink,appProperties,createdTime,modifiedTime';
 const SHARED_DRIVE_FLAG = String(import.meta.env.VITE_USE_SHARED_DRIVE_DATA ?? '').trim().toLowerCase();
@@ -601,6 +603,39 @@ export async function upsertDriveNotifications(notifications: Notification[]): P
   }
 }
 
+async function findSettingsMetadataFile() {
+  if (!isDriveSharedStorageReady()) return null;
+  const rootFolderId = ensureRootFolderId();
+  const matches = await listDriveFiles([
+    `name = '${SETTINGS_METADATA_NAME}'`,
+    'trashed = false',
+    `appProperties has { key='${APP_PROPERTY_KEY}' and value='settings' }`,
+    `appProperties has { key='${ROOT_PROPERTY_KEY}' and value='${escapeDriveQuery(rootFolderId)}' }`,
+    `appProperties has { key='${SETTINGS_PROPERTY_KEY}' and value='current' }`,
+  ].join(' and '));
+  return matches[0] || null;
+}
+
+export async function fetchDriveSettings(): Promise<AppSettings | null> {
+  if (!isDriveSharedStorageReady()) return null;
+  const metadataFile = await findSettingsMetadataFile();
+  return metadataFile?.id ? downloadJsonFile<AppSettings>(metadataFile.id) : null;
+}
+
+export async function upsertDriveSettings(settings: AppSettings): Promise<void> {
+  if (!isDriveSharedStorageReady()) return;
+
+  const rootFolderId = ensureRootFolderId();
+  const { systemFolderId } = await ensureSystemFolders();
+  const existingFile = await findSettingsMetadataFile();
+  const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
+  await uploadDriveFile(SETTINGS_METADATA_NAME, systemFolderId, blob, 'application/json', {
+    [APP_PROPERTY_KEY]: 'settings',
+    [ROOT_PROPERTY_KEY]: rootFolderId,
+    [SETTINGS_PROPERTY_KEY]: 'current',
+  }, existingFile?.id);
+}
+
 async function importDriveFolder(folder: DrivePickerDocument, currentUser: User, environment: Environment): Promise<Task | null> {
   const folderId = folder.id;
   const metadataMatches = await listDriveFiles([
@@ -726,6 +761,24 @@ export async function importDriveSelectionToTasks(documents: DrivePickerDocument
   }
 
   return tasks;
+}
+
+export async function deleteDriveTask(taskId: string): Promise<void> {
+  if (!isDriveSharedStorageReady()) return;
+  const rootFolderId = ensureRootFolderId();
+  const folder = await findTaskFolder(rootFolderId, taskId);
+  if (folder?.id) {
+    await driveFetch(`/files/${encodeURIComponent(folder.id)}`, {
+      method: 'DELETE',
+    });
+  } else {
+    const existingMetadataFile = await findTaskMetadataFile(taskId);
+    if (existingMetadataFile?.id) {
+      await driveFetch(`/files/${encodeURIComponent(existingMetadataFile.id)}`, {
+        method: 'DELETE',
+      });
+    }
+  }
 }
 
 export const uploadTaskFiles = uploadDriveTaskFiles;

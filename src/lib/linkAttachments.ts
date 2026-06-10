@@ -261,3 +261,9 @@ export function getLinkHostLabel(rawUrl?: string) {
     return 'Linked file';
   }
 }
+
+export async function fetchFreshDriveThumbnail(fileId: string): Promise<string | null> {
+  const metadata = await fetchDriveLinkMetadata(fileId).catch(() => null);
+  return metadata?.thumbnailLink || null;
+}
+

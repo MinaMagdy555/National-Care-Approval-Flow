@@ -6,9 +6,10 @@ import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
 import { TaskThumbnail } from './FilePreview';
 import { getCurrentOwnerUserIds } from '../lib/workflowUtils';
+import { getPriorityTone, priorityToneClasses } from '../lib/appSettings';
 
 export function TaskCard({ task, onClick }: { task: Task; onClick: (id: string) => void; key?: string | number }) {
-  const { currentUser, users } = useAppStore();
+  const { currentUser, users, appSettings } = useAppStore();
   const statusInfo = getStatusInfo(task, currentUser.role);
   const nextAction = getNextActionLabel(task, currentUser.role);
 
@@ -27,15 +28,7 @@ export function TaskCard({ task, onClick }: { task: Task; onClick: (id: string) 
     purple: "bg-indigo-50 border-indigo-200 text-indigo-800",
   };
 
-  const getPriorityBadgeStyle = (p: string) => {
-    switch(p) {
-      case 'urgent': return "bg-rose-500 text-white border-rose-600";
-      case 'high': return "bg-amber-500 text-black border-amber-600";
-      case 'normal': return "bg-slate-200 text-slate-600 border-slate-300";
-      case 'low': return "bg-slate-100 text-slate-500 border-slate-200";
-      default: return "hidden";
-    }
-  };
+  const priorityBadgeStyle = task.priority === 'not_set' ? 'hidden' : priorityToneClasses(getPriorityTone(appSettings, task.priority), true);
 
   return (
     <div 
@@ -51,8 +44,8 @@ export function TaskCard({ task, onClick }: { task: Task; onClick: (id: string) 
           {task.code}
         </div>
         
-        <div className={cn("absolute bottom-3 right-3 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider shadow-sm border", getPriorityBadgeStyle(task.priority))}>
-           {getPriorityLabel(task.priority)}
+        <div className={cn("absolute bottom-3 right-3 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider shadow-sm border", priorityBadgeStyle)}>
+           {getPriorityLabel(task.priority, appSettings)}
         </div>
       </div>
 

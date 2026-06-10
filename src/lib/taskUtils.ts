@@ -1,5 +1,6 @@
 import { Task, Role, Priority, TaskType, ReviewMode } from './types';
 import { isTaskArchived } from './archiveUtils';
+import { defaultAppSettings, getPriorityLabelFromSettings } from './appSettings';
 
 export function getTaskTypeLabel(type: TaskType): string {
   switch (type) {
@@ -9,7 +10,13 @@ export function getTaskTypeLabel(type: TaskType): string {
     case 'website_material': return 'Website Material';
     case 'campaign': return 'Campaign';
     case 'others': return 'Others';
-    default: return 'Asset';
+    default: {
+      if (!type) return 'Asset';
+      return type
+        .split('_')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+    }
   }
 }
 
@@ -22,15 +29,8 @@ export function getReviewModeLabel(mode: ReviewMode): string {
   }
 }
 
-export function getPriorityLabel(priority: Priority): string {
-  switch (priority) {
-    case 'not_set': return 'Not Set';
-    case 'low': return 'Low';
-    case 'normal': return 'Normal';
-    case 'high': return 'High';
-    case 'urgent': return 'Urgent';
-    default: return 'Not Set';
-  }
+export function getPriorityLabel(priority: Priority, settings = defaultAppSettings): string {
+  return getPriorityLabelFromSettings(settings, priority);
 }
 
 export function getStatusInfo(task: Task, viewerRole: Role): { label: string; color: 'amber' | 'blue' | 'green' | 'red' | 'gray' | 'purple' } {
@@ -38,6 +38,10 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
 
   if (isTaskArchived(task)) {
     return { label: 'Archived', color: 'gray' };
+  }
+
+  if (status === 'on_hold') {
+    return { label: 'On Hold', color: 'gray' };
   }
 
   if (viewerRole === 'team_member') {
@@ -51,6 +55,8 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
       case 'sent_to_art_director': return { label: 'Waiting for art director', color: 'blue' };
       case 'waiting_art_director_approval': return { label: 'Waiting for art director', color: 'blue' };
       case 'changes_requested_by_art_director': return { label: 'Changes requested by art director', color: 'red' };
+      case 'waiting_content_revision': return { label: 'Waiting for content rev.', color: 'amber' };
+      case 'changes_requested_by_content': return { label: 'Content changes requested', color: 'red' };
       case 'approved_by_art_director': return { label: 'Approved', color: 'green' };
       case 'completed': return { label: 'Completed', color: 'green' };
       case 'archived': return { label: 'Archived', color: 'gray' };
@@ -69,6 +75,8 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
       case 'sent_to_art_director': return { label: 'Sent to art director', color: 'blue' };
       case 'waiting_art_director_approval': return { label: 'Waiting for art director', color: 'blue' };
       case 'changes_requested_by_art_director': return { label: 'Art director requested changes', color: 'red' };
+      case 'waiting_content_revision': return { label: 'Waiting for content rev.', color: 'gray' };
+      case 'changes_requested_by_content': return { label: 'Returned for content changes', color: 'red' };
       case 'approved_by_art_director': return { label: 'Approved by art director', color: 'green' };
       case 'completed': return { label: 'Completed', color: 'green' };
       case 'archived': return { label: 'Archived', color: 'gray' };
@@ -88,6 +96,8 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
       case 'submitted': return { label: 'With Reviewer', color: 'gray' };
       case 'waiting_reviewer_quick_look': return { label: 'With Reviewer', color: 'gray' };
       case 'changes_requested_by_reviewer': return { label: 'Returned by Reviewer', color: 'gray' };
+      case 'waiting_content_revision': return { label: 'Waiting for content rev.', color: 'gray' };
+      case 'changes_requested_by_content': return { label: 'Returned for content changes', color: 'red' };
       case 'completed': return { label: 'Completed', color: 'green' };
       case 'archived': return { label: 'Archived', color: 'gray' };
       default: return { label: status, color: 'gray' };
@@ -100,7 +110,9 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
     case 'waiting_reviewer_full_review':
     case 'waiting_reviewer_quick_look': return { label: 'In Review', color: 'blue' };
     case 'changes_requested_by_reviewer':
-    case 'changes_requested_by_art_director': return { label: 'Changes Requested', color: 'red' };
+    case 'changes_requested_by_art_director':
+    case 'changes_requested_by_content': return { label: 'Changes Requested', color: 'red' };
+    case 'waiting_content_revision': return { label: 'Waiting for content rev.', color: 'amber' };
     case 'sent_to_art_director':
     case 'waiting_art_director_approval': return { label: 'With art director', color: 'blue' };
     case 'approved_by_art_director': return { label: 'Approved', color: 'green' };
@@ -116,13 +128,20 @@ export function getNextActionLabel(task: Task, viewerRole: Role): string {
     return 'Archived';
   }
 
+  if (status === 'on_hold') {
+    return 'On Hold';
+  }
+
   if (viewerRole === 'team_member') {
     if (status === 'assigned_work') {
       return 'Upload finished work';
     }
 
-    if (status === 'changes_requested_by_reviewer' || status === 'changes_requested_by_art_director') {
-      return 'Resubmit new version';
+    if (status === 'changes_requested_by_reviewer' || status === 'changes_requested_by_art_director' || status === 'changes_requested_by_content') {
+      return 'Resubmit version';
+    }
+    if (status === 'waiting_content_revision') {
+      return 'Review Content';
     }
     return 'Waiting';
   }

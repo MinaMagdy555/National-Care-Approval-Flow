@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { FileText, FileWarning, Film, Image as ImageIcon, Link2 } from 'lucide-react';
 import { Task, UploadedTaskFile } from '../lib/types';
 import {
@@ -10,7 +10,7 @@ import {
   taskNeedsThumbnailPreview,
 } from '../lib/previewUtils';
 import { useAppStore } from '../lib/store';
-import { getLinkedFileEmbedUrl, getLinkHostLabel, isLinkedTaskFile } from '../lib/linkAttachments';
+import { getLinkedFileEmbedUrl, getLinkHostLabel, isLinkedTaskFile, fetchFreshDriveThumbnail } from '../lib/linkAttachments';
 
 const thumbnailPreviewBackfillAttempts = new Set<string>();
 const thumbnailPreviewBackfillQueue: Array<() => Promise<void>> = [];
@@ -176,6 +176,7 @@ function LightweightFilePlaceholder({
   );
 }
 
+
 function PdfCanvasPreview({
   file,
   compact = false,
@@ -249,26 +250,64 @@ export function FileContentThumbnail({
   className?: string;
   allowLocalFile?: boolean;
 }) {
-  const previewUrl = file?.previewUrl || '';
+  const [renderingUrl, setRenderingUrl] = useState<string>('');
   const [previewLoadFailed, setPreviewLoadFailed] = useState(false);
+  const [isFetchingFresh, setIsFetchingFresh] = useState(false);
+
+  const driveFileId = file?.driveFileId || (file?.storageProvider === 'drive' ? file?.storagePath : null);
 
   useEffect(() => {
+    setRenderingUrl(file?.previewUrl || '');
     setPreviewLoadFailed(false);
-  }, [previewUrl]);
+  }, [file?.previewUrl]);
+
+  useEffect(() => {
+    if (!file?.previewUrl && driveFileId) {
+      setIsFetchingFresh(true);
+      fetchFreshDriveThumbnail(driveFileId)
+        .then(newUrl => {
+          if (newUrl) {
+            setRenderingUrl(newUrl);
+          } else {
+            setPreviewLoadFailed(true);
+          }
+        })
+        .catch(() => setPreviewLoadFailed(true))
+        .finally(() => setIsFetchingFresh(false));
+    }
+  }, [file?.previewUrl, driveFileId]);
+
+  const handleImageError = () => {
+    if (driveFileId && !isFetchingFresh) {
+      setIsFetchingFresh(true);
+      fetchFreshDriveThumbnail(driveFileId)
+        .then(newUrl => {
+          if (newUrl) {
+            setRenderingUrl(newUrl);
+          } else {
+            setPreviewLoadFailed(true);
+          }
+        })
+        .catch(() => setPreviewLoadFailed(true))
+        .finally(() => setIsFetchingFresh(false));
+    } else {
+      setPreviewLoadFailed(true);
+    }
+  };
 
   if (!file) {
     return <MissingSharedFile compact />;
   }
 
-  if (isStoredPreviewUrl(file) && !previewLoadFailed) {
+  if (renderingUrl && !previewLoadFailed) {
     return (
       <img
-        src={file.previewUrl}
+        src={renderingUrl}
         alt={alt}
         loading="lazy"
         decoding="async"
         fetchPriority="low"
-        onError={() => setPreviewLoadFailed(true)}
+        onError={handleImageError}
         className={className || 'h-full w-full bg-white object-contain'}
       />
     );
@@ -282,7 +321,44 @@ export function FileContentThumbnail({
     if (kind === 'video') {
       return <video src={file.url} muted playsInline preload="metadata" className={className || 'h-full w-full bg-white object-contain'} />;
     }
+    if (kind === 'pdf') {
+      return <PdfCanvasPreview file={file} compact />;
+    }
     return <LightweightFilePlaceholder file={file} compact />;
+  }
+
+  if (driveFileId && isFetchingFresh) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-slate-100">
+        <span className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (driveFileId) {
+    const embedUrl = getLinkedFileEmbedUrl(file.webViewLink || file.url) || `https://drive.google.com/file/d/${driveFileId}/preview`;
+    const isDrivePreview = embedUrl.includes('drive.google.com/file/d/');
+    return (
+      <div className="relative h-full w-full overflow-hidden bg-slate-950 pointer-events-none rounded-lg">
+        <iframe
+          src={embedUrl}
+          title={alt}
+          className="absolute border-none pointer-events-none"
+          style={isDrivePreview ? {
+            top: '-52px',
+            left: '0',
+            width: '100%',
+            height: 'calc(100% + 52px)',
+          } : {
+            top: '0',
+            left: '0',
+            width: '100%',
+            height: '100%',
+          }}
+          loading="lazy"
+        />
+      </div>
+    );
   }
 
   if (isLocalOnlyFileUrl(file.url)) {
@@ -488,4 +564,3 @@ export function FilePreview({
     </div>
   );
 }
-

@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { Priority, ReviewMode, TaskCommentSection, UploadedTaskFile } from '../lib/types';
+import { Priority, ReviewMode, TaskComment, TaskCommentSection, UploadedTaskFile } from '../lib/types';
 import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
-import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, Link2, Settings2 } from 'lucide-react';
+import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, Link2, Settings2, Edit3, Trash2, History, Send, Pause } from 'lucide-react';
 import { FileContentThumbnail, FilePreview, isLocalOnlyFileUrl } from './FilePreview';
 import { uploadTaskFiles } from '../lib/driveDb';
 import { isTaskArchived } from '../lib/archiveUtils';
@@ -32,6 +32,10 @@ type ReviewNoteSection = {
   localPreviewUrl?: string;
 };
 
+function cloneCommentSections(sections: TaskCommentSection[]) {
+  return sections.map(section => ({ ...section }));
+}
+
 export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => void }) {
   const {
     tasks,
@@ -39,30 +43,51 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     users,
     userList,
     updateTaskStatus,
+    toggleTaskHold,
     updateTaskPriority,
     updateTaskAssignment,
     updateTaskReviewMode,
     updateTaskPublishSchedule,
     markCampaignPublished,
     addTaskComment,
+    updateTaskComment,
+    deleteTaskComment,
     addTaskVersion,
     replaceTaskVersionFiles,
     updateTaskMediaPreviews,
     archiveTask,
     unarchiveTask,
+    deleteTask,
+    appSettings,
   } = useAppStore();
   const task = tasks.find(t => t.id === taskId);
+
+  const isMina = currentUser.id === 'user_1' || currentUser.name.includes('Mina');
+  const isDina = currentUser.id === 'user_3' || currentUser.name.includes('Dina');
+  const isMarwa = currentUser.id === 'user_2' || currentUser.name.includes('Marwa');
+  const isSobeeh = currentUser.id === 'user_9' || currentUser.name.includes('Sobeeh');
+  const isFawzy = currentUser.id === 'user_7' || currentUser.name.includes('Fawzy');
+
+  const canArchiveTask = isMina || isDina || isMarwa || isSobeeh || isFawzy;
+  const canDeleteTask = isDina || isMarwa || isSobeeh || isFawzy;
   
   const [modal, setModal] = useState<'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
   const [selectedVersionIndex, setSelectedVersionIndex] = useState(0);
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [reviewNotes, setReviewNotes] = useState<ReviewNoteSection[]>([{ id: 'note_1', note: '' }]);
+  const [followUpMessage, setFollowUpMessage] = useState('');
+  const [followUpNotes, setFollowUpNotes] = useState<ReviewNoteSection[]>([{ id: 'follow_note_1', note: '' }]);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editMessage, setEditMessage] = useState('');
+  const [editSections, setEditSections] = useState<TaskCommentSection[]>([]);
+  const [expandedHistoryIds, setExpandedHistoryIds] = useState<string[]>([]);
   const [adRejectComment, setAdRejectComment] = useState('');
   const [adRejectNotes, setAdRejectNotes] = useState<ReviewNoteSection[]>([{ id: 'ad_note_1', note: '' }]);
   const [selectedMinaFeedbackIds, setSelectedMinaFeedbackIds] = useState<string[]>([]);
   const [resubmitLinks, setResubmitLinks] = useState<UploadedTaskFile[]>([]);
   const [resubmitLinkUrl, setResubmitLinkUrl] = useState('');
+  const [resubmitFileName, setResubmitFileName] = useState('');
   const [resubmitNote, setResubmitNote] = useState('');
   const [resubmitError, setResubmitError] = useState('');
   const [isAddingResubmitLink, setIsAddingResubmitLink] = useState(false);
@@ -79,7 +104,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const previewOptimizationAttemptedRef = useRef<Set<string>>(new Set());
   const updateTaskMediaPreviewsRef = useRef(updateTaskMediaPreviews);
 
-  const canViewFullWorkspace = userCanViewFullWorkspace(currentUser);
+  const canViewFullWorkspace = userCanViewFullWorkspace(currentUser, appSettings);
 
   useEffect(() => {
     setSelectedVersionIndex(0);
@@ -106,7 +131,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   }, [updateTaskMediaPreviews]);
 
   useEffect(() => {
-    if (!task || !canUserAccessTask(task, currentUser) || previewOptimizationAttemptedRef.current.has(task.id) || !taskNeedsPreviewOptimization(task)) return;
+    if (!task || !canUserAccessTask(task, currentUser, appSettings) || previewOptimizationAttemptedRef.current.has(task.id) || !taskNeedsPreviewOptimization(task)) return;
 
     previewOptimizationAttemptedRef.current.add(task.id);
     let cancelled = false;
@@ -126,13 +151,13 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     };
   }, [canViewFullWorkspace, currentUser.id, task]);
 
-  if (!task || !canUserAccessTask(task, currentUser)) return <div>Task not found</div>;
+  if (!task || !canUserAccessTask(task, currentUser, appSettings)) return <div>Task not found</div>;
 
   const statusInfo = getStatusInfo(task, currentUser.role);
   const nextAction = getNextActionLabel(task, currentUser.role);
   const creator = users[task.createdBy]?.name || (task.createdBy === currentUser.id ? currentUser.name : initialUsers.find(u => u.id === task.createdBy)?.name) || 'Unknown';
   const handledByNames = task.handledBy
-    .filter(id => isAssignableHandler(id))
+    .filter(id => isAssignableHandler(id, undefined, appSettings))
     .map(id => users[id]?.name || initialUsers.find(u => u.id === id)?.name)
     .filter(Boolean)
     .join(' + ');
@@ -153,13 +178,24 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const isCurrentActiveOwner = canUserActAsCurrentOwner(task, currentUser);
   const canActAsReviewer = currentUser.role === 'reviewer' && isCurrentActiveOwner;
   const canActAsArtDirector = currentUser.role === 'art_director' && isCurrentActiveOwner;
-  const canManageWorkflowSettings = canManageWorkflow(currentUser);
-  const canReassignTask = canAssignContributors(currentUser.id);
+  const canManageWorkflowSettings = canManageWorkflow(currentUser, appSettings);
+  const canReassignTask = canAssignContributors(currentUser.id, appSettings);
   const canResubmitTask = !isReadOnlyObserver && (isSelfCreatedTask || task.handledBy.includes(currentUser.id) || currentOwnerIds.includes(currentUser.id));
   const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
-  const canResubmitVersion = canResubmitTask && ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(task.status);
+  const canResubmitVersion = canResubmitTask && ['changes_requested_by_reviewer', 'changes_requested_by_art_director', 'changes_requested_by_content'].includes(task.status);
   const isInternalReviewTask = !isDetailedReviewType;
   const canViewInternalReviewNotes = canViewFullWorkspace;
+  const isAdminUser = Boolean(currentUser.isAdmin) || currentUser.role === 'admin';
+  const isContentCreatorUser = currentUser.jobTitle === 'Content Creator' || (currentUser.role === 'team_member' && currentUser.jobTitle === 'Content Creator') || currentUser.role === 'admin' || Boolean(currentUser.isAdmin);
+  const canActAsContentCreator = (isContentCreatorUser && task.status === 'waiting_content_revision' && (task.currentOwnerUserIds || []).includes(currentUser.id)) || (isAdminUser && task.status === 'waiting_content_revision');
+  const humanCommentActions = new Set<TaskComment['action']>(['review_note', 'request_edits', 'sent_to_marwa', 'marwa_rejection', 'content_approved', 'content_rejected']);
+  const canEditOrDeleteComment = (comment: TaskComment) => {
+    if (comment.isDeleted) return false;
+    return humanCommentActions.has(comment.action)
+      ? comment.authorId === currentUser.id
+      : isAdminUser;
+  };
+  const canViewCommentHistory = (comment: TaskComment) => comment.authorId === currentUser.id || isAdminUser;
   const isReviewerCommentAuthor = (authorId: string) => {
     const role = users[authorId]?.role || initialUsers.find(user => user.id === authorId)?.role;
     return role === 'reviewer' || role === 'admin';
@@ -167,7 +203,9 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const isInternalReviewerComment = (comment: { authorId: string; action: string }) => (
     isInternalReviewTask && isReviewerCommentAuthor(comment.authorId) && comment.action === 'sent_to_marwa'
   );
-  const visibleComments = (task.comments || []).filter(comment => !isInternalReviewerComment(comment) || canViewInternalReviewNotes);
+  const visibleComments = (task.comments || [])
+    .filter(comment => !isInternalReviewerComment(comment) || canViewInternalReviewNotes)
+    .sort((first, second) => new Date(first.createdAt).getTime() - new Date(second.createdAt).getTime());
   const minaForwardableComments = (task.comments || []).filter(comment => isInternalReviewerComment(comment));
   const minaForwardableFeedback = minaForwardableComments.flatMap(comment => {
     const items: Array<{
@@ -205,7 +243,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const selectedMinaFeedback = minaForwardableFeedback.filter(item => selectedMinaFeedbackIds.includes(item.id));
   const canSubmitADReject = adRejectComment.trim() || selectedMinaFeedback.length > 0 || adRejectNotes.some(section => section.note.trim() || section.imageUrl || section.localPreviewUrl || section.imageFile);
   const hasResubmitAttachments = resubmitLinks.length > 0;
-  const contributorOptions = getAssignableContributorsForTask(userList, task.taskType, task.createdBy);
+  const contributorOptions = getAssignableContributorsForTask(userList, task.taskType, task.createdBy, appSettings);
   const reviewModeOptions = [
     { value: 'full_review', label: 'Full Review' },
     { value: 'quick_look', label: 'Quick Look' },
@@ -233,12 +271,19 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     setIsAddingResubmitLink(true);
     try {
       const linkedFile = await createLinkedTaskFileWithMetadata(resubmitLinkUrl);
+      if (resubmitFileName.trim()) {
+        linkedFile.name = resubmitFileName.trim();
+      } else if (!linkedFile.name || linkedFile.name === 'Google Drive file' || linkedFile.name === 'Google Docs file' || linkedFile.name === 'Google Drive folder' || linkedFile.name === 'Uploaded file') {
+        const nextIndex = resubmitLinks.length + 1;
+        linkedFile.name = resubmitLinks.length > 0 ? `${task.name} (${nextIndex})` : task.name;
+      }
       setResubmitLinks(prev => (
         prev.some(file => file.url === linkedFile.url || (file.driveFileId && file.driveFileId === linkedFile.driveFileId))
           ? prev
           : [...prev, linkedFile]
       ));
       setResubmitLinkUrl('');
+      setResubmitFileName('');
       setResubmitError('');
     } catch (error) {
       setResubmitError(error instanceof Error ? error.message : 'Enter a valid link.');
@@ -350,6 +395,31 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     }));
   };
 
+  const addFollowUpNoteSection = () => {
+    setFollowUpNotes(prev => [...prev, { id: Math.random().toString(36).substring(7), note: '' }]);
+  };
+
+  const updateFollowUpNote = (id: string, note: string) => {
+    setFollowUpNotes(prev => prev.map(section => section.id === id ? { ...section, note } : section));
+  };
+
+  const updateFollowUpNoteImage = (id: string, file?: File) => {
+    if (!file) return;
+    const localPreviewUrl = URL.createObjectURL(file);
+    setFollowUpNotes(prev => prev.map(section => {
+      if (section.id !== id) return section;
+      revokeLocalPreviewUrl(section.localPreviewUrl);
+      return {
+        ...section,
+        imageName: file.name,
+        imageFile: file,
+        imageUrl: undefined,
+        imageStoragePath: undefined,
+        localPreviewUrl,
+      };
+    }));
+  };
+
   const addADRejectNoteSection = () => {
     setAdRejectNotes(prev => [...prev, { id: Math.random().toString(36).substring(7), note: '' }]);
   };
@@ -378,6 +448,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const hasFilledSection = (section: ReviewNoteSection) => Boolean(section.note.trim() || section.imageUrl || section.localPreviewUrl || section.imageFile);
   const hasFilledReviewSections = () => reviewNotes.some(hasFilledSection);
   const hasFilledADRejectSections = () => adRejectNotes.some(hasFilledSection);
+  const hasFilledFollowUpSections = () => followUpNotes.some(hasFilledSection);
 
   const getSectionPreviewUrl = (section: ReviewNoteSection | TaskCommentSection) => (
     'localPreviewUrl' in section && section.localPreviewUrl ? section.localPreviewUrl : section.imageUrl
@@ -409,9 +480,80 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     setReviewNotes([{ id: Math.random().toString(36).substring(7), note: '' }]);
   };
 
+  const resetFollowUpNotes = () => {
+    followUpNotes.forEach(section => revokeLocalPreviewUrl(section.localPreviewUrl));
+    setFollowUpNotes([{ id: Math.random().toString(36).substring(7), note: '' }]);
+  };
+
   const resetADRejectNotes = () => {
     adRejectNotes.forEach(section => revokeLocalPreviewUrl(section.localPreviewUrl));
     setAdRejectNotes([{ id: Math.random().toString(36).substring(7), note: '' }]);
+  };
+
+  const startEditingComment = (comment: TaskComment) => {
+    setEditingCommentId(comment.id);
+    setEditMessage(comment.message || '');
+    setEditSections(cloneCommentSections(comment.sections || []));
+  };
+
+  const cancelEditingComment = () => {
+    setEditingCommentId(null);
+    setEditMessage('');
+    setEditSections([]);
+  };
+
+  const updateEditSectionNote = (sectionId: string, note: string) => {
+    setEditSections(prev => prev.map(section => section.id === sectionId ? { ...section, note } : section));
+  };
+
+  const toggleCommentHistory = (commentId: string) => {
+    setExpandedHistoryIds(prev => (
+      prev.includes(commentId)
+        ? prev.filter(id => id !== commentId)
+        : [...prev, commentId]
+    ));
+  };
+
+  const handleFollowUpSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (isSavingAction) return;
+
+    const message = followUpMessage.trim();
+    if (!message && !hasFilledFollowUpSections()) return;
+
+    setIsSavingAction(true);
+    setActionError('');
+    try {
+      const sections = await prepareCommentSections(followUpNotes);
+      addTaskComment(task.id, {
+        authorId: currentUser.id,
+        action: 'review_note',
+        message,
+        sections,
+      });
+      setFollowUpMessage('');
+      resetFollowUpNotes();
+    } catch (error) {
+      console.error('Failed to save follow-up comment', error);
+      setActionError('Could not save the attached screenshots. Please try again.');
+    } finally {
+      setIsSavingAction(false);
+    }
+  };
+
+  const handleSaveCommentEdit = (commentId: string) => {
+    const hasText = editMessage.trim();
+    const sections = editSections
+      .map(section => ({ ...section, note: section.note.trim() }))
+      .filter(section => section.note || section.imageUrl);
+
+    if (!hasText && sections.length === 0) return;
+
+    updateTaskComment(task.id, commentId, {
+      message: hasText || undefined,
+      sections,
+    });
+    cancelEditingComment();
   };
 
   const handleSendToAD = async (e: React.FormEvent) => {
@@ -514,6 +656,102 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const handleADApprove = () => {
     updateTaskStatus(task.id, 'approved_by_art_director', null);
   };
+
+  const handleContentApprove = async () => {
+    if (isSavingAction) return;
+    setIsSavingAction(true);
+    setActionError('');
+    try {
+      const creatorRole = users[task.createdBy]?.role || initialUsers.find(user => user.id === task.createdBy)?.role;
+      const isReviewerCreated = creatorRole === 'reviewer' || creatorRole === 'admin';
+      const sendToMarwa = isReviewerCreated || task.reviewMode === 'direct_to_ad';
+      const nextStatus = sendToMarwa
+        ? 'sent_to_art_director'
+        : task.reviewMode === 'quick_look'
+          ? 'waiting_reviewer_quick_look'
+          : 'waiting_reviewer_full_review';
+      const nextOwnerRole = sendToMarwa ? 'art_director' : 'reviewer';
+
+      addTaskComment(task.id, {
+        authorId: currentUser.id,
+        action: 'content_approved',
+        message: 'Content approved, moving to the review flow.',
+        sections: [],
+      });
+      updateTaskStatus(task.id, nextStatus, nextOwnerRole);
+    } catch (error) {
+      console.error('Failed to approve content', error);
+      setActionError('Could not approve content revision. Please try again.');
+    } finally {
+      setIsSavingAction(false);
+    }
+  };
+
+  const handleContentReject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSavingAction) return;
+
+    setIsSavingAction(true);
+    setActionError('');
+    try {
+      const sections = await prepareCommentSections(reviewNotes);
+      if (sections.length === 0) {
+        setActionError('Please add at least one note or screenshot detailing the requested content changes.');
+        setIsSavingAction(false);
+        return;
+      }
+      addTaskComment(task.id, {
+        authorId: currentUser.id,
+        action: 'content_rejected',
+        message: 'Content revision rejected with change requests.',
+        sections,
+      });
+      updateTaskStatus(task.id, 'changes_requested_by_content', 'team_member', [task.createdBy, ...task.handledBy]);
+      resetReviewNotes();
+    } catch (error) {
+      console.error('Failed to save content edit request', error);
+      setActionError('Could not save the attached screenshots/comments. Please try again.');
+    } finally {
+      setIsSavingAction(false);
+    }
+  };
+
+  const renderFollowUpNotes = () => (
+    <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-500">Screens</h4>
+        <button type="button" onClick={addFollowUpNoteSection} className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-indigo-600 shadow-sm ring-1 ring-slate-200 hover:bg-indigo-50">
+          <Plus className="h-3.5 w-3.5" /> Add
+        </button>
+      </div>
+
+      {followUpNotes.map((section, index) => (
+        <div key={section.id} className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-[96px,1fr]">
+          <label className="flex h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 text-slate-500 hover:border-indigo-400 hover:bg-indigo-50">
+            {getSectionPreviewUrl(section) ? (
+              <button type="button" onClick={(event) => { event.preventDefault(); setLightboxUrl(getSectionPreviewUrl(section) || null); }} className="h-full w-full overflow-hidden rounded-lg">
+                <img src={getSectionPreviewUrl(section)} alt={section.imageName || `Screen ${index + 1}`} className="h-full w-full object-cover" />
+              </button>
+            ) : (
+              <>
+                <Upload className="h-5 w-5" />
+                <span className="text-[10px] font-black uppercase">Screen</span>
+              </>
+            )}
+            <input type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" className="hidden" onChange={event => updateFollowUpNoteImage(section.id, event.target.files?.[0])} />
+          </label>
+
+          <textarea
+            rows={3}
+            value={section.note}
+            onChange={event => updateFollowUpNote(section.id, event.target.value)}
+            placeholder={`Screen note ${index + 1}`}
+            className="min-h-24 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+      ))}
+    </div>
+  );
 
   const renderReviewNotes = () => (
     <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -618,6 +856,29 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
         )}
 
         <div className="mt-0 flex flex-1 flex-col gap-4 overflow-auto p-4 pt-16 sm:p-6 sm:pt-16 md:mt-10 md:min-h-0 md:p-8">
+          {files.length > 1 && (
+            <div className="flex flex-wrap gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+              {files.map((file, index) => {
+                return (
+                  <button
+                    key={file.id}
+                    type="button"
+                    onClick={() => setSelectedFileIndex(index)}
+                    className={cn(
+                      "flex min-w-[160px] max-w-[240px] items-center gap-3 rounded-lg border p-2 text-left transition-colors",
+                      selectedFileIndex === index ? "border-indigo-500 bg-indigo-50" : "border-slate-200 hover:bg-slate-50"
+                    )}
+                  >
+                    <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white border border-slate-100 text-slate-500">
+                      <FileContentThumbnail file={file} alt={file.name} className="h-full w-full bg-white object-contain" />
+                    </div>
+                    <span className="truncate text-xs font-bold text-slate-700">{file.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           <div className="flex h-[calc(100dvh-9rem)] min-h-[48vh] flex-none items-center justify-center overflow-hidden rounded-xl bg-slate-100 md:min-h-0">
             <FilePreview file={selectedFile} onImageClick={setLightboxUrl} />
           </div>
@@ -652,29 +913,6 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 }}
               />
               {repairError && <p className="mt-3 text-sm font-bold text-rose-600">{repairError}</p>}
-            </div>
-          )}
-
-          {files.length > 1 && (
-            <div className="flex gap-3 overflow-x-auto rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-              {files.map((file, index) => {
-                return (
-                  <button
-                    key={file.id}
-                    type="button"
-                    onClick={() => setSelectedFileIndex(index)}
-                    className={cn(
-                      "flex min-w-32 max-w-40 items-center gap-2 rounded-lg border p-2 text-left transition-colors",
-                      selectedFileIndex === index ? "border-indigo-500 bg-indigo-50" : "border-slate-200 hover:bg-slate-50"
-                    )}
-                  >
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100 text-slate-500">
-                      <FileContentThumbnail file={file} alt={file.name} />
-                    </div>
-                    <span className="truncate text-xs font-bold text-slate-700">{file.name}</span>
-                  </button>
-                );
-              })}
             </div>
           )}
         </div>
@@ -766,11 +1004,6 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                     <div className="space-y-2">
                       <div>
                         <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Assigned Contributors</label>
-                        <p className="mt-1 text-xs font-semibold text-slate-500">
-                          {task.taskType === 'video'
-                            ? 'Only Mina, Dina, Marwa, Sobeeh, and Fawzy can assign contributors. Video tasks can assign Mina and Yomna only.'
-                            : 'Only Mina, Dina, Marwa, Sobeeh, and Fawzy can assign contributors. Non-video tasks can assign Mina and team contributors except Yomna.'}
-                        </p>
                       </div>
                       <UserMultiSelect
                         users={contributorOptions}
@@ -815,7 +1048,10 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                         type="datetime-local"
                         value={managedPublishAt}
                         onChange={event => setManagedPublishAt(event.target.value)}
-                        className="w-full rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500"
+                        onClick={(e) => {
+                          try { e.currentTarget.showPicker(); } catch (err) {}
+                        }}
+                        className="w-full rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500 cursor-pointer"
                       />
                     </div>
                     <div>
@@ -857,9 +1093,19 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             <form onSubmit={handleResubmitVersion} className="space-y-4 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4">
               <div>
                 <h3 className="text-sm font-black text-indigo-950">Upload New Version</h3>
-                <p className="mt-1 text-xs font-semibold text-indigo-800/70">
+                <p className="mt-1 mb-3 text-xs font-semibold text-indigo-800/70">
                   Paste the shared Drive link for the edited work. This keeps the same task and creates V{Math.max(0, ...task.versions.map(version => version.versionNumber)) + 1}.
                 </p>
+              </div>
+
+              <div className="mb-3">
+                <input
+                  type="text"
+                  value={resubmitFileName}
+                  onChange={e => setResubmitFileName(e.target.value)}
+                  placeholder="File Name (Optional)"
+                  className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm font-bold text-slate-900 outline-none transition-all placeholder:text-slate-400 placeholder:font-medium focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                />
               </div>
 
               <div className="grid gap-2 sm:grid-cols-[1fr,auto]">
@@ -934,6 +1180,33 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             </form>
           )}
           
+          {canActAsContentCreator && (
+            <>
+              <button 
+                onClick={handleContentApprove}
+                disabled={isSavingAction}
+                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-sm transition-all focus:ring-4 focus:ring-indigo-100 flex items-center justify-center gap-2"
+              >
+                <Check className="w-5 h-5" /> Approve Content
+              </button>
+              <form onSubmit={handleContentReject} className="space-y-3 rounded-2xl border border-rose-100 bg-rose-50/40 p-3">
+                <div>
+                  <h3 className="text-sm font-black text-rose-900">Request Content Changes</h3>
+                  <p className="mt-1 text-xs font-semibold text-rose-700/70">Add notes and optional screens for what needs content revision.</p>
+                </div>
+                {renderReviewNotes()}
+                {actionError && <p className="text-sm font-bold text-rose-600">{actionError}</p>}
+                <button 
+                  type="submit"
+                  disabled={!hasFilledReviewSections() || isSavingAction}
+                  className="w-full rounded-xl bg-slate-900 px-4 py-3 font-black text-white shadow-sm transition-colors hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {isSavingAction ? 'Saving...' : 'Request Content Changes'}
+                </button>
+              </form>
+            </>
+          )}
+
           {canActAsReviewer && isReviewerActionable && (
             <>
               <button 
@@ -1017,6 +1290,15 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             </>
           )}
 
+          {['admin', 'team_leader', 'marketing_manager', 'reviewer', 'art_director'].includes(currentUser.role) && (
+            <button
+              onClick={() => toggleTaskHold(task.id)}
+              className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-4 rounded-xl border border-slate-200 shadow-sm transition-all text-sm flex items-center justify-center gap-2 mt-2"
+            >
+              <Pause className="w-4 h-4" />
+              {task.status === 'on_hold' ? 'Resume Task' : 'Put Task On Hold'}
+            </button>
+          )}
         </div>
 
         <div className="flex-1 bg-slate-50 p-4 sm:p-6">
@@ -1056,70 +1338,221 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             })}
           </div>
 
-          {visibleComments.length > 0 && (
-            <div className="mt-6 border-t border-slate-200 pt-5">
-              <h3 className="mb-4 text-[11px] font-black uppercase tracking-wider text-slate-400">Comments</h3>
-              <div className="space-y-3">
-                {visibleComments.map(comment => {
-                  const author = users[comment.authorId] || (comment.authorId === currentUser.id ? currentUser : undefined) || initialUsers.find(user => user.id === comment.authorId);
-                  return (
-                    <div key={comment.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                      <div className="mb-3 flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-black text-slate-900">{author?.name || 'Unknown'}</p>
-                          <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-                            {comment.action.replaceAll('_', ' ')}
-                          </p>
-                        </div>
-                        <span className="text-[10px] font-bold text-slate-400">{new Date(comment.createdAt).toLocaleString()}</span>
+          <div className="mt-6 border-t border-slate-200 pt-5">
+            <h3 className="mb-4 text-[11px] font-black uppercase tracking-wider text-slate-400">Comments</h3>
+            <form onSubmit={handleFollowUpSubmit} className="mb-4 space-y-3 rounded-xl border border-indigo-100 bg-white p-4 shadow-sm">
+              <textarea
+                value={followUpMessage}
+                onChange={event => setFollowUpMessage(event.target.value)}
+                rows={3}
+                placeholder="Add another review point..."
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+              />
+              {renderFollowUpNotes()}
+              {actionError && <p className="text-sm font-bold text-rose-600">{actionError}</p>}
+              <button
+                type="submit"
+                disabled={isSavingAction || (!followUpMessage.trim() && !hasFilledFollowUpSections())}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-black text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                <Send className="h-4 w-4" /> {isSavingAction ? 'Saving...' : 'Add Comment'}
+              </button>
+            </form>
+
+            <div className="space-y-3">
+              {visibleComments.length === 0 && (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-white px-4 py-8 text-center text-sm font-bold text-slate-400">
+                  No comments yet.
+                </div>
+              )}
+              {visibleComments.map(comment => {
+                const author = users[comment.authorId] || (comment.authorId === currentUser.id ? currentUser : undefined) || initialUsers.find(user => user.id === comment.authorId);
+                const canManageComment = canEditOrDeleteComment(comment);
+                const canSeeHistory = canViewCommentHistory(comment) && ((comment.editHistory || []).length > 0 || comment.isDeleted);
+                const historyExpanded = expandedHistoryIds.includes(comment.id);
+                const isEditing = editingCommentId === comment.id;
+
+                return (
+                  <div key={comment.id} className={cn("rounded-xl border bg-white p-4 shadow-sm", comment.isDeleted ? "border-slate-200 bg-slate-50" : "border-slate-200")}>
+                    <div className="mb-3 flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-black text-slate-900">{author?.name || 'Unknown'}</p>
+                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                          {comment.action.replaceAll('_', ' ')}
+                        </p>
                       </div>
-
-                      {comment.message && <p className="mb-3 text-sm font-medium text-slate-700">{comment.message}</p>}
-
-                      {comment.sections.length > 0 && (
-                        <div className="space-y-3">
-                          {comment.sections.map(section => (
-                            <div key={section.id} className="grid gap-3 rounded-lg bg-slate-50 p-3 sm:grid-cols-[88px,1fr]">
-                              {section.imageUrl && (
-                                <button type="button" onClick={() => setLightboxUrl(section.imageUrl || null)} className="h-20 overflow-hidden rounded-lg border border-slate-200 bg-white">
-                                  <img src={section.imageUrl} alt={section.imageName || 'Comment screen'} loading="lazy" decoding="async" className="h-full w-full object-cover" />
-                                </button>
-                              )}
-                              {section.note && <p className="text-sm font-medium text-slate-700">{section.note}</p>}
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                      <div className="text-right">
+                        <span className="block text-[10px] font-bold text-slate-400">{new Date(comment.createdAt).toLocaleString()}</span>
+                        {comment.isEdited && comment.updatedAt && !comment.isDeleted && (
+                          <span className="mt-1 block text-[10px] font-black uppercase tracking-wider text-indigo-500">
+                            Edited {new Date(comment.updatedAt).toLocaleString()}
+                          </span>
+                        )}
+                        {comment.isDeleted && comment.deletedAt && (
+                          <span className="mt-1 block text-[10px] font-black uppercase tracking-wider text-rose-500">
+                            Deleted {new Date(comment.deletedAt).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  );
-                })}
-              </div>
+
+                    {comment.isDeleted ? (
+                      <p className="rounded-lg bg-white px-3 py-2 text-sm font-bold text-slate-500">Comment deleted.</p>
+                    ) : isEditing ? (
+                      <div className="space-y-3">
+                        <textarea
+                          value={editMessage}
+                          onChange={event => setEditMessage(event.target.value)}
+                          rows={3}
+                          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                        />
+                        {editSections.length > 0 && (
+                          <div className="space-y-3">
+                            {editSections.map(section => (
+                              <div key={section.id} className="grid gap-3 rounded-lg bg-slate-50 p-3 sm:grid-cols-[88px,1fr]">
+                                {section.imageUrl && (
+                                  <button type="button" onClick={() => setLightboxUrl(section.imageUrl || null)} className="h-20 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                                    <img src={section.imageUrl} alt={section.imageName || 'Comment screen'} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                                  </button>
+                                )}
+                                <textarea
+                                  value={section.note}
+                                  onChange={event => updateEditSectionNote(section.id, event.target.value)}
+                                  rows={3}
+                                  className="min-h-20 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" onClick={() => handleSaveCommentEdit(comment.id)} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-black text-white hover:bg-indigo-700">
+                            <Check className="h-3.5 w-3.5" /> Save
+                          </button>
+                          <button type="button" onClick={cancelEditingComment} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-50">
+                            <X className="h-3.5 w-3.5" /> Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        {comment.message && <p className="mb-3 text-sm font-medium text-slate-700">{comment.message}</p>}
+
+                        {comment.sections.length > 0 && (
+                          <div className="space-y-3">
+                            {comment.sections.map(section => (
+                              <div key={section.id} className="grid gap-3 rounded-lg bg-slate-50 p-3 sm:grid-cols-[88px,1fr]">
+                                {section.imageUrl && (
+                                  <button type="button" onClick={() => setLightboxUrl(section.imageUrl || null)} className="h-20 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                                    <img src={section.imageUrl} alt={section.imageName || 'Comment screen'} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                                  </button>
+                                )}
+                                {section.note && <p className="text-sm font-medium text-slate-700">{section.note}</p>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {(canManageComment || canSeeHistory) && !isEditing && (
+                      <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                        {canManageComment && (
+                          <>
+                            <button type="button" onClick={() => startEditingComment(comment)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-50">
+                              <Edit3 className="h-3.5 w-3.5" /> Edit
+                            </button>
+                            <button type="button" onClick={() => deleteTaskComment(task.id, comment.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-xs font-black text-rose-600 hover:bg-rose-100">
+                              <Trash2 className="h-3.5 w-3.5" /> Delete
+                            </button>
+                          </>
+                        )}
+                        {canSeeHistory && (
+                          <button type="button" onClick={() => toggleCommentHistory(comment.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-600 hover:bg-indigo-100">
+                            <History className="h-3.5 w-3.5" /> {historyExpanded ? 'Hide History' : 'History'}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {canSeeHistory && historyExpanded && (
+                      <div className="mt-3 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        {(comment.editHistory || []).map(version => (
+                          <div key={version.id} className="rounded-lg bg-white p-3">
+                            <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                              Edited by {users[version.editedBy]?.name || version.editedBy} at {new Date(version.editedAt).toLocaleString()}
+                            </p>
+                            {version.previousMessage && <p className="text-xs font-semibold text-slate-600">Previous: {version.previousMessage}</p>}
+                            {version.previousSections.length > 0 && (
+                              <div className="mt-2 space-y-1">
+                                {version.previousSections.map(section => (
+                                  <p key={section.id} className="text-xs font-semibold text-slate-500">{section.note || section.imageName || 'Image section'}</p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                        {comment.isDeleted && comment.deletedAt && (
+                          <div className="rounded-lg bg-white p-3">
+                            <p className="text-xs font-semibold text-slate-600">
+                              Deleted by {users[comment.deletedBy || '']?.name || comment.deletedBy || 'Unknown'} at {new Date(comment.deletedAt).toLocaleString()}
+                            </p>
+                            {comment.message && <p className="mt-2 text-xs font-semibold text-slate-700">Deleted content: {comment.message}</p>}
+                            {comment.sections.length > 0 && (
+                              <div className="mt-2 space-y-1">
+                                {comment.sections.map(section => (
+                                  <p key={section.id} className="text-xs font-semibold text-slate-500">{section.note || section.imageName || 'Image section'}</p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          )}
+          </div>
           </div>
 
-          {canManageWorkflowSettings && (
-            <div className="mt-4">
-              {isArchived ? (
+          {(canArchiveTask || canDeleteTask) && (
+            <div className="mt-4 flex flex-col gap-2">
+              {canArchiveTask && (
+                isArchived ? (
+                  <button
+                    type="button"
+                    onClick={() => unarchiveTask(task.id)}
+                    className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-black text-white hover:bg-emerald-700 transition-colors shadow-sm"
+                  >
+                    Unarchive Task
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => archiveTask(task.id)}
+                    className="w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white hover:bg-black transition-colors shadow-sm"
+                  >
+                    Archive Task
+                  </button>
+                )
+              )}
+              {canDeleteTask && (
                 <button
                   type="button"
-                  onClick={() => unarchiveTask(task.id)}
-                  className="w-full rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700 transition-colors hover:bg-emerald-100"
+                  onClick={() => {
+                    if (confirm("Are you sure you want to permanently delete this task? This action cannot be undone and will delete all files and history.")) {
+                      deleteTask(task.id);
+                      onBack();
+                    }
+                  }}
+                  className="w-full rounded-xl bg-rose-600 px-4 py-3 text-sm font-black text-white hover:bg-rose-700 transition-colors shadow-sm"
                 >
-                  Unarchive Task
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => archiveTask(task.id)}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-600 transition-colors hover:bg-slate-50"
-                >
-                  Archive Task
+                  Delete Task
                 </button>
               )}
             </div>
           )}
-
         </div>
 
       {/* MODALS */}

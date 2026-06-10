@@ -1,0 +1,267 @@
+import { AppSettings, Priority, PriorityOption, PriorityTone, ResponsibilityOption, Role, TaskType, User } from './types';
+
+export const MINA_ID = 'user_1';
+export const MARWA_ID = 'user_2';
+export const DINA_ID = 'user_3';
+export const MARIAM_ID = 'user_4';
+export const NOREEN_ID = 'user_5';
+export const YOMNA_ID = 'user_6';
+export const FAWZY_ID = 'user_7';
+export const OMAR_ID = 'user_8';
+export const AHMED_SOBEEH_ID = 'user_9';
+export const SAMA_ID = 'user_10';
+export const HANEEN_ID = 'user_11';
+export const REEM_ID = 'user_12';
+
+const now = new Date().toISOString();
+
+export const defaultResponsibilities: ResponsibilityOption[] = [
+  { id: 'senior_brand_designer_video_editor', label: 'Senior Brand Designer & Video Editor', permissionRole: 'reviewer' },
+  { id: 'art_director', label: 'Art Director', permissionRole: 'art_director' },
+  { id: 'team_leader', label: 'Team Leader', permissionRole: 'team_leader' },
+  { id: 'manager', label: 'Manager', permissionRole: 'manager' },
+  { id: 'developer', label: 'Developer', permissionRole: 'developer' },
+  { id: 'marketing_manager', label: 'Marketing Manager', permissionRole: 'marketing_manager' },
+  { id: 'graphic_designer', label: 'Graphic Designer', permissionRole: 'team_member' },
+  { id: 'video_editor', label: 'Video Editor', permissionRole: 'team_member' },
+  { id: 'content_creator', label: 'Content Creator', permissionRole: 'team_member' },
+  { id: 'hr', label: 'HR', permissionRole: 'team_member', grantsSettingsAccess: true },
+  { id: 'admin', label: 'Admin', permissionRole: 'admin', grantsSettingsAccess: true },
+];
+
+export const defaultPriorities: PriorityOption[] = [
+  { id: 'low', label: 'Low', tone: 'emerald', sortOrder: 3, active: true },
+  { id: 'normal', label: 'Normal', tone: 'slate', sortOrder: 2, active: true },
+  { id: 'high', label: 'High', tone: 'amber', sortOrder: 1, active: true },
+  { id: 'urgent', label: 'Urgent', tone: 'rose', sortOrder: 0, active: true },
+];
+
+export const defaultAppSettings: AppSettings = {
+  responsibilities: defaultResponsibilities,
+  priorities: defaultPriorities,
+  businessCalendar: {
+    timezone: 'Africa/Cairo',
+    workdays: [0, 1, 2, 3, 4],
+    startTime: '09:00',
+    endTime: '17:30',
+  },
+  settingsManagerUserIds: [MINA_ID, FAWZY_ID, AHMED_SOBEEH_ID],
+  settingsManagerResponsibilityIds: ['hr', 'admin'],
+  workAssignmentCreatorIds: [DINA_ID, MARWA_ID, AHMED_SOBEEH_ID, FAWZY_ID],
+  contributorAssignerIds: [MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID],
+  neverHandlerIds: [OMAR_ID, FAWZY_ID, MARWA_ID, AHMED_SOBEEH_ID],
+  selfAssignmentBlockedIds: [MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID],
+  videoOnlyHandlerIds: [YOMNA_ID],
+  alwaysAssignableHandlerIds: [MINA_ID],
+  firstReviewerUserIds: [MINA_ID],
+  finalReviewerUserIds: [MARWA_ID],
+  viewAllWorkloadUserIds: [MINA_ID, MARWA_ID, DINA_ID, AHMED_SOBEEH_ID, FAWZY_ID],
+  flowLabels: {
+    reviewerQueue: 'Waiting for First Rev.',
+    artDirectorQueue: 'Waiting for Final Rev.',
+    uploadTask: 'Upload Task',
+    assignedWork: 'Assigned Work',
+  },
+  customPermissions: [],
+  taskTypes: ['video', 'ai_packet', 'sales_material', 'website_material', 'campaign', 'others'],
+  campaignPlatforms: ['Instagram', 'LinkedIn', 'TikTok', 'Snapchat'],
+  hiddenColumns: [],
+  updatedAt: now,
+};
+
+export function normalizeSettingId(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '') || `custom_${Date.now().toString(36)}`;
+}
+
+export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSettings {
+  const priorities = Array.isArray(settings?.priorities) && settings.priorities.length > 0
+    ? settings.priorities
+    : defaultAppSettings.priorities;
+  const responsibilities = Array.isArray(settings?.responsibilities) && settings.responsibilities.length > 0
+    ? settings.responsibilities
+    : defaultAppSettings.responsibilities;
+
+  let workAssignmentCreatorIds = Array.isArray(settings?.workAssignmentCreatorIds) ? settings.workAssignmentCreatorIds : defaultAppSettings.workAssignmentCreatorIds;
+  let neverHandlerIds = Array.isArray(settings?.neverHandlerIds) ? settings.neverHandlerIds : defaultAppSettings.neverHandlerIds;
+  let selfAssignmentBlockedIds = Array.isArray(settings?.selfAssignmentBlockedIds) ? settings.selfAssignmentBlockedIds : defaultAppSettings.selfAssignmentBlockedIds;
+  let firstReviewerUserIds = Array.isArray(settings?.firstReviewerUserIds) ? settings.firstReviewerUserIds : defaultAppSettings.firstReviewerUserIds || [];
+  let finalReviewerUserIds = Array.isArray(settings?.finalReviewerUserIds) ? settings.finalReviewerUserIds : defaultAppSettings.finalReviewerUserIds || [];
+  let viewAllWorkloadUserIds = Array.isArray(settings?.viewAllWorkloadUserIds) ? settings.viewAllWorkloadUserIds : defaultAppSettings.viewAllWorkloadUserIds || [];
+
+  // Migration & Dynamic Sync: Always ensure Marwa, Sobeeh, Dina, and Fawzy have correct permissions 
+  // and are correctly excluded from handledBy lists, regardless of settings stored in database/localStorage.
+  workAssignmentCreatorIds = Array.from(new Set([...workAssignmentCreatorIds, MARWA_ID, AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID]));
+  neverHandlerIds = Array.from(new Set([...neverHandlerIds, OMAR_ID, FAWZY_ID, MARWA_ID, AHMED_SOBEEH_ID]));
+  selfAssignmentBlockedIds = Array.from(new Set([...selfAssignmentBlockedIds, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID]));
+  viewAllWorkloadUserIds = Array.from(new Set([...viewAllWorkloadUserIds, MINA_ID, MARWA_ID, DINA_ID, AHMED_SOBEEH_ID, FAWZY_ID]));
+
+  if (firstReviewerUserIds.length === 0) {
+    firstReviewerUserIds = [MINA_ID];
+  }
+  if (finalReviewerUserIds.length === 0) {
+    finalReviewerUserIds = [MARWA_ID];
+  }
+
+  return {
+    ...defaultAppSettings,
+    ...settings,
+    responsibilities,
+    priorities,
+    businessCalendar: {
+      ...defaultAppSettings.businessCalendar,
+      ...(settings?.businessCalendar || {}),
+    },
+    flowLabels: {
+      ...defaultAppSettings.flowLabels,
+      ...(settings?.flowLabels || {}),
+    },
+    settingsManagerUserIds: Array.isArray(settings?.settingsManagerUserIds) ? settings.settingsManagerUserIds : defaultAppSettings.settingsManagerUserIds,
+    settingsManagerResponsibilityIds: Array.isArray(settings?.settingsManagerResponsibilityIds) ? settings.settingsManagerResponsibilityIds : defaultAppSettings.settingsManagerResponsibilityIds,
+    workAssignmentCreatorIds,
+    contributorAssignerIds: Array.isArray(settings?.contributorAssignerIds) ? settings.contributorAssignerIds : defaultAppSettings.contributorAssignerIds,
+    neverHandlerIds,
+    selfAssignmentBlockedIds,
+    videoOnlyHandlerIds: Array.isArray(settings?.videoOnlyHandlerIds) ? settings.videoOnlyHandlerIds : defaultAppSettings.videoOnlyHandlerIds,
+    alwaysAssignableHandlerIds: Array.isArray(settings?.alwaysAssignableHandlerIds) ? settings.alwaysAssignableHandlerIds : defaultAppSettings.alwaysAssignableHandlerIds,
+    firstReviewerUserIds,
+    finalReviewerUserIds,
+    viewAllWorkloadUserIds,
+    customPermissions: Array.isArray(settings?.customPermissions) ? settings.customPermissions : [],
+    taskTypes: Array.isArray(settings?.taskTypes) ? settings.taskTypes : defaultAppSettings.taskTypes || [],
+    campaignPlatforms: Array.isArray(settings?.campaignPlatforms) ? settings.campaignPlatforms : defaultAppSettings.campaignPlatforms || [],
+    hiddenColumns: Array.isArray(settings?.hiddenColumns) ? settings.hiddenColumns : [],
+    updatedAt: settings?.updatedAt || defaultAppSettings.updatedAt,
+  };
+}
+
+export function getResponsibilityForLabel(settings: AppSettings, label: string) {
+  const normalized = label.trim().toLowerCase();
+  return settings.responsibilities.find(item => item.label.trim().toLowerCase() === normalized) || null;
+}
+
+export function getResponsibilityLabelForRole(settings: AppSettings, role: Role) {
+  return settings.responsibilities.find(item => item.permissionRole === role)?.label || role;
+}
+
+export function canManageAppSettings(user: Pick<User, 'id' | 'role' | 'isAdmin' | 'jobTitle'>, settings: AppSettings) {
+  if (user.isAdmin || user.role === 'admin') return true;
+  if (settings.settingsManagerUserIds.includes(user.id)) return true;
+  const responsibility = user.jobTitle ? getResponsibilityForLabel(settings, user.jobTitle) : null;
+  return Boolean(responsibility && settings.settingsManagerResponsibilityIds.includes(responsibility.id));
+}
+
+export function getPriorityOption(settings: AppSettings, priority?: Priority | null) {
+  return settings.priorities.find(item => item.id === priority) || null;
+}
+
+export function getPriorityLabelFromSettings(settings: AppSettings, priority: Priority) {
+  if (priority === 'not_set') return 'Not Set';
+  return getPriorityOption(settings, priority)?.label || priority;
+}
+
+export function getPriorityTone(settings: AppSettings, priority: Priority): PriorityTone {
+  return getPriorityOption(settings, priority)?.tone || 'slate';
+}
+
+export function getPriorityWeightFromSettings(settings: AppSettings, priority: Priority) {
+  if (priority === 'not_set') return Number.MAX_SAFE_INTEGER;
+  return getPriorityOption(settings, priority)?.sortOrder ?? Number.MAX_SAFE_INTEGER - 1;
+}
+
+export function getActivePriorityOptions(settings: AppSettings) {
+  return settings.priorities
+    .filter(priority => priority.active)
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map(priority => ({ value: priority.id, label: priority.label, tone: priority.tone }));
+}
+
+export function sanitizeHandledByWithSettings(settings: AppSettings, ids: string[] = [], assignerId?: string) {
+  return Array.from(new Set(ids.filter(id => (
+    id &&
+    !settings.neverHandlerIds.includes(id) &&
+    !(assignerId && settings.selfAssignmentBlockedIds.includes(assignerId) && id === assignerId)
+  ))));
+}
+
+export function isAssignableHandlerWithSettings(settings: AppSettings, id: string, assignerId?: string) {
+  return Boolean(id) && sanitizeHandledByWithSettings(settings, [id], assignerId).length > 0;
+}
+
+export function canAssignContributorsWithSettings(settings: AppSettings, userId: string) {
+  return settings.contributorAssignerIds.includes(userId);
+}
+
+export function isAssignableContributorForTaskWithSettings(settings: AppSettings, user: User, taskType: TaskType, creatorId?: string) {
+  if (!isAssignableHandlerWithSettings(settings, user.id)) return false;
+  if (!settings.alwaysAssignableHandlerIds.includes(user.id) && user.id === creatorId) return false;
+  if (settings.alwaysAssignableHandlerIds.includes(user.id)) return true;
+  if (user.role !== 'team_member') return false;
+  const isVideoOnly = settings.videoOnlyHandlerIds.includes(user.id);
+  return taskType === 'video' ? isVideoOnly : !isVideoOnly;
+}
+
+export function getAssignableContributorsForTaskWithSettings(settings: AppSettings, users: User[], taskType: TaskType, creatorId?: string) {
+  return users.filter(user => isAssignableContributorForTaskWithSettings(settings, user, taskType, creatorId));
+}
+
+export function isDeadlineInsideBusinessHours(settings: AppSettings, deadlineValue: string, nowValue = new Date(), isOvertime = false) {
+  const deadline = new Date(deadlineValue);
+  if (!deadlineValue || Number.isNaN(deadline.getTime())) {
+    return { ok: false, message: 'Select a valid deadline date and time.' };
+  }
+
+  if (deadline.getTime() <= nowValue.getTime()) {
+    return { ok: false, message: 'Deadline must be in the future.' };
+  }
+
+  const maxFutureDate = new Date(nowValue);
+  maxFutureDate.setMonth(maxFutureDate.getMonth() + 1);
+  if (deadline.getTime() > maxFutureDate.getTime()) {
+    return { ok: false, message: 'Deadline cannot be more than a month in the future.' };
+  }
+
+  if (isOvertime) {
+    return { ok: true, message: '' };
+  }
+
+  if (!settings.businessCalendar.workdays.includes(deadline.getDay())) {
+    return { ok: false, message: 'Deadline must be on a configured working day.' };
+  }
+
+  const minutes = deadline.getHours() * 60 + deadline.getMinutes();
+  const [startHour, startMinute] = settings.businessCalendar.startTime.split(':').map(Number);
+  const [endHour, endMinute] = settings.businessCalendar.endTime.split(':').map(Number);
+  const startMinutes = startHour * 60 + startMinute;
+  const endMinutes = endHour * 60 + endMinute;
+
+  if (minutes < startMinutes || minutes > endMinutes) {
+    return { ok: false, message: `Deadline must be between ${settings.businessCalendar.startTime} and ${settings.businessCalendar.endTime}.` };
+  }
+
+  return { ok: true, message: '' };
+}
+
+export function priorityToneClasses(tone: PriorityTone, solid = false) {
+  const classes: Record<PriorityTone, string> = solid ? {
+    emerald: 'bg-emerald-600 text-white border-emerald-700',
+    slate: 'bg-slate-200 text-slate-700 border-slate-300',
+    amber: 'bg-amber-500 text-black border-amber-600',
+    rose: 'bg-rose-600 text-white border-rose-700',
+    blue: 'bg-blue-600 text-white border-blue-700',
+    indigo: 'bg-indigo-600 text-white border-indigo-700',
+    purple: 'bg-purple-600 text-white border-purple-700',
+  } : {
+    emerald: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+    slate: 'bg-slate-100 text-slate-700 border-slate-200',
+    amber: 'bg-amber-100 text-amber-800 border-amber-200',
+    rose: 'bg-rose-100 text-rose-700 border-rose-200',
+    blue: 'bg-blue-100 text-blue-700 border-blue-200',
+    indigo: 'bg-indigo-100 text-indigo-700 border-indigo-200',
+    purple: 'bg-purple-100 text-purple-700 border-purple-200',
+  };
+  return classes[tone];
+}

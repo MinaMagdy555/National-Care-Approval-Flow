@@ -1,26 +1,25 @@
-import { AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID, MARWA_ID, isAssignableHandler } from './handlerUtils';
-import { AssignmentPeriod, Priority, Task, User } from './types';
+import { defaultAppSettings, getPriorityWeightFromSettings, isAssignableHandlerWithSettings } from './appSettings';
+import { AppSettings, AssignmentPeriod, Priority, Task, User } from './types';
 
-export const WORK_ASSIGNMENT_CREATOR_IDS = [DINA_ID, MARWA_ID, AHMED_SOBEEH_ID, FAWZY_ID];
-export function canCreateWorkAssignment(user: Pick<User, 'id' | 'isAdmin'>) {
-  return WORK_ASSIGNMENT_CREATOR_IDS.includes(user.id);
+export function canCreateWorkAssignment(user: Pick<User, 'id' | 'role' | 'name' | 'isAdmin'>, settings: AppSettings = defaultAppSettings) {
+  return settings.workAssignmentCreatorIds.includes(user.id);
 }
 
-export function canManageWorkAssignment(task: Task, user: Pick<User, 'id' | 'isAdmin'>) {
-  return task.status === 'assigned_work' && canCreateWorkAssignment(user);
+export function canManageWorkAssignment(task: Task, user: Pick<User, 'id' | 'role' | 'name' | 'isAdmin'>, settings: AppSettings = defaultAppSettings) {
+  return task.status === 'assigned_work' && canCreateWorkAssignment(user, settings);
 }
 
 export function canUploadWorkAssignment(task: Task, user: Pick<User, 'id' | 'isAdmin'>) {
   if (task.status !== 'assigned_work') return false;
-  return Boolean(user.isAdmin) || task.createdBy === user.id || task.handledBy.includes(user.id);
+  return task.handledBy.includes(user.id);
 }
 
 export function isWorkAssignmentTask(task: Pick<Task, 'assignmentPeriod' | 'deadlineAt'>) {
   return Boolean(task.assignmentPeriod || task.deadlineAt);
 }
 
-export function isWorkAssignmentAssignee(user: Pick<User, 'id'>, assignerId?: string) {
-  return isAssignableHandler(user.id, assignerId);
+export function isWorkAssignmentAssignee(user: Pick<User, 'id'>, assignerId?: string, settings: AppSettings = defaultAppSettings) {
+  return isAssignableHandlerWithSettings(settings, user.id, assignerId);
 }
 
 export function getAssignmentPeriodLabel(period?: AssignmentPeriod | null) {
@@ -30,14 +29,8 @@ export function getAssignmentPeriodLabel(period?: AssignmentPeriod | null) {
   return 'Assigned Work';
 }
 
-export function getPriorityWeight(priority: Priority) {
-  switch (priority) {
-    case 'urgent': return 0;
-    case 'high': return 1;
-    case 'normal': return 2;
-    case 'low': return 3;
-    default: return 4;
-  }
+export function getPriorityWeight(priority: Priority, settings: AppSettings = defaultAppSettings) {
+  return getPriorityWeightFromSettings(settings, priority);
 }
 
 export function getDeadlineTime(value?: string | null) {
@@ -75,7 +68,7 @@ export function getAssignmentPeriodFromDeadline(value: string, todayValue = new 
   return 'month';
 }
 
-export function sortWorkAssignments(tasks: Task[]) {
+export function sortWorkAssignments(tasks: Task[], settings: AppSettings = defaultAppSettings) {
   return [...tasks].sort((a, b) => {
     const aUploaded = Boolean(a.assignmentUploadedAt || a.status !== 'assigned_work');
     const bUploaded = Boolean(b.assignmentUploadedAt || b.status !== 'assigned_work');
@@ -84,7 +77,7 @@ export function sortWorkAssignments(tasks: Task[]) {
     const deadlineDiff = getDeadlineTime(a.deadlineAt) - getDeadlineTime(b.deadlineAt);
     if (deadlineDiff !== 0) return deadlineDiff;
 
-    const priorityDiff = getPriorityWeight(a.priority) - getPriorityWeight(b.priority);
+    const priorityDiff = getPriorityWeight(a.priority, settings) - getPriorityWeight(b.priority, settings);
     if (priorityDiff !== 0) return priorityDiff;
 
     return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();

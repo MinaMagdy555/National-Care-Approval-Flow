@@ -16,6 +16,8 @@ import {
   LogIn,
   LogOut,
   Send,
+  BriefcaseBusiness,
+  Settings,
   Upload,
   UsersRound,
   UserRoundCheck,
@@ -37,16 +39,27 @@ export function Sidebar({
   isOpen,
   onClose,
   showUserManagement,
+  showSettings,
 }: {
   currentView: string;
   setView: (v: string) => void;
   isOpen: boolean;
   onClose: () => void;
   showUserManagement: boolean;
+  showSettings: boolean;
 }) {
-  const { currentUser, notifications, logout, authStatus } = useAppStore();
+  const { currentUser, notifications, logout, authStatus, appSettings } = useAppStore();
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const isSignedIn = authStatus === 'approved';
+
+  const canSeeCreatorCards = React.useMemo(() => {
+    return (
+      appSettings.workAssignmentCreatorIds.includes(currentUser.id) ||
+      appSettings.settingsManagerUserIds.includes(currentUser.id) ||
+      appSettings.contributorAssignerIds.includes(currentUser.id) ||
+      ['reviewer', 'art_director', 'admin', 'team_leader', 'marketing_manager', 'manager'].includes(currentUser.role)
+    );
+  }, [currentUser, appSettings]);
 
   const unreadCount = notifications ? notifications.filter(n => n.userId === currentUser.id && !n.read).length : 0;
   const canManageUsers = Boolean(currentUser.isAdmin) || currentUser.role === 'admin';
@@ -55,6 +68,7 @@ export function Sidebar({
     if (
       currentView === 'all_tasks' ||
       currentView === 'campaign_scheduler' ||
+      currentView === 'assigned_work' ||
       currentView === 'my_tasks' ||
       currentView === 'review_queue' ||
       currentView === 'quick_look_queue' ||
@@ -83,93 +97,82 @@ export function Sidebar({
   };
 
   const getMenuForRole = (): MenuItem[] => {
+    const isFirstRev = (appSettings.firstReviewerUserIds || []).includes(currentUser.id);
+    const isFinalRev = (appSettings.finalReviewerUserIds || []).includes(currentUser.id);
+    const isLoaderOrMina = isFirstRev || isFinalRev || (appSettings.viewAllWorkloadUserIds || []).includes(currentUser.id);
+
     const commonTop = [
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      ...(isLoaderOrMina ? [{ id: 'performance', label: 'Team Performance', icon: UsersRound }] : []),
       { id: 'campaign_scheduler', label: 'Campaign Scheduler', icon: CalendarClock },
+      { id: 'assigned_work', label: 'Assigned Work', icon: BriefcaseBusiness },
       { id: 'notifications', label: `Notifications${unreadCount > 0 ? ` (${unreadCount})` : ''}`, icon: Bell },
     ];
     const adminItems = canManageUsers && showUserManagement ? [{ id: 'users', label: 'Users & Roles', icon: UsersRound }] : [];
+    const settingsItems = showSettings ? [{ id: 'settings', label: 'Tool Settings', icon: Settings }] : [];
 
-    switch (currentUser.role) {
-      case 'team_member':
-        return [
-          ...commonTop,
-          ...adminItems,
-          { id: 'create_task', label: 'Upload Task', icon: Upload },
-          {
-            id: 'task_center', label: 'All Tasks', icon: ClipboardList,
-            children: [
-              { id: 'my_tasks', label: 'My Tasks', icon: UserRoundCheck },
-              { id: 'waiting_for_mina', label: 'Waiting for Reviewer', icon: Clock },
-              { id: 'waiting_for_marwa', label: 'Waiting for Art Director', icon: Send },
-              { id: 'rejected_reopened', label: 'Rejected', icon: CircleX },
-              { id: 'approved_by_me', label: 'Approved', icon: Check },
-              { id: 'archived_tasks', label: 'Archived', icon: Archive },
-            ]
-          }
-        ];
-      case 'reviewer':
-        return [
-          ...commonTop,
-          ...adminItems,
-          { id: 'create_task', label: 'Upload Task', icon: Upload },
-          {
-            id: 'task_center', label: 'All Tasks', icon: ClipboardList,
-            children: [
-              { id: 'all_tasks', label: 'All Tasks', icon: ClipboardList },
-              { id: 'review_queue', label: 'Needs Full Review', icon: FilePenLine },
-              { id: 'quick_look_queue', label: 'Needs Quick Look', icon: FileText },
-              { id: 'ad_queue', label: 'Needs Art Director', icon: Send },
-              { id: 'approved_by_me', label: 'Approved', icon: Check },
-              { id: 'rejected_reopened', label: 'Rejected', icon: CircleX },
-              { id: 'archived_tasks', label: 'Archived', icon: Archive },
-            ]
-          }
-        ];
-      case 'art_director':
-        return [
-          ...commonTop,
-          ...adminItems,
-          {
-            id: 'task_center', label: 'All Tasks', icon: ClipboardList,
-            children: [
-              { id: 'all_tasks', label: 'All Tasks', icon: ClipboardList },
-              { id: 'ad_queue', label: 'Needs Your Action', icon: FilePenLine },
-              { id: 'approved_by_me', label: 'Approved', icon: Check },
-              { id: 'rejected_reopened', label: 'Rejected', icon: CircleX },
-              { id: 'archived_tasks', label: 'Archived', icon: Archive },
-            ]
-          }
-        ];
-      case 'team_leader':
-      case 'manager':
-      case 'developer':
-      case 'marketing_manager':
-      case 'admin':
-        return [
-          ...commonTop,
-          ...adminItems,
-          {
-            id: 'task_center', label: 'All Tasks', icon: ClipboardList,
-            children: [
-              { id: 'all_tasks', label: 'All Tasks', icon: ClipboardList },
-              { id: 'waiting_for_mina', label: 'Waiting for Reviewer', icon: Clock },
-              { id: 'waiting_for_marwa', label: 'Waiting for Art Director', icon: Send },
-              { id: 'rejected_reopened', label: 'Rejected', icon: CircleX },
-              { id: 'approved_by_me', label: 'Approved', icon: Check },
-              { id: 'archived_tasks', label: 'Archived', icon: Archive },
-            ]
-          }
-        ];
-      default:
-        return [];
+    const taskCenterChildren: MenuItem[] = [];
+
+    const isContentCreator = currentUser.jobTitle === 'Content Creator' || (currentUser.role === 'team_member' && currentUser.jobTitle === 'Content Creator');
+
+    if (isFirstRev || isFinalRev) {
+      taskCenterChildren.push({ id: 'all_tasks', label: 'All Tasks', icon: ClipboardList });
     }
+
+    if (isContentCreator) {
+      taskCenterChildren.push({ id: 'content_revision_queue', label: 'Waiting for Content Rev.', icon: FileText });
+    }
+
+    if (isFirstRev) {
+      taskCenterChildren.push({ id: 'review_queue', label: 'Waiting for First Rev.', icon: FilePenLine });
+      taskCenterChildren.push({ id: 'quick_look_queue', label: 'Needs Quick Look', icon: FileText });
+    }
+
+    if (isFinalRev) {
+      if (!isFirstRev) {
+        taskCenterChildren.push({ id: 'waiting_for_mina', label: 'Waiting for First Rev.', icon: Clock });
+      }
+      taskCenterChildren.push({ id: 'ad_queue', label: 'Waiting for Final Rev.', icon: FilePenLine });
+    }
+
+    const isDina = currentUser.id === 'user_3';
+    const showMyTasks = !(appSettings.neverHandlerIds || []).includes(currentUser.id) &&
+      (!isFirstRev && !isFinalRev || isDina);
+
+    if (showMyTasks) {
+      taskCenterChildren.push({ id: 'my_tasks', label: 'My Tasks', icon: UserRoundCheck });
+    }
+
+    if (!isFirstRev && !isFinalRev) {
+      taskCenterChildren.push({ id: 'waiting_for_mina', label: 'Waiting for First Rev.', icon: Clock });
+      taskCenterChildren.push({ id: 'waiting_for_marwa', label: 'Waiting for Final Rev.', icon: Send });
+    }
+
+    taskCenterChildren.push({ id: 'approved_by_me', label: 'Approved', icon: Check });
+    taskCenterChildren.push({ id: 'rejected_reopened', label: 'Rejected', icon: CircleX });
+    taskCenterChildren.push({ id: 'archived_tasks', label: 'Archived', icon: Archive });
+
+    const showUploadTask = !isFirstRev && !isFinalRev;
+
+    return [
+      ...commonTop,
+      ...adminItems,
+      ...settingsItems,
+      ...(showUploadTask ? [{ id: 'create_task', label: 'Upload Task', icon: Upload }] : []),
+      {
+        id: 'task_center',
+        label: 'All Tasks',
+        icon: ClipboardList,
+        children: taskCenterChildren
+      }
+    ];
   };
 
   const menu = getMenuForRole();
   const taskViews = new Set([
     'all_tasks',
     'campaign_scheduler',
+    'assigned_work',
     'my_tasks',
     'review_queue',
     'quick_look_queue',
@@ -182,6 +185,7 @@ export function Sidebar({
     'rejected_reopened',
     'archived_tasks',
     'users'
+    ,'settings'
   ]);
 
   const renderMenuItem = (item: MenuItem, depth = 0) => {
@@ -217,17 +221,19 @@ export function Sidebar({
     }
 
     const isActive = item.id === currentView;
+    const isChild = depth > 0;
     return (
       <button
         key={item.id}
         onClick={() => handleNavigate(item.id)}
         className={cn(
-          "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors",
+          "w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors",
+          isChild && "text-xs font-semibold whitespace-nowrap",
           isActive 
             ? "bg-white/10 text-white border border-white/10 shadow-sm" 
             : "text-slate-400 hover:bg-white/5 hover:text-white"
         )}
-        style={{ paddingLeft: `${16 + depth * 12}px` }}
+        style={{ paddingLeft: `${16 + depth * 8}px` }}
       >
         <item.icon className={cn("w-4 h-4 opacity-70", isActive && "text-indigo-400 opacity-100")} />
         {item.label}
@@ -297,7 +303,7 @@ export function Sidebar({
               className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-white transition-colors hover:bg-white/10"
             >
               {isSignedIn ? <LogOut className="h-3.5 w-3.5" /> : <LogIn className="h-3.5 w-3.5" />}
-              {isSignedIn ? 'Leave Account' : 'Demo Accounts'}
+              {isSignedIn ? 'Leave Account' : 'Sign In'}
             </button>
           </div>
         </div>

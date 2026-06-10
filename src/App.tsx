@@ -9,10 +9,13 @@ import { CreateTask } from './components/CreateTask';
 import { CampaignScheduler } from './components/CampaignScheduler';
 import { AuthScreen } from './components/AuthScreen';
 import { UserManagement } from './components/UserManagement';
+import { AssignedWorkSection } from './components/AssignedWorkSection';
+import { SettingsManagement } from './components/SettingsManagement';
 import { isDueThisWeek, isDueToday } from './lib/deadlineUtils';
 import { isTaskArchived } from './lib/archiveUtils';
 import { canUserAccessTask, canUserActAsCurrentOwner, parsePublishDate, userCanViewFullWorkspace } from './lib/workflowUtils';
 import { Task } from './lib/types';
+import { isWorkAssignmentTask } from './lib/workAssignmentUtils';
 import { Menu } from 'lucide-react';
 
 let notificationAudioContext: AudioContext | null = null;
@@ -158,8 +161,11 @@ function WorkspaceContent() {
     chooseDriveRoot,
     importDriveTasks,
     markPublishReminderSent,
+    markWeekReminderSent,
     addTask,
     authStatus,
+    canManageSettings,
+    appSettings,
   } = useAppStore();
   const initialUnreadCountRef = useRef<number | null>(null);
   const unreadNotificationIdsRef = useRef<Set<string>>(new Set());
@@ -244,16 +250,25 @@ function WorkspaceContent() {
 
     const now = Date.now();
     const reminderWindowMs = 24 * 60 * 60 * 1000;
+    const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+
     tasks.forEach(task => {
-      if (task.taskType !== 'campaign' || !task.scheduledPublishAt || task.publishedAt || task.publishReminderSentAt) return;
+      if ((task.taskType !== 'campaign' && task.taskType !== 'media_buying') || !task.scheduledPublishAt || task.publishedAt) return;
       if (!canUserAccessTask(task, currentUser)) return;
 
       const publishDate = parsePublishDate(task.scheduledPublishAt);
       if (!publishDate) return;
 
       const timeUntilPublish = publishDate.getTime() - now;
-      if (timeUntilPublish <= reminderWindowMs) {
+
+      // 1-day reminder (for campaign or media_buying)
+      if ((task.taskType === 'campaign' || task.taskType === 'media_buying') && !task.publishReminderSentAt && timeUntilPublish <= reminderWindowMs) {
         markPublishReminderSent(task.id);
+      }
+
+      // 1-week reminder (for campaign or media_buying taskTypes)
+      if (!task.weekReminderSentAt && timeUntilPublish > 0 && timeUntilPublish <= oneWeekMs) {
+        markWeekReminderSent(task.id);
       }
     });
   }, [tasks, currentUser.id, authStatus]);
@@ -298,7 +313,10 @@ function WorkspaceContent() {
     if (currentView === 'users' && !canShowUserManagement) {
       navigateTo({ view: 'dashboard', taskId: null, assignmentId: null }, 'replace');
     }
-  }, [currentView, canShowUserManagement]);
+    if (currentView === 'settings' && !canManageSettings) {
+      navigateTo({ view: 'dashboard', taskId: null, assignmentId: null }, 'replace');
+    }
+  }, [currentView, canShowUserManagement, canManageSettings]);
 
   const handleOpenTask = (id: string) => {
     navigateTo({ view: 'task_detail', taskId: id, assignmentId: null });
@@ -319,15 +337,15 @@ function WorkspaceContent() {
     setIsSidebarOpen(false);
   };
 
-  const canViewFullWorkspace = userCanViewFullWorkspace(currentUser);
+  const canViewFullWorkspace = userCanViewFullWorkspace(currentUser, appSettings);
   const envTasks = tasks.filter(t => t.environment === environment);
   const activeEnvTasks = envTasks.filter(task => !isTaskArchived(task));
   const archivedEnvTasks = envTasks.filter(isTaskArchived);
-  const visibleEnvTasks = canViewFullWorkspace ? activeEnvTasks : activeEnvTasks.filter(t => canUserAccessTask(t, currentUser));
-  const visibleArchivedTasks = canViewFullWorkspace ? archivedEnvTasks : archivedEnvTasks.filter(t => canUserAccessTask(t, currentUser));
+  const visibleEnvTasks = canViewFullWorkspace ? activeEnvTasks : activeEnvTasks.filter(t => canUserAccessTask(t, currentUser, appSettings));
+  const visibleArchivedTasks = canViewFullWorkspace ? archivedEnvTasks : archivedEnvTasks.filter(t => canUserAccessTask(t, currentUser, appSettings));
   const workflowVisibleEnvTasks = visibleEnvTasks.filter(task => task.status !== 'assigned_work');
   const isScopedToCurrentOwner = (task: typeof visibleEnvTasks[number]) => (
-    currentUser.role !== 'reviewer' && currentUser.role !== 'art_director'
+    !(appSettings.firstReviewerUserIds || []).includes(currentUser.id) && !(appSettings.finalReviewerUserIds || []).includes(currentUser.id)
       ? true
       : canUserActAsCurrentOwner(task, currentUser)
   );
@@ -339,7 +357,9 @@ function WorkspaceContent() {
 
     switch (currentView) {
       case 'dashboard':
-        return <Dashboard onOpenTask={handleOpenTask} onNavigate={handleNavigate} onOpenAssignmentUpload={handleOpenAssignmentUpload} />;
+        return <Dashboard viewMode="overview" onOpenTask={handleOpenTask} onNavigate={handleNavigate} />;
+      case 'performance':
+        return <Dashboard viewMode="performance" onOpenTask={handleOpenTask} onNavigate={handleNavigate} />;
       case 'notifications':
         return <NotificationsList onOpenTask={handleOpenTask} />;
       case 'sign_in':
@@ -348,13 +368,29 @@ function WorkspaceContent() {
         return <CreateTask assignmentTaskId={activeAssignmentId} onAssignmentUploaded={handleOpenTask} />;
       case 'campaign_scheduler':
         return <CampaignScheduler onOpenTask={handleOpenTask} />;
+      case 'assigned_work': {
+        const assignedWorkTasks = visibleEnvTasks.filter(isWorkAssignmentTask);
+        return (
+          <div className="mx-auto max-w-7xl px-4 pb-6 pt-0 sm:px-6 sm:py-6 lg:px-8">
+            <AssignedWorkSection tasks={assignedWorkTasks} onOpenAssignmentUpload={handleOpenAssignmentUpload} onOpenTask={handleOpenTask} />
+          </div>
+        );
+      }
       case 'users':
         return canShowUserManagement
           ? <UserManagement />
-          : <Dashboard onOpenTask={handleOpenTask} onNavigate={handleNavigate} onOpenAssignmentUpload={handleOpenAssignmentUpload} />;
+          : <Dashboard viewMode="overview" onOpenTask={handleOpenTask} onNavigate={handleNavigate} />;
+      case 'settings':
+        return canManageSettings
+          ? <SettingsManagement />
+          : <Dashboard viewMode="overview" onOpenTask={handleOpenTask} onNavigate={handleNavigate} />;
       case 'review_queue': {
         const needsFullReview = workflowVisibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status) && isScopedToCurrentOwner(t));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsFullReview} title="Needs Full Review" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsFullReview} title="Waiting for First Rev." />;
+      }
+      case 'content_revision_queue': {
+        const contentTasks = workflowVisibleEnvTasks.filter(t => t.status === 'waiting_content_revision' && isScopedToCurrentOwner(t));
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={contentTasks} title="Waiting for Content Rev." />;
       }
       case 'quick_look_queue': {
         const needsQuickLook = workflowVisibleEnvTasks.filter(t => t.status === 'waiting_reviewer_quick_look' && isScopedToCurrentOwner(t));
@@ -362,7 +398,7 @@ function WorkspaceContent() {
       }
       case 'ad_queue': {
         const needsAd = workflowVisibleEnvTasks.filter(t => (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && isScopedToCurrentOwner(t));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsAd} title="Needs Art Director Action" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsAd} title="Waiting for Final Rev." />;
       }
       case 'due_today': {
         const dueToday = workflowVisibleEnvTasks.filter(isDueToday);
@@ -374,25 +410,27 @@ function WorkspaceContent() {
       }
       case 'waiting_for_mina': {
         const waitingForMina = workflowVisibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMina} title="Waiting for Reviewer" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMina} title="Waiting for First Rev." />;
       }
       case 'waiting_for_marwa': {
         const waitingForMarwa = workflowVisibleEnvTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMarwa} title="Waiting for Art Director" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMarwa} title="Waiting for Final Rev." />;
       }
       case 'approved_by_me': {
         const approved = workflowVisibleEnvTasks.filter(t => t.status === 'approved_by_art_director');
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={approved} title="Approved Tasks" />;
       }
       case 'rejected_reopened': {
-        const rejected = currentUser.role === 'art_director'
+        const isFinalRev = (appSettings.finalReviewerUserIds || []).includes(currentUser.id);
+        const rejected = isFinalRev
           ? workflowVisibleEnvTasks.filter(t => t.status === 'changes_requested_by_art_director')
           : workflowVisibleEnvTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={rejected} title="Rejected / Returned" />;
       }
       case 'all_tasks': {
         let visibleTasks = visibleEnvTasks;
-        if (currentUser.role === 'art_director') {
+        const isFinalRev = (appSettings.finalReviewerUserIds || []).includes(currentUser.id);
+        if (isFinalRev) {
           // exclude tasks that haven't reached AD yet
           visibleTasks = visibleEnvTasks.filter(t => !['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'changes_requested_by_reviewer', 'reviewer_approved'].includes(t.status) || t.reviewMode === 'direct_to_ad');
         }
@@ -425,6 +463,7 @@ function WorkspaceContent() {
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         showUserManagement={canShowUserManagement}
+        showSettings={canManageSettings}
       />
       <div className="flex min-h-[100dvh] flex-1 flex-col min-w-0 md:pl-64">
         <main ref={mainRef} className="flex-1 overflow-y-auto relative min-w-0 pt-16 md:pt-0">
