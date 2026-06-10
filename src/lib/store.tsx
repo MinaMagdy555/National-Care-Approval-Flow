@@ -19,6 +19,8 @@ import {
   DINA_ID,
   AHMED_SOBEEH_ID,
   FAWZY_ID,
+  getTaskTypeConfigs,
+  cleanTaskTypeKey,
 } from './appSettings';
 import { enrichLinkedTaskFileMetadata, needsLinkedTaskFileMetadata } from './linkAttachments';
 import {
@@ -1060,6 +1062,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const getDefaultOwnerIdsForRole = (role: Role | null, task?: Task) => {
     if (!role) return [];
+    if (task && task.taskType) {
+      const config = getTaskTypeConfigs(appSettings).find(c => cleanTaskTypeKey(c.id) === cleanTaskTypeKey(task.taskType));
+      if (config) {
+        if (role === 'reviewer') {
+          if (task.status === 'waiting_reviewer_quick_look') {
+            if (config.quickLookUserIds && config.quickLookUserIds.length > 0) {
+              return config.quickLookUserIds;
+            }
+          } else {
+            if (config.fullReviewerUserIds && config.fullReviewerUserIds.length > 0) {
+              return config.fullReviewerUserIds;
+            }
+          }
+        }
+        if (role === 'art_director') {
+          if (config.finalReviewerUserIds && config.finalReviewerUserIds.length > 0) {
+            return config.finalReviewerUserIds;
+          }
+        }
+      }
+    }
     if (role === 'reviewer') return getUserIdsByRole(userList, ['reviewer', 'admin']);
     if (role === 'art_director') return getUserIdsByRole(userList, ['art_director']);
     if (role === 'team_leader') return getUserIdsByRole(userList, ['team_leader']);

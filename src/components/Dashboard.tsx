@@ -7,7 +7,7 @@ import { isDueThisWeek, isDueToday } from '../lib/deadlineUtils';
 import { isTaskArchived } from '../lib/archiveUtils';
 import { canUserAccessTask, canUserActAsCurrentOwner, userCanViewFullWorkspace } from '../lib/workflowUtils';
 import { cn } from '../lib/utils';
-import { getResponsibilityForLabel, MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID } from '../lib/appSettings';
+import { getResponsibilityForLabel, MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID, getTaskTypeConfigs } from '../lib/appSettings';
 
 function SummaryCard({
   label,
@@ -203,8 +203,11 @@ export function Dashboard({
     );
   }, [creatorsWithStats, searchQuery]);
 
-  const isFirstRev = (appSettings.firstReviewerUserIds || []).includes(currentUser.id);
-  const isFinalRev = (appSettings.finalReviewerUserIds || []).includes(currentUser.id);
+  const configs = getTaskTypeConfigs(appSettings);
+  const isFirstRev = (appSettings.firstReviewerUserIds || []).includes(currentUser.id) ||
+    configs.some(c => c.fullReviewerUserIds?.includes(currentUser.id) || c.quickLookUserIds?.includes(currentUser.id));
+  const isFinalRev = (appSettings.finalReviewerUserIds || []).includes(currentUser.id) ||
+    configs.some(c => c.finalReviewerUserIds?.includes(currentUser.id));
   const isContentCreator = currentUser.jobTitle === 'Content Creator' || (currentUser.role === 'team_member' && currentUser.jobTitle === 'Content Creator');
 
   const canViewFullWorkspace = userCanViewFullWorkspace(currentUser, appSettings);

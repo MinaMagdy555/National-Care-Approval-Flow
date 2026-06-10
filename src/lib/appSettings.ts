@@ -131,6 +131,9 @@ export function getTaskTypeConfigs(settings: AppSettings): TaskTypeConfig[] {
         label: (t as any).label || getTaskTypeLabelSimple((t as any).id),
         suggestedJobTitles: Array.isArray((t as any).suggestedJobTitles) ? (t as any).suggestedJobTitles : [],
         isDetailedReview: typeof (t as any).isDetailedReview === 'boolean' ? (t as any).isDetailedReview : false,
+        fullReviewerUserIds: Array.isArray((t as any).fullReviewerUserIds) ? (t as any).fullReviewerUserIds : [],
+        quickLookUserIds: Array.isArray((t as any).quickLookUserIds) ? (t as any).quickLookUserIds : [],
+        finalReviewerUserIds: Array.isArray((t as any).finalReviewerUserIds) ? (t as any).finalReviewerUserIds : [],
       };
     }
     
@@ -154,7 +157,15 @@ export function getTaskTypeConfigs(settings: AppSettings): TaskTypeConfig[] {
       isDetailedReview = false;
     }
 
-    return { id, label, suggestedJobTitles, isDetailedReview };
+    return {
+      id,
+      label,
+      suggestedJobTitles,
+      isDetailedReview,
+      fullReviewerUserIds: [],
+      quickLookUserIds: [],
+      finalReviewerUserIds: [],
+    };
   });
 }
 

@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { userRoleLabels } from '../lib/mockData';
+import { getTaskTypeConfigs } from '../lib/appSettings';
 
 type MenuItem = {
   id: string;
@@ -97,8 +98,11 @@ export function Sidebar({
   };
 
   const getMenuForRole = (): MenuItem[] => {
-    const isFirstRev = (appSettings.firstReviewerUserIds || []).includes(currentUser.id);
-    const isFinalRev = (appSettings.finalReviewerUserIds || []).includes(currentUser.id);
+    const configs = getTaskTypeConfigs(appSettings);
+    const isFirstRev = (appSettings.firstReviewerUserIds || []).includes(currentUser.id) ||
+      configs.some(c => c.fullReviewerUserIds?.includes(currentUser.id) || c.quickLookUserIds?.includes(currentUser.id));
+    const isFinalRev = (appSettings.finalReviewerUserIds || []).includes(currentUser.id) ||
+      configs.some(c => c.finalReviewerUserIds?.includes(currentUser.id));
     const isLoaderOrMina = isFirstRev || isFinalRev || (appSettings.viewAllWorkloadUserIds || []).includes(currentUser.id);
 
     const commonTop = [

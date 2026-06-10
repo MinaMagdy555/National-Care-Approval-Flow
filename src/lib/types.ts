@@ -86,6 +86,9 @@ export interface TaskTypeConfig {
   label: string;
   suggestedJobTitles: string[];
   isDetailedReview: boolean;
+  fullReviewerUserIds?: string[];
+  quickLookUserIds?: string[];
+  finalReviewerUserIds?: string[];
 }
 
 export interface AppSettings {

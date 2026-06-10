@@ -54,6 +54,10 @@ function combineDeadline(date: string, time: string) {
   return isDateValue(date) && isTimeValue(time) ? `${date}T${time}` : '';
 }
 
+function toggleValue(values: string[], value: string) {
+  return values.includes(value) ? values.filter(item => item !== value) : [...values, value];
+}
+
 function getAssignmentGroups(tasks: Task[], users: ReturnType<typeof useAppStore>['users'], currentUserId: string, appSettings: ReturnType<typeof useAppStore>['appSettings']) {
   const groups = new Map<string, Task[]>();
 
@@ -106,10 +110,17 @@ export function AssignedWorkSection({
   const [taskTypeName, setTaskTypeName] = useState('');
   const [taskTypeJobTitles, setTaskTypeJobTitles] = useState<string[]>([]);
   const [taskTypeDetailed, setTaskTypeDetailed] = useState(false);
+  const [taskTypeFullReviewers, setTaskTypeFullReviewers] = useState<string[]>([]);
+  const [taskTypeQuickLookReviewers, setTaskTypeQuickLookReviewers] = useState<string[]>([]);
+  const [taskTypeFinalReviewers, setTaskTypeFinalReviewers] = useState<string[]>([]);
+
   const [editingTaskTypeId, setEditingTaskTypeId] = useState<string | null>(null);
   const [editingLabel, setEditingLabel] = useState('');
   const [editingJobTitles, setEditingJobTitles] = useState<string[]>([]);
   const [editingDetailed, setEditingDetailed] = useState(false);
+  const [editingFullReviewers, setEditingFullReviewers] = useState<string[]>([]);
+  const [editingQuickLookReviewers, setEditingQuickLookReviewers] = useState<string[]>([]);
+  const [editingFinalReviewers, setEditingFinalReviewers] = useState<string[]>([]);
 
   const canCreate = canCreateWorkAssignment(currentUser, appSettings);
   const priorityOptions = getActivePriorityOptions(appSettings);
@@ -160,6 +171,7 @@ export function AssignedWorkSection({
   };
 
   const taskTypeConfigs = getTaskTypeConfigs(appSettings);
+  const seedUsers = userList.filter(user => user.id !== 'guest');
 
   const handleAddTaskType = () => {
     const name = taskTypeName.trim();
@@ -176,6 +188,9 @@ export function AssignedWorkSection({
       label: name,
       suggestedJobTitles: taskTypeJobTitles,
       isDetailedReview: taskTypeDetailed,
+      fullReviewerUserIds: taskTypeFullReviewers,
+      quickLookUserIds: taskTypeQuickLookReviewers,
+      finalReviewerUserIds: taskTypeFinalReviewers,
     };
 
     updateAppSettings(settings => {
@@ -189,6 +204,9 @@ export function AssignedWorkSection({
     setTaskTypeName('');
     setTaskTypeJobTitles([]);
     setTaskTypeDetailed(false);
+    setTaskTypeFullReviewers([]);
+    setTaskTypeQuickLookReviewers([]);
+    setTaskTypeFinalReviewers([]);
   };
 
   const handleDeleteTaskType = (id: string) => {
@@ -210,6 +228,9 @@ export function AssignedWorkSection({
     setEditingLabel(config.label);
     setEditingJobTitles(config.suggestedJobTitles);
     setEditingDetailed(config.isDetailedReview);
+    setEditingFullReviewers(config.fullReviewerUserIds || []);
+    setEditingQuickLookReviewers(config.quickLookUserIds || []);
+    setEditingFinalReviewers(config.finalReviewerUserIds || []);
   };
 
   const handleSaveEditTaskType = () => {
@@ -226,6 +247,9 @@ export function AssignedWorkSection({
               label: editingLabel.trim(),
               suggestedJobTitles: editingJobTitles,
               isDetailedReview: editingDetailed,
+              fullReviewerUserIds: editingFullReviewers,
+              quickLookUserIds: editingQuickLookReviewers,
+              finalReviewerUserIds: editingFinalReviewers,
             };
           }
           return t;
@@ -386,6 +410,86 @@ export function AssignedWorkSection({
               </div>
             </div>
 
+            <div className="grid gap-4 md:grid-cols-3 pt-2">
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Full Reviewers (Custom)</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {seedUsers.map(user => {
+                    const active = taskTypeFullReviewers.includes(user.id);
+                    return (
+                      <button
+                        key={user.id}
+                        type="button"
+                        onClick={() => {
+                          setTaskTypeFullReviewers(prev => toggleValue(prev, user.id));
+                        }}
+                        className={cn(
+                          "rounded-full border px-2.5 py-0.5 text-xs font-bold transition-all",
+                          active
+                            ? "bg-blue-50 border-blue-200 text-blue-700 font-black"
+                            : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                        )}
+                      >
+                        {user.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Quick Look Reviewers (Custom)</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {seedUsers.map(user => {
+                    const active = taskTypeQuickLookReviewers.includes(user.id);
+                    return (
+                      <button
+                        key={user.id}
+                        type="button"
+                        onClick={() => {
+                          setTaskTypeQuickLookReviewers(prev => toggleValue(prev, user.id));
+                        }}
+                        className={cn(
+                          "rounded-full border px-2.5 py-0.5 text-xs font-bold transition-all",
+                          active
+                            ? "bg-amber-50 border-amber-200 text-amber-700 font-black"
+                            : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                        )}
+                      >
+                        {user.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Final Reviewers (Custom)</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {seedUsers.map(user => {
+                    const active = taskTypeFinalReviewers.includes(user.id);
+                    return (
+                      <button
+                        key={user.id}
+                        type="button"
+                        onClick={() => {
+                          setTaskTypeFinalReviewers(prev => toggleValue(prev, user.id));
+                        }}
+                        className={cn(
+                          "rounded-full border px-2.5 py-0.5 text-xs font-bold transition-all",
+                          active
+                            ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-black"
+                            : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                        )}
+                      >
+                        {user.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
             <div className="flex items-center gap-2">
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-white px-2 py-1 text-xs font-bold text-slate-600 shadow-sm">
                 <input
@@ -459,6 +563,86 @@ export function AssignedWorkSection({
                           </div>
                         </div>
 
+                        <div className="grid gap-3 md:grid-cols-3 pt-1">
+                          <div className="space-y-1">
+                            <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Full Reviewers (Custom)</label>
+                            <div className="flex flex-wrap gap-1.5">
+                              {seedUsers.map(user => {
+                                const active = editingFullReviewers.includes(user.id);
+                                return (
+                                  <button
+                                    key={user.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingFullReviewers(prev => toggleValue(prev, user.id));
+                                    }}
+                                    className={cn(
+                                      "rounded-full border px-2 py-0.5 text-[11px] font-bold transition-all",
+                                      active
+                                        ? "bg-blue-50 border-blue-200 text-blue-700 font-black"
+                                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                                    )}
+                                  >
+                                    {user.name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Quick Look Reviewers (Custom)</label>
+                            <div className="flex flex-wrap gap-1.5">
+                              {seedUsers.map(user => {
+                                const active = editingQuickLookReviewers.includes(user.id);
+                                return (
+                                  <button
+                                    key={user.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingQuickLookReviewers(prev => toggleValue(prev, user.id));
+                                    }}
+                                    className={cn(
+                                      "rounded-full border px-2 py-0.5 text-[11px] font-bold transition-all",
+                                      active
+                                        ? "bg-amber-50 border-amber-200 text-amber-700 font-black"
+                                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                                    )}
+                                  >
+                                    {user.name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Final Reviewers (Custom)</label>
+                            <div className="flex flex-wrap gap-1.5">
+                              {seedUsers.map(user => {
+                                const active = editingFinalReviewers.includes(user.id);
+                                return (
+                                  <button
+                                    key={user.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingFinalReviewers(prev => toggleValue(prev, user.id));
+                                    }}
+                                    className={cn(
+                                      "rounded-full border px-2 py-0.5 text-[11px] font-bold transition-all",
+                                      active
+                                        ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-black"
+                                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                                    )}
+                                  >
+                                    {user.name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+
                         <div className="flex items-center gap-2">
                           <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-0.5 text-xs font-bold text-slate-600 font-medium">
                             <input
@@ -497,6 +681,38 @@ export function AssignedWorkSection({
                               {config.isDetailedReview ? 'Detailed Review' : 'Simple Feedback'}
                             </span>
                           </div>
+
+                          {/* Custom Reviewers Display */}
+                          {((config.fullReviewerUserIds?.length || 0) > 0 || 
+                            (config.quickLookUserIds?.length || 0) > 0 || 
+                            (config.finalReviewerUserIds?.length || 0) > 0) && (
+                            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+                              {config.fullReviewerUserIds && config.fullReviewerUserIds.length > 0 && (
+                                <div className="flex items-center gap-1">
+                                  <span className="font-black text-blue-600 uppercase tracking-wider text-[9px]">Full Reviewers:</span>
+                                  <span className="font-bold text-slate-700 bg-blue-50/50 px-1.5 py-0.5 rounded border border-blue-100/50">
+                                    {config.fullReviewerUserIds.map(uid => users[uid]?.name || uid).join(', ')}
+                                  </span>
+                                </div>
+                              )}
+                              {config.quickLookUserIds && config.quickLookUserIds.length > 0 && (
+                                <div className="flex items-center gap-1">
+                                  <span className="font-black text-amber-600 uppercase tracking-wider text-[9px]">Quick Look:</span>
+                                  <span className="font-bold text-slate-700 bg-amber-50/50 px-1.5 py-0.5 rounded border border-amber-100/50">
+                                    {config.quickLookUserIds.map(uid => users[uid]?.name || uid).join(', ')}
+                                  </span>
+                                </div>
+                              )}
+                              {config.finalReviewerUserIds && config.finalReviewerUserIds.length > 0 && (
+                                <div className="flex items-center gap-1">
+                                  <span className="font-black text-indigo-600 uppercase tracking-wider text-[9px]">Final Review:</span>
+                                  <span className="font-bold text-slate-700 bg-indigo-50/50 px-1.5 py-0.5 rounded border border-indigo-100/50">
+                                    {config.finalReviewerUserIds.map(uid => users[uid]?.name || uid).join(', ')}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                         <div className="flex items-center gap-2">
                           <button

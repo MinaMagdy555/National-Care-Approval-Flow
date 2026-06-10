@@ -1,5 +1,6 @@
 import { AppSettings, ReviewMode, Role, Task, TaskStatus, User } from './types';
 import { isTaskArchived } from './archiveUtils';
+import { getTaskTypeConfigs, cleanTaskTypeKey } from './appSettings';
 
 export const REVIEWER_WAITING_STATUSES: TaskStatus[] = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'];
 export const ART_DIRECTOR_WAITING_STATUSES: TaskStatus[] = ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'];
@@ -33,7 +34,16 @@ export function canUserAccessTask(task: Task, user: Pick<User, 'id' | 'role' | '
 
 export function canManageWorkflow(user: Pick<User, 'id' | 'role' | 'isAdmin'>, settings?: AppSettings) {
   if (user.isAdmin || user.role === 'admin') return true;
-  if (settings && (settings.firstReviewerUserIds?.includes(user.id) || settings.finalReviewerUserIds?.includes(user.id))) return true;
+  if (settings) {
+    if (settings.firstReviewerUserIds?.includes(user.id) || settings.finalReviewerUserIds?.includes(user.id)) return true;
+    const configs = getTaskTypeConfigs(settings);
+    const inCustomList = configs.some(c => 
+      c.fullReviewerUserIds?.includes(user.id) || 
+      c.quickLookUserIds?.includes(user.id) || 
+      c.finalReviewerUserIds?.includes(user.id)
+    );
+    if (inCustomList) return true;
+  }
   if (!settings) {
     return ['reviewer', 'art_director', 'team_leader'].includes(user.role);
   }
