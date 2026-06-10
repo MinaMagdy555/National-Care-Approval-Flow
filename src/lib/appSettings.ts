@@ -291,25 +291,28 @@ export function isAssignableContributorForTaskWithSettings(settings: AppSettings
   if (!isAssignableHandlerWithSettings(settings, user.id)) return false;
   if (!settings.alwaysAssignableHandlerIds.includes(user.id) && user.id === creatorId) return false;
   
-  // Mina is always assignable
-  const isMina = user.id === MINA_ID || user.email?.toLowerCase().includes('minamagdy5555') || user.name.toLowerCase().includes('mina');
-  if (isMina) return true;
-
-  if (user.role !== 'team_member') return false;
-
-  const configs = getTaskTypeConfigs(settings);
-  const config = configs.find(c => cleanTaskTypeKey(c.id) === cleanTaskTypeKey(taskType));
-  
-  const jobTitleLower = (user.jobTitle || '').toLowerCase();
   const cleanType = cleanTaskTypeKey(taskType);
+  const configs = getTaskTypeConfigs(settings);
+  const config = configs.find(c => cleanTaskTypeKey(c.id) === cleanType);
 
   // Check if this task type is content-related
   const isContentTask = ['write content', 'write caption', 'reels voice over script'].includes(cleanType) ||
-    cleanType.includes('content') || cleanType.includes('caption') || cleanType.includes('script') ||
+    cleanType.includes('content') || cleanType.includes('caption') || cleanType.includes('script') || cleanType.includes('voice over') ||
     (config && config.suggestedJobTitles.some(title => {
       const tLower = title.toLowerCase();
-      return tLower.includes('content') || tLower.includes('writer') || tLower.includes('script') || tLower.includes('caption');
+      return tLower.includes('content') || tLower.includes('writer') || tLower.includes('script') || tLower.includes('caption') || tLower.includes('voice over');
     }));
+
+  // Mina is always assignable except for content-related tasks
+  const isMina = user.id === MINA_ID || user.email?.toLowerCase().includes('minamagdy5555') || user.name.toLowerCase().includes('mina');
+  if (isMina) {
+    if (isContentTask) return false;
+    return true;
+  }
+
+  if (user.role !== 'team_member') return false;
+
+  const jobTitleLower = (user.jobTitle || '').toLowerCase();
 
   const isContentUser = jobTitleLower.includes('content') || jobTitleLower.includes('writer') || jobTitleLower.includes('script') || jobTitleLower.includes('caption');
 
