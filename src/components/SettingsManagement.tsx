@@ -46,8 +46,7 @@ export function SettingsManagement() {
   const { appSettings, canManageSettings, updateAppSettings, userList } = useAppStore();
   const [priorityLabel, setPriorityLabel] = useState('');
   const [priorityTone, setPriorityTone] = useState<PriorityTone>('blue');
-  const [responsibilityLabel, setResponsibilityLabel] = useState('');
-  const [responsibilityRole, setResponsibilityRole] = useState<Role>('team_member');
+
   
   const [taskTypeName, setTaskTypeName] = useState('');
   const [taskTypeJobTitles, setTaskTypeJobTitles] = useState<string[]>([]);
@@ -183,25 +182,7 @@ export function SettingsManagement() {
     setPriorityLabel('');
   };
 
-  const addResponsibility = () => {
-    const label = responsibilityLabel.trim();
-    if (!label) return;
-    updateAppSettings(settings => {
-      if (settings.responsibilities.some(item => item.label.toLowerCase() === label.toLowerCase())) return settings;
-      return {
-        ...settings,
-        responsibilities: [
-          ...settings.responsibilities,
-          {
-            id: normalizeSettingId(label),
-            label,
-            permissionRole: responsibilityRole,
-          },
-        ],
-      };
-    });
-    setResponsibilityLabel('');
-  };
+
 
   return (
     <div className="mx-auto max-w-7xl space-y-5 px-4 pb-6 pt-0 sm:px-6 sm:py-6 lg:px-8">
@@ -305,47 +286,7 @@ export function SettingsManagement() {
         </div>
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="mb-3 text-sm font-black uppercase tracking-wider text-slate-500">Responsibilities</h2>
-        <div className="mb-3 grid gap-2 sm:grid-cols-[1fr,220px,auto]">
-          <input
-            value={responsibilityLabel}
-            onChange={event => setResponsibilityLabel(event.target.value)}
-            placeholder="Add responsibility"
-            className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-900"
-          />
-          <CustomSelect value={responsibilityRole} onChange={value => setResponsibilityRole(value as Role)} options={ROLE_OPTIONS} buttonClassName="rounded-xl px-3 py-2" />
-          <button type="button" onClick={addResponsibility} className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-black text-white">
-            <Plus className="h-4 w-4" /> Add
-          </button>
-        </div>
-        <div className="grid gap-2 md:grid-cols-2">
-          {appSettings.responsibilities.map(item => (
-            <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2">
-              <div>
-                <p className="text-sm font-black text-slate-900">{item.label}</p>
-                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">{item.permissionRole.replaceAll('_', ' ')}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => updateAppSettings(settings => ({
-                  ...settings,
-                  responsibilities: settings.responsibilities.map(responsibility => (
-                    responsibility.id === item.id ? { ...responsibility, grantsSettingsAccess: !responsibility.grantsSettingsAccess } : responsibility
-                  )),
-                  settingsManagerResponsibilityIds: item.grantsSettingsAccess
-                    ? settings.settingsManagerResponsibilityIds.filter(id => id !== item.id)
-                    : Array.from(new Set([...settings.settingsManagerResponsibilityIds, item.id])),
-                }))}
-                className={cn("rounded-lg border px-2 py-1 text-xs font-black", item.grantsSettingsAccess ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-500")}
-              >
-                <ShieldCheck className="mr-1 inline h-3.5 w-3.5" />
-                Settings
-              </button>
-            </div>
-          ))}
-        </div>
-      </section>
+
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="mb-1 text-sm font-black uppercase tracking-wider text-slate-500">Task Types & Workflows</h2>
