@@ -81,6 +81,13 @@ export interface BusinessCalendarSettings {
   endTime: string;
 }
 
+export interface TaskTypeConfig {
+  id: string;
+  label: string;
+  suggestedJobTitles: string[];
+  isDetailedReview: boolean;
+}
+
 export interface AppSettings {
   responsibilities: ResponsibilityOption[];
   priorities: PriorityOption[];
@@ -95,7 +102,7 @@ export interface AppSettings {
   alwaysAssignableHandlerIds: string[];
   flowLabels: Record<string, string>;
   customPermissions?: Array<{ id: string; label: string; userIds: string[] }>;
-  taskTypes?: string[];
+  taskTypes?: Array<string | TaskTypeConfig>;
   campaignPlatforms?: string[];
   hiddenColumns?: string[];
   firstReviewerUserIds?: string[];

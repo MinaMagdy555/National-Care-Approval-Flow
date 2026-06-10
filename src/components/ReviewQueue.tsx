@@ -22,7 +22,7 @@ function getDateInputValue(date: string) {
 }
 
 export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: string) => void, tasks: Task[], title: string }) {
-  const { currentUser, users } = useAppStore();
+  const { currentUser, users, appSettings } = useAppStore();
   const [creatorFilter, setCreatorFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -68,7 +68,7 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
 
   const typeOptions = [
     { value: 'all', label: 'All Types' },
-    ...uniqueTypes.map(t => ({ value: t, label: getTaskTypeLabel(t) }))
+    ...uniqueTypes.map(t => ({ value: t, label: getTaskTypeLabel(t, appSettings) }))
   ];
   const dateFilterOptions = [
     { value: 'all', label: 'All Dates' },

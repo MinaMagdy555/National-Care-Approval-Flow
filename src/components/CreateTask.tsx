@@ -50,10 +50,13 @@ export function CreateTask({
   const contributorOptions = canManageAssignedContributors
     ? getAssignableContributorsForTask(workspaceUsers, taskType, selectedCreatorId, appSettings)
     : [];
-  const taskTypeOptions = (appSettings?.taskTypes || ['video', 'ai_packet', 'sales_material', 'website_material', 'campaign', 'others']).map(t => ({
-    value: t,
-    label: getTaskTypeLabel(t)
-  }));
+  const taskTypeOptions = (appSettings?.taskTypes || ['video', 'ai packet', 'sales material', 'website material', 'campaign', 'others']).map(t => {
+    const id = typeof t === 'object' && t !== null ? t.id : String(t);
+    return {
+      value: id,
+      label: getTaskTypeLabel(id, appSettings)
+    };
+  });
   const reviewModeOptions = [
     { value: 'full_review', label: 'Full Review' },
     { value: 'quick_look', label: 'Quick Look' },

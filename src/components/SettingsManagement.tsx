@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { Plus, Settings, ShieldCheck } from 'lucide-react';
 import { useAppStore } from '../lib/store';
-import { PriorityTone, Role } from '../lib/types';
-import { normalizeSettingId, priorityToneClasses } from '../lib/appSettings';
+import { PriorityTone, Role, TaskTypeConfig } from '../lib/types';
+import { normalizeSettingId, priorityToneClasses, normalizeTaskTypeId, cleanTaskTypeKey, getTaskTypeConfigs } from '../lib/appSettings';
 import { CustomSelect } from './CustomSelect';
 import { cn } from '../lib/utils';
+import { Trash2 } from 'lucide-react';
 
 const TONES: Array<{ value: PriorityTone; label: string; tone: PriorityTone }> = [
   { value: 'emerald', label: 'Green', tone: 'emerald' },
@@ -47,6 +48,90 @@ export function SettingsManagement() {
   const [priorityTone, setPriorityTone] = useState<PriorityTone>('blue');
   const [responsibilityLabel, setResponsibilityLabel] = useState('');
   const [responsibilityRole, setResponsibilityRole] = useState<Role>('team_member');
+  
+  const [taskTypeName, setTaskTypeName] = useState('');
+  const [taskTypeJobTitles, setTaskTypeJobTitles] = useState<string[]>([]);
+  const [taskTypeDetailed, setTaskTypeDetailed] = useState(false);
+  const [editingTaskTypeId, setEditingTaskTypeId] = useState<string | null>(null);
+  const [editingLabel, setEditingLabel] = useState('');
+  const [editingJobTitles, setEditingJobTitles] = useState<string[]>([]);
+  const [editingDetailed, setEditingDetailed] = useState(false);
+
+  const taskTypeConfigs = getTaskTypeConfigs(appSettings);
+
+  const handleAddTaskType = () => {
+    const name = taskTypeName.trim();
+    if (!name) return;
+    const normalized = normalizeTaskTypeId(name);
+    
+    if (taskTypeConfigs.some(c => cleanTaskTypeKey(c.id) === cleanTaskTypeKey(normalized))) {
+      alert('This task type already exists.');
+      return;
+    }
+
+    const newConfig: TaskTypeConfig = {
+      id: normalized,
+      label: name,
+      suggestedJobTitles: taskTypeJobTitles,
+      isDetailedReview: taskTypeDetailed,
+    };
+
+    updateAppSettings(settings => {
+      const current = settings.taskTypes || [];
+      return {
+        ...settings,
+        taskTypes: [...current, newConfig]
+      };
+    });
+
+    setTaskTypeName('');
+    setTaskTypeJobTitles([]);
+    setTaskTypeDetailed(false);
+  };
+
+  const handleDeleteTaskType = (id: string) => {
+    if (!confirm(`Are you sure you want to delete the task type "${id}"?`)) return;
+    updateAppSettings(settings => {
+      const current = settings.taskTypes || [];
+      return {
+        ...settings,
+        taskTypes: current.filter(t => {
+          const tId = typeof t === 'object' && t !== null ? t.id : String(t);
+          return cleanTaskTypeKey(tId) !== cleanTaskTypeKey(id);
+        })
+      };
+    });
+  };
+
+  const handleStartEditingTaskType = (config: TaskTypeConfig) => {
+    setEditingTaskTypeId(config.id);
+    setEditingLabel(config.label);
+    setEditingJobTitles(config.suggestedJobTitles);
+    setEditingDetailed(config.isDetailedReview);
+  };
+
+  const handleSaveEditTaskType = () => {
+    if (!editingLabel.trim()) return;
+    updateAppSettings(settings => {
+      const current = settings.taskTypes || [];
+      return {
+        ...settings,
+        taskTypes: current.map(t => {
+          const tId = typeof t === 'object' && t !== null ? t.id : String(t);
+          if (cleanTaskTypeKey(tId) === cleanTaskTypeKey(editingTaskTypeId || '')) {
+            return {
+              id: tId,
+              label: editingLabel.trim(),
+              suggestedJobTitles: editingJobTitles,
+              isDetailedReview: editingDetailed,
+            };
+          }
+          return t;
+        })
+      };
+    });
+    setEditingTaskTypeId(null);
+  };
 
   if (!canManageSettings) {
     return (
@@ -259,6 +344,193 @@ export function SettingsManagement() {
               </button>
             </div>
           ))}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <h2 className="mb-1 text-sm font-black uppercase tracking-wider text-slate-500">Task Types & Workflows</h2>
+        <p className="text-xs text-slate-400 mb-3">Add and configure custom task types, assign recommended job titles, and toggle the detailed revision flow.</p>
+
+        {/* Add Form */}
+        <div className="mb-4 rounded-xl border border-slate-100 bg-slate-50/50 p-3 space-y-3">
+          <h3 className="text-xs font-black uppercase tracking-wider text-slate-500">Create Task Type</h3>
+          <div className="grid gap-3 sm:grid-cols-[1fr,auto]">
+            <input
+              value={taskTypeName}
+              onChange={event => setTaskTypeName(event.target.value)}
+              placeholder="Task Type Name (e.g. Video, Content Revision)"
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 shadow-sm"
+            />
+            <button
+              type="button"
+              onClick={handleAddTaskType}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-black text-white hover:bg-indigo-700 transition-colors"
+            >
+              <Plus className="h-4 w-4" /> Add Type
+            </button>
+          </div>
+
+          <div className="space-y-2">
+            <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Suggested Roles / Job Titles</label>
+            <div className="flex flex-wrap gap-2">
+              {appSettings.responsibilities.map(r => {
+                const active = taskTypeJobTitles.includes(r.label);
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => {
+                      setTaskTypeJobTitles(prev =>
+                        prev.includes(r.label) ? prev.filter(l => l !== r.label) : [...prev, r.label]
+                      );
+                    }}
+                    className={cn(
+                      "rounded-full border px-3 py-1 text-xs font-bold transition-all",
+                      active
+                        ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-black"
+                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                    )}
+                  >
+                    {r.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-white px-2 py-1 text-xs font-bold text-slate-600 shadow-sm">
+              <input
+                type="checkbox"
+                checked={taskTypeDetailed}
+                onChange={event => setTaskTypeDetailed(event.target.checked)}
+                className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              Detailed Review Workflow (Request Edits Form)
+            </label>
+          </div>
+        </div>
+
+        {/* List & Edit Forms */}
+        <div className="space-y-2">
+          {taskTypeConfigs.map(config => {
+            const isEditing = editingTaskTypeId === config.id;
+            return (
+              <div key={config.id} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-all hover:border-slate-300">
+                {isEditing ? (
+                  <div className="space-y-3">
+                    <div className="flex gap-2">
+                      <input
+                        value={editingLabel}
+                        onChange={event => setEditingLabel(event.target.value)}
+                        className="flex-1 rounded-xl border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-900 shadow-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleSaveEditTaskType}
+                        className="rounded-xl bg-indigo-600 px-3 py-1.5 text-xs font-black text-white hover:bg-indigo-700 transition-colors"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingTaskTypeId(null)}
+                        className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-black text-slate-600 hover:bg-slate-50 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Suggested Roles</label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {appSettings.responsibilities.map(r => {
+                          const active = editingJobTitles.includes(r.label);
+                          return (
+                            <button
+                              key={r.id}
+                              type="button"
+                              onClick={() => {
+                                setEditingJobTitles(prev =>
+                                  prev.includes(r.label) ? prev.filter(l => l !== r.label) : [...prev, r.label]
+                                );
+                              }}
+                              className={cn(
+                                "rounded-full border px-2.5 py-0.5 text-[11px] font-bold transition-all",
+                                active
+                                  ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-black"
+                                  : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                              )}
+                            >
+                              {r.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-0.5 text-xs font-bold text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={editingDetailed}
+                          onChange={event => setEditingDetailed(event.target.checked)}
+                          className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        Detailed Review Workflow
+                      </label>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="space-y-1 min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="text-sm font-black text-slate-900">{config.label}</h4>
+                        <span className="text-[10px] font-bold text-slate-400 font-mono">ID: {config.id}</span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Suggested:</span>
+                        {config.suggestedJobTitles.length > 0 ? (
+                          config.suggestedJobTitles.map(title => (
+                            <span key={title} className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">{title}</span>
+                          ))
+                        ) : (
+                          <span className="text-[10px] font-medium text-slate-500 italic">Anyone</span>
+                        )}
+                        <span className="text-[10px] text-slate-300 font-bold">|</span>
+                        <span className={cn(
+                          "rounded-full px-2 py-0.5 text-[10px] font-bold",
+                          config.isDetailedReview 
+                            ? "bg-amber-50 text-amber-700 border border-amber-200/50" 
+                            : "bg-slate-50 text-slate-500 border border-slate-200/50"
+                        )}>
+                          {config.isDetailedReview ? 'Detailed Review' : 'Simple Feedback'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleStartEditingTaskType(config)}
+                        className="rounded-lg border border-slate-200 bg-white p-1 text-slate-500 hover:text-slate-900 hover:bg-slate-50 transition-colors"
+                        title="Edit task type"
+                      >
+                        <Settings className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteTaskType(config.id)}
+                        className="rounded-lg border border-rose-200 bg-white p-1 text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors"
+                        title="Delete task type"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </section>
 

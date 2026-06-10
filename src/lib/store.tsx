@@ -605,7 +605,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (isMina) {
       return isMinaSettingsUnlocked;
     }
-    return canManageAppSettings(currentUser, appSettings);
+    return canManageAppSettings(currentUser, appSettings) || appSettings.workAssignmentCreatorIds.includes(currentUser.id);
   })();
   const isSharedWorkspaceActive = isSharedWorkspaceStatus(authStatus);
   const isDriveWorkspaceReady = isSharedWorkspaceActive && hasDriveToken && Boolean(driveRootFolder);

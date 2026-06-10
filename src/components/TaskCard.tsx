@@ -56,7 +56,7 @@ export function TaskCard({ task, onClick }: { task: Task; onClick: (id: string) 
            <div><span className="font-bold text-slate-700">Creator:</span> {creator}</div>
            {handledByNames && <div><span className="font-bold text-slate-700">Assigned:</span> {handledByNames}</div>}
            {ownerNames && <div><span className="font-bold text-slate-700">Owners:</span> {ownerNames}</div>}
-           <div><span className="font-bold text-slate-700">Type:</span> {getTaskTypeLabel(task.taskType)}</div>
+           <div><span className="font-bold text-slate-700">Type:</span> {getTaskTypeLabel(task.taskType, appSettings)}</div>
            <div><span className="font-bold text-slate-700">Version:</span> V{version}</div>
         </div>
 

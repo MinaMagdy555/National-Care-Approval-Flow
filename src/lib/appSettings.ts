@@ -1,4 +1,4 @@
-import { AppSettings, Priority, PriorityOption, PriorityTone, ResponsibilityOption, Role, TaskType, User } from './types';
+import { AppSettings, Priority, PriorityOption, PriorityTone, ResponsibilityOption, Role, TaskType, User, TaskTypeConfig } from './types';
 
 export const MINA_ID = '83e02bb4-11f9-41b0-becb-33e6c4c52b2a';
 export const MARWA_ID = 'd65ea68d-1749-45b9-b0f9-1fdaf23b8f94';
@@ -63,7 +63,17 @@ export const defaultAppSettings: AppSettings = {
     assignedWork: 'Assigned Work',
   },
   customPermissions: [],
-  taskTypes: ['video', 'ai_packet', 'sales_material', 'website_material', 'campaign', 'others'],
+  taskTypes: [
+    'video',
+    'ai packet',
+    'sales material',
+    'website material',
+    'campaign',
+    'write content',
+    'write caption',
+    'reels voice over script',
+    'others'
+  ],
   campaignPlatforms: ['Instagram', 'LinkedIn', 'TikTok', 'Snapchat'],
   hiddenColumns: [],
   updatedAt: now,
@@ -75,6 +85,77 @@ export function normalizeSettingId(value: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '') || `custom_${Date.now().toString(36)}`;
+}
+
+export function normalizeTaskTypeId(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, '')
+    .replace(/\s+/g, ' ') || `custom_${Date.now().toString(36)}`;
+}
+
+export function cleanTaskTypeKey(type: string): string {
+  if (!type) return '';
+  return type.toLowerCase().replace(/_/g, ' ').trim();
+}
+
+function getTaskTypeLabelSimple(type: string): string {
+  if (!type) return 'Asset';
+  const clean = cleanTaskTypeKey(type);
+  switch (clean) {
+    case 'video': return 'Video';
+    case 'ai packet': return 'AI Packets';
+    case 'sales material': return 'Sales Material';
+    case 'website material': return 'Website Material';
+    case 'campaign': return 'Campaign';
+    case 'write content': return 'Write Content';
+    case 'write caption': return 'Write Caption';
+    case 'reels voice over script': return 'Reels Voice Over Script';
+    case 'others': return 'Others';
+    default: {
+      return clean
+        .split(/\s+/)
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+    }
+  }
+}
+
+export function getTaskTypeConfigs(settings: AppSettings): TaskTypeConfig[] {
+  const types = settings.taskTypes || [];
+  return types.map(t => {
+    if (typeof t === 'object' && t !== null) {
+      return {
+        id: (t as any).id,
+        label: (t as any).label || getTaskTypeLabelSimple((t as any).id),
+        suggestedJobTitles: Array.isArray((t as any).suggestedJobTitles) ? (t as any).suggestedJobTitles : [],
+        isDetailedReview: typeof (t as any).isDetailedReview === 'boolean' ? (t as any).isDetailedReview : false,
+      };
+    }
+    
+    const id = String(t);
+    const label = getTaskTypeLabelSimple(id);
+    const cleanId = cleanTaskTypeKey(id);
+    let suggestedJobTitles: string[] = [];
+    let isDetailedReview = false;
+
+    if (cleanId === 'video') {
+      suggestedJobTitles = ['Video Editor', 'Senior Brand Designer & Video Editor'];
+      isDetailedReview = true;
+    } else if (['write content', 'write caption', 'reels voice over script'].includes(cleanId)) {
+      suggestedJobTitles = ['Content Creator'];
+      isDetailedReview = false;
+    } else if (cleanId === 'ai packet') {
+      suggestedJobTitles = ['Graphic Designer', 'Senior Brand Designer & Video Editor'];
+      isDetailedReview = true;
+    } else {
+      suggestedJobTitles = ['Graphic Designer', 'Senior Brand Designer & Video Editor'];
+      isDetailedReview = false;
+    }
+
+    return { id, label, suggestedJobTitles, isDetailedReview };
+  });
 }
 
 export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSettings {
@@ -198,10 +279,51 @@ export function canAssignContributorsWithSettings(settings: AppSettings, userId:
 export function isAssignableContributorForTaskWithSettings(settings: AppSettings, user: User, taskType: TaskType, creatorId?: string) {
   if (!isAssignableHandlerWithSettings(settings, user.id)) return false;
   if (!settings.alwaysAssignableHandlerIds.includes(user.id) && user.id === creatorId) return false;
-  if (settings.alwaysAssignableHandlerIds.includes(user.id)) return true;
+  
+  // Mina is always assignable
+  const isMina = user.id === MINA_ID || user.email?.toLowerCase().includes('minamagdy5555') || user.name.toLowerCase().includes('mina');
+  if (isMina) return true;
+
   if (user.role !== 'team_member') return false;
-  const isVideoOnly = settings.videoOnlyHandlerIds.includes(user.id);
-  return taskType === 'video' ? isVideoOnly : !isVideoOnly;
+
+  const configs = getTaskTypeConfigs(settings);
+  const config = configs.find(c => cleanTaskTypeKey(c.id) === cleanTaskTypeKey(taskType));
+  
+  const jobTitleLower = (user.jobTitle || '').toLowerCase();
+  const cleanType = cleanTaskTypeKey(taskType);
+
+  // Check if this task type is content-related
+  const isContentTask = ['write content', 'write caption', 'reels voice over script'].includes(cleanType) ||
+    cleanType.includes('content') || cleanType.includes('caption') || cleanType.includes('script') ||
+    (config && config.suggestedJobTitles.some(title => {
+      const tLower = title.toLowerCase();
+      return tLower.includes('content') || tLower.includes('writer') || tLower.includes('script') || tLower.includes('caption');
+    }));
+
+  const isContentUser = jobTitleLower.includes('content') || jobTitleLower.includes('writer') || jobTitleLower.includes('script') || jobTitleLower.includes('caption');
+
+  if (isContentTask) {
+    // If it is content related, only content users are allowed
+    return isContentUser;
+  }
+
+  // If it's NOT content related, content users are NOT allowed
+  if (isContentUser) {
+    return false;
+  }
+
+  if (config) {
+    if (config.suggestedJobTitles.length === 0) return true;
+    return config.suggestedJobTitles.some(title => jobTitleLower.includes(title.toLowerCase()));
+  }
+
+  // If it's a Video task type
+  if (cleanType === 'video') {
+    return jobTitleLower.includes('video');
+  }
+
+  // For any other task type (Design/Others)
+  return jobTitleLower.includes('designer') || /\bart\b/i.test(jobTitleLower);
 }
 
 export function getAssignableContributorsForTaskWithSettings(settings: AppSettings, users: User[], taskType: TaskType, creatorId?: string) {
@@ -278,6 +400,15 @@ export function resolveLegacyIds(ids: string[], userList: User[]): string[] {
     if (id === 'user_3') {
       return userList.find(u => u.email?.toLowerCase().includes('dina.') || u.name.toLowerCase().includes('dina'))?.id || id;
     }
+    if (id === 'user_4') {
+      return userList.find(u => u.email?.toLowerCase().includes('mariamezzat') || u.name.toLowerCase().includes('mariam'))?.id || id;
+    }
+    if (id === 'user_5') {
+      return userList.find(u => u.email?.toLowerCase().includes('noreen') || u.name.toLowerCase().includes('noreen'))?.id || id;
+    }
+    if (id === 'user_6') {
+      return userList.find(u => u.email?.toLowerCase().includes('yf.amin') || u.name.toLowerCase().includes('yomna'))?.id || id;
+    }
     if (id === 'user_7') {
       return userList.find(u => u.email?.toLowerCase().includes('fawzy') || u.name.toLowerCase().includes('fawzy'))?.id || id;
     }
@@ -286,6 +417,15 @@ export function resolveLegacyIds(ids: string[], userList: User[]): string[] {
     }
     if (id === 'user_9') {
       return userList.find(u => u.email?.toLowerCase().includes('sobeeh') || u.name.toLowerCase().includes('sobeeh'))?.id || id;
+    }
+    if (id === 'user_10') {
+      return userList.find(u => u.email?.toLowerCase().includes('reem') || u.name.toLowerCase().includes('reem'))?.id || id;
+    }
+    if (id === 'user_11') {
+      return userList.find(u => u.email?.toLowerCase().includes('samamoh') || u.name.toLowerCase().includes('sama'))?.id || id;
+    }
+    if (id === 'user_12') {
+      return userList.find(u => u.email?.toLowerCase().includes('haneen') || u.name.toLowerCase().includes('haneen'))?.id || id;
     }
     return id;
   });
@@ -301,6 +441,7 @@ export function resolveAppSettingsWithRealIds(settings: AppSettings, userList: U
     contributorAssignerIds: resolveLegacyIds(settings.contributorAssignerIds, userList),
     neverHandlerIds: resolveLegacyIds(settings.neverHandlerIds, userList),
     selfAssignmentBlockedIds: resolveLegacyIds(settings.selfAssignmentBlockedIds, userList),
+    videoOnlyHandlerIds: resolveLegacyIds(settings.videoOnlyHandlerIds, userList),
     alwaysAssignableHandlerIds: resolveLegacyIds(settings.alwaysAssignableHandlerIds, userList),
     firstReviewerUserIds: resolveLegacyIds(settings.firstReviewerUserIds, userList),
     finalReviewerUserIds: resolveLegacyIds(settings.finalReviewerUserIds, userList),

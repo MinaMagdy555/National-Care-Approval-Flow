@@ -4,6 +4,7 @@ import { Priority, ReviewMode, TaskComment, TaskCommentSection, UploadedTaskFile
 import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
+import { getTaskTypeConfigs, cleanTaskTypeKey } from '../lib/appSettings';
 import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, Link2, Settings2, Edit3, Trash2, History, Send, Pause } from 'lucide-react';
 import { FileContentThumbnail, FilePreview, isLocalOnlyFileUrl } from './FilePreview';
 import { uploadTaskFiles } from '../lib/driveDb';
@@ -172,7 +173,11 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const selectedFile = files[selectedFileIndex] || files[0];
   const currentVersionHasLocalOnlyFiles = files.some(file => isLocalOnlyFileUrl(file.url));
   const isArchived = isTaskArchived(task);
-  const isDetailedReviewType = task.taskType === 'ai_packet' || task.taskType === 'video';
+  const isDetailedReviewType = React.useMemo(() => {
+    const configs = getTaskTypeConfigs(appSettings);
+    const config = configs.find(c => cleanTaskTypeKey(c.id) === cleanTaskTypeKey(task.taskType));
+    return config ? config.isDetailedReview : (cleanTaskTypeKey(task.taskType) === 'ai packet' || cleanTaskTypeKey(task.taskType) === 'video');
+  }, [appSettings, task.taskType]);
   const isSelfCreatedTask = task.createdBy === currentUser.id;
   const isReadOnlyObserver = currentUser.role === 'manager' || currentUser.role === 'developer';
   const isCurrentActiveOwner = canUserActAsCurrentOwner(task, currentUser);
@@ -943,7 +948,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             </div>
             <div>
               <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Task type</span>
-              <span className="font-semibold text-slate-900">{getTaskTypeLabel(task.taskType)}</span>
+              <span className="font-semibold text-slate-900">{getTaskTypeLabel(task.taskType, appSettings)}</span>
             </div>
             <div>
               <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Review mode</span>

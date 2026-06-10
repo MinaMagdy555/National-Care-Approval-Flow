@@ -7,7 +7,7 @@ import { isDueThisWeek, isDueToday } from '../lib/deadlineUtils';
 import { isTaskArchived } from '../lib/archiveUtils';
 import { canUserAccessTask, canUserActAsCurrentOwner, userCanViewFullWorkspace } from '../lib/workflowUtils';
 import { cn } from '../lib/utils';
-import { getResponsibilityForLabel } from '../lib/appSettings';
+import { getResponsibilityForLabel, MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID } from '../lib/appSettings';
 
 function SummaryCard({
   label,
@@ -120,7 +120,8 @@ export function Dashboard({
   }, [currentUser, appSettings]);
 
   const isLeaderboardOrMinaUser = React.useMemo(() => {
-    return ['user_1', 'user_2', 'user_3', 'user_7', 'user_9'].includes(currentUser.id) || 
+    const leaderboardIds = [MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID];
+    return leaderboardIds.includes(currentUser.id) || 
       currentUser.name.includes('Mina') || 
       currentUser.name.includes('Dina') || 
       currentUser.name.includes('Marwa') || 
@@ -134,26 +135,27 @@ export function Dashboard({
       if (u.id === 'guest') return false;
 
       // Include Mina (reviewer or by email)
-      const isMina = u.role === 'reviewer' || u.email === 'minamagdy5555@gmail.com' || u.id === 'user_1';
+      const isMina = u.role === 'reviewer' || u.email === 'minamagdy5555@gmail.com' || u.id === MINA_ID || u.id === 'user_1';
       if (isMina) return true;
 
       if (u.role !== 'team_member') return false;
       if (!u.jobTitle) return false;
       
-      const resp = getResponsibilityForLabel(appSettings, u.jobTitle);
-      if (!resp) return false;
-      
-      const respId = resp.id.toLowerCase();
-      const respLabel = resp.label.toLowerCase();
-      
-      return (
-        respId.includes('graphic') ||
-        respId.includes('video') ||
-        respId.includes('vedio') ||
-        respLabel.includes('graphic') ||
-        respLabel.includes('video') ||
-        respLabel.includes('vedio')
-      );
+      const jobTitleLower = u.jobTitle.toLowerCase();
+      if (
+        jobTitleLower.includes('manager') ||
+        jobTitleLower.includes('leader') ||
+        jobTitleLower.includes('director') ||
+        jobTitleLower.includes('developer') ||
+        jobTitleLower.includes('hr') ||
+        jobTitleLower.includes('admin')
+      ) {
+        return false;
+      }
+
+      if (appSettings.neverHandlerIds.includes(u.id)) return false;
+
+      return true;
     });
   }, [userList, appSettings]);
 

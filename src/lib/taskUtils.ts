@@ -1,19 +1,32 @@
-import { Task, Role, Priority, TaskType, ReviewMode } from './types';
+import { Task, Role, Priority, TaskType, ReviewMode, AppSettings } from './types';
 import { isTaskArchived } from './archiveUtils';
 import { defaultAppSettings, getPriorityLabelFromSettings } from './appSettings';
 
-export function getTaskTypeLabel(type: TaskType): string {
-  switch (type) {
+export function getTaskTypeLabel(type: TaskType, settings?: AppSettings): string {
+  if (!type) return 'Asset';
+  if (settings && settings.taskTypes) {
+    const found = settings.taskTypes.find(t => {
+      const id = typeof t === 'object' && t !== null ? t.id : String(t);
+      return id.toLowerCase().trim() === type.toLowerCase().trim();
+    });
+    if (found && typeof found === 'object' && found.label) {
+      return found.label;
+    }
+  }
+  const clean = type.toLowerCase().replace(/_/g, ' ').trim();
+  switch (clean) {
     case 'video': return 'Video';
-    case 'ai_packet': return 'AI Packets';
-    case 'sales_material': return 'Sales Material';
-    case 'website_material': return 'Website Material';
+    case 'ai packet': return 'AI Packets';
+    case 'sales material': return 'Sales Material';
+    case 'website material': return 'Website Material';
     case 'campaign': return 'Campaign';
+    case 'write content': return 'Write Content';
+    case 'write caption': return 'Write Caption';
+    case 'reels voice over script': return 'Reels Voice Over Script';
     case 'others': return 'Others';
     default: {
-      if (!type) return 'Asset';
-      return type
-        .split('_')
+      return clean
+        .split(/\s+/)
         .map(word => word.charAt(0).toUpperCase() + word.slice(1))
         .join(' ');
     }

@@ -1,16 +1,17 @@
 import React, { useState } from 'react';
-import { CalendarDays, Check, Clock3, Edit3, Link2, Plus, RotateCcw, X } from 'lucide-react';
+import { CalendarDays, Check, Clock3, Edit3, Link2, Plus, RotateCcw, X, Trash2, Settings } from 'lucide-react';
 import { useAppStore } from '../lib/store';
-import { Priority, Task } from '../lib/types';
+import { Priority, Task, Role, TaskTypeConfig } from '../lib/types';
 import { canCreateWorkAssignment, canManageWorkAssignment, canUploadWorkAssignment, isWorkAssignmentAssignee, sortWorkAssignments } from '../lib/workAssignmentUtils';
-import { getPriorityLabel } from '../lib/taskUtils';
+import { getPriorityLabel, getTaskTypeLabel } from '../lib/taskUtils';
+import { isAssignableContributorForTask } from '../lib/handlerUtils';
 import { CustomSelect } from './CustomSelect';
 import { UserMultiSelect } from './UserMultiSelect';
 import { ThemedDatePicker } from './ThemedDatePicker';
 import { ThemedTimePicker } from './ThemedTimePicker';
 import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
-import { getActivePriorityOptions, getPriorityTone, isDeadlineInsideBusinessHours, priorityToneClasses } from '../lib/appSettings';
+import { getActivePriorityOptions, getPriorityTone, isDeadlineInsideBusinessHours, priorityToneClasses, MINA_ID, normalizeTaskTypeId, cleanTaskTypeKey, getTaskTypeConfigs } from '../lib/appSettings';
 import { userCanViewFullWorkspace } from '../lib/workflowUtils';
 
 const CONTROL_CLASS = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10';
@@ -85,6 +86,7 @@ export function AssignedWorkSection({
   onOpenTask?: (taskId: string) => void;
 }) {
   const { currentUser, userList, users, appSettings, updateAppSettings, createWorkAssignment, updateWorkAssignment } = useAppStore();
+  const [activeTab, setActiveTab] = useState<'assignments' | 'task_types'>('assignments');
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -99,6 +101,16 @@ export function AssignedWorkSection({
   const [links, setLinks] = useState<string[]>([]);
   const [linkInput, setLinkInput] = useState('');
   const [deadlineError, setDeadlineError] = useState('');
+
+  // Task type management states
+  const [taskTypeName, setTaskTypeName] = useState('');
+  const [taskTypeJobTitles, setTaskTypeJobTitles] = useState<string[]>([]);
+  const [taskTypeDetailed, setTaskTypeDetailed] = useState(false);
+  const [editingTaskTypeId, setEditingTaskTypeId] = useState<string | null>(null);
+  const [editingLabel, setEditingLabel] = useState('');
+  const [editingJobTitles, setEditingJobTitles] = useState<string[]>([]);
+  const [editingDetailed, setEditingDetailed] = useState(false);
+
   const canCreate = canCreateWorkAssignment(currentUser, appSettings);
   const priorityOptions = getActivePriorityOptions(appSettings);
   const assigneeOptions = userList.filter(user => {
@@ -107,12 +119,7 @@ export function AssignedWorkSection({
   });
   
   const suggestedUsers = assigneeOptions.filter(user => {
-    const isVideoHandler = appSettings.videoOnlyHandlerIds.includes(user.id);
-    if (taskType === 'video') {
-      return isVideoHandler;
-    } else {
-      return !isVideoHandler;
-    }
+    return isAssignableContributorForTask(user, taskType, undefined, appSettings);
   });
 
   const otherUsers = assigneeOptions.filter(user => !suggestedUsers.some(su => su.id === user.id));
@@ -150,6 +157,82 @@ export function AssignedWorkSection({
     setLinks([]);
     setLinkInput('');
     setDeadlineError('');
+  };
+
+  const taskTypeConfigs = getTaskTypeConfigs(appSettings);
+
+  const handleAddTaskType = () => {
+    const name = taskTypeName.trim();
+    if (!name) return;
+    const normalized = normalizeTaskTypeId(name);
+    
+    if (taskTypeConfigs.some(c => cleanTaskTypeKey(c.id) === cleanTaskTypeKey(normalized))) {
+      alert('This task type already exists.');
+      return;
+    }
+
+    const newConfig: TaskTypeConfig = {
+      id: normalized,
+      label: name,
+      suggestedJobTitles: taskTypeJobTitles,
+      isDetailedReview: taskTypeDetailed,
+    };
+
+    updateAppSettings(settings => {
+      const current = settings.taskTypes || [];
+      return {
+        ...settings,
+        taskTypes: [...current, newConfig]
+      };
+    });
+
+    setTaskTypeName('');
+    setTaskTypeJobTitles([]);
+    setTaskTypeDetailed(false);
+  };
+
+  const handleDeleteTaskType = (id: string) => {
+    if (!confirm(`Are you sure you want to delete the task type "${id}"?`)) return;
+    updateAppSettings(settings => {
+      const current = settings.taskTypes || [];
+      return {
+        ...settings,
+        taskTypes: current.filter(t => {
+          const tId = typeof t === 'object' && t !== null ? t.id : String(t);
+          return cleanTaskTypeKey(tId) !== cleanTaskTypeKey(id);
+        })
+      };
+    });
+  };
+
+  const handleStartEditingTaskType = (config: TaskTypeConfig) => {
+    setEditingTaskTypeId(config.id);
+    setEditingLabel(config.label);
+    setEditingJobTitles(config.suggestedJobTitles);
+    setEditingDetailed(config.isDetailedReview);
+  };
+
+  const handleSaveEditTaskType = () => {
+    if (!editingLabel.trim()) return;
+    updateAppSettings(settings => {
+      const current = settings.taskTypes || [];
+      return {
+        ...settings,
+        taskTypes: current.map(t => {
+          const tId = typeof t === 'object' && t !== null ? t.id : String(t);
+          if (cleanTaskTypeKey(tId) === cleanTaskTypeKey(editingTaskTypeId || '')) {
+            return {
+              id: tId,
+              label: editingLabel.trim(),
+              suggestedJobTitles: editingJobTitles,
+              isDetailedReview: editingDetailed,
+            };
+          }
+          return t;
+        })
+      };
+    });
+    setEditingTaskTypeId(null);
   };
 
   const addLink = () => {
@@ -216,13 +299,236 @@ export function AssignedWorkSection({
 
   return (
     <section className="space-y-4">
-      <div>
-        <h3 className="text-lg font-black text-slate-900">Assigned Work</h3>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-2">
+        <h3 className="text-lg font-black text-slate-900 font-extrabold uppercase tracking-wider">Assigned Work</h3>
+        
+        {canCreate && (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveTab('assignments')}
+              className={cn(
+                "px-3 py-1.5 text-xs font-black uppercase tracking-wider border-b-2 transition-all",
+                activeTab === 'assignments'
+                  ? "border-indigo-600 text-indigo-600"
+                  : "border-transparent text-slate-400 hover:text-slate-700"
+              )}
+            >
+              Assignments
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('task_types')}
+              className={cn(
+                "px-3 py-1.5 text-xs font-black uppercase tracking-wider border-b-2 transition-all",
+                activeTab === 'task_types'
+                  ? "border-indigo-600 text-indigo-600"
+                  : "border-transparent text-slate-400 hover:text-slate-700"
+              )}
+            >
+              Task Types & Workflows
+            </button>
+          </div>
+        )}
       </div>
 
-      {canCreate && (
-        <form onSubmit={submitAssignment} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <div className="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
+      {activeTab === 'task_types' && canCreate ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 space-y-6">
+          <div>
+            <h4 className="text-base font-black text-slate-900">Configure Task Types & Workflows</h4>
+            <p className="text-xs font-semibold text-slate-500">Configure suggested roles, detailed review flows, and naming of task types.</p>
+          </div>
+
+          {/* Add form */}
+          <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-4 space-y-4">
+            <h5 className="text-xs font-black uppercase tracking-wider text-slate-500">Create Task Type</h5>
+            <div className="grid gap-3 sm:grid-cols-[1fr,auto]">
+              <input
+                value={taskTypeName}
+                onChange={event => setTaskTypeName(event.target.value)}
+                placeholder="Task Type Name (e.g. Video, Content Revision)"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+              />
+              <button
+                type="button"
+                onClick={handleAddTaskType}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-black text-white hover:bg-indigo-700 transition-colors"
+              >
+                <Plus className="h-4 w-4" /> Add Type
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Suggested Roles / Job Titles</label>
+              <div className="flex flex-wrap gap-2">
+                {appSettings.responsibilities.map(r => {
+                  const active = taskTypeJobTitles.includes(r.label);
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() => {
+                        setTaskTypeJobTitles(prev =>
+                          prev.includes(r.label) ? prev.filter(l => l !== r.label) : [...prev, r.label]
+                        );
+                      }}
+                      className={cn(
+                        "rounded-full border px-3 py-1 text-xs font-bold transition-all",
+                        active
+                          ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-black"
+                          : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                      )}
+                    >
+                      {r.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-white px-2 py-1 text-xs font-bold text-slate-600 shadow-sm">
+                <input
+                  type="checkbox"
+                  checked={taskTypeDetailed}
+                  onChange={event => setTaskTypeDetailed(event.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                Detailed Review Workflow (Request Edits Form)
+              </label>
+            </div>
+          </div>
+
+          {/* List */}
+          <div className="space-y-3">
+            <h5 className="text-xs font-black uppercase tracking-wider text-slate-500">Existing Task Types</h5>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {taskTypeConfigs.map(config => {
+                const isEditing = editingTaskTypeId === config.id;
+                return (
+                  <div key={config.id} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-all hover:border-slate-300">
+                    {isEditing ? (
+                      <div className="space-y-3">
+                        <div className="flex gap-2">
+                          <input
+                            value={editingLabel}
+                            onChange={event => setEditingLabel(event.target.value)}
+                            className="flex-1 rounded-xl border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-900 shadow-sm"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleSaveEditTaskType}
+                            className="rounded-xl bg-indigo-600 px-3 py-1.5 text-xs font-black text-white hover:bg-indigo-700 transition-colors"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingTaskTypeId(null)}
+                            className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-black text-slate-600 hover:bg-slate-50 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Suggested Roles</label>
+                          <div className="flex flex-wrap gap-1.5">
+                            {appSettings.responsibilities.map(r => {
+                              const active = editingJobTitles.includes(r.label);
+                              return (
+                                <button
+                                  key={r.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingJobTitles(prev =>
+                                      prev.includes(r.label) ? prev.filter(l => l !== r.label) : [...prev, r.label]
+                                    );
+                                  }}
+                                  className={cn(
+                                    "rounded-full border px-2.5 py-0.5 text-[11px] font-bold transition-all",
+                                    active
+                                      ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-black"
+                                      : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                                  )}
+                                >
+                                  {r.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-0.5 text-xs font-bold text-slate-600 font-medium">
+                            <input
+                              type="checkbox"
+                              checked={editingDetailed}
+                              onChange={event => setEditingDetailed(event.target.checked)}
+                              className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            />
+                            Detailed Review Workflow
+                          </label>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="space-y-1 min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-sm font-black text-slate-900">{config.label}</h4>
+                            <span className="text-[10px] font-bold text-slate-400 font-mono">ID: {config.id}</span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 font-medium">Suggested:</span>
+                            {config.suggestedJobTitles.length > 0 ? (
+                              config.suggestedJobTitles.map(title => (
+                                <span key={title} className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">{title}</span>
+                              ))
+                            ) : (
+                              <span className="text-[10px] font-medium text-slate-500 italic">Anyone</span>
+                            )}
+                            <span className="text-[10px] text-slate-300 font-bold">|</span>
+                            <span className={cn(
+                              "rounded-full px-2 py-0.5 text-[10px] font-bold",
+                              config.isDetailedReview 
+                                ? "bg-amber-50 text-amber-700 border border-amber-200/50" 
+                                : "bg-slate-50 text-slate-500 border border-slate-200/50"
+                            )}>
+                              {config.isDetailedReview ? 'Detailed Review' : 'Simple Feedback'}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditingTaskType(config)}
+                            className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-50 transition-colors"
+                            title="Edit task type"
+                          >
+                            <Settings className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTaskType(config.id)}
+                            className="rounded-lg border border-rose-200 bg-white p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors"
+                            title="Delete task type"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          {canCreate && (
+            <form onSubmit={submitAssignment} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+              <div className="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
             <div className="space-y-3">
               <div>
                 <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Name *</label>
@@ -293,7 +599,10 @@ export function AssignedWorkSection({
                     <CustomSelect
                       value={taskType}
                       onChange={value => setTaskType(value)}
-                      options={(appSettings.taskTypes || []).map(t => ({ value: t, label: t.toUpperCase().replace('_', ' ') }))}
+                      options={(appSettings.taskTypes || []).map(t => {
+                        const id = typeof t === 'object' && t !== null ? t.id : String(t);
+                        return { value: id, label: getTaskTypeLabel(id, appSettings).toUpperCase() };
+                      })}
                       buttonClassName={SELECT_BUTTON_CLASS}
                     />
                   </div>
@@ -302,10 +611,14 @@ export function AssignedWorkSection({
                     onClick={() => {
                       const newType = prompt('Enter new task type name:');
                       if (!newType || !newType.trim()) return;
-                      const normalized = normalizeSettingId(newType);
+                      const normalized = normalizeTaskTypeId(newType);
                       updateAppSettings(settings => {
                         const current = settings.taskTypes || [];
-                        if (current.includes(normalized)) {
+                        const exists = current.some(t => {
+                          const existingId = typeof t === 'object' && t !== null ? (t as any).id : String(t);
+                          return existingId.toLowerCase() === normalized.toLowerCase();
+                        });
+                        if (exists) {
                           alert('This task type already exists.');
                           return settings;
                         }
@@ -556,6 +869,8 @@ export function AssignedWorkSection({
           </div>
         ))}
       </div>
+        </>
+      )}
     </section>
   );
 }

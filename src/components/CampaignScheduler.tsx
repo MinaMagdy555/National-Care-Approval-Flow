@@ -8,6 +8,7 @@ import { cn } from '../lib/utils';
 import { ThemedDatePicker } from './ThemedDatePicker';
 import { ThemedTimePicker } from './ThemedTimePicker';
 import { CustomSelect } from './CustomSelect';
+import { MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID } from '../lib/appSettings';
 
 type ScheduledCampaign = {
   task: Task;
@@ -155,7 +156,8 @@ export function CampaignScheduler({ onOpenTask }: { onOpenTask: (id: string) => 
   const [budgetCurrency, setBudgetCurrency] = useState('USD');
 
   const isLeaderboardOrMina = useMemo(() => {
-    return ['user_1', 'user_2', 'user_3', 'user_7', 'user_9'].includes(currentUser.id) ||
+    const leaderboardIds = [MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID];
+    return leaderboardIds.includes(currentUser.id) ||
       currentUser.name.includes('Mina') ||
       currentUser.name.includes('Dina') ||
       currentUser.name.includes('Marwa') ||
