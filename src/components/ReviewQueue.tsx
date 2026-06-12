@@ -214,7 +214,7 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
               </tr>
             )}
             {filteredTasks.map(task => {
-              const statusInfo = getStatusInfo(task, currentUser.role);
+              const statusInfo = getStatusInfo(task, currentUser.role, users);
               const creator = getUserById(task.createdBy);
               const version = task.versions.length > 0 ? task.versions[0].versionNumber : 1;
               const isDemo = task.environment === 'demo';

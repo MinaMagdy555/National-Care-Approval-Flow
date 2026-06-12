@@ -1,4 +1,4 @@
-import { Task, Role, Priority, TaskType, ReviewMode, AppSettings } from './types';
+import { Task, Role, Priority, TaskType, ReviewMode, AppSettings, User } from './types';
 import { isTaskArchived } from './archiveUtils';
 import { defaultAppSettings, getPriorityLabelFromSettings } from './appSettings';
 
@@ -46,7 +46,7 @@ export function getPriorityLabel(priority: Priority, settings = defaultAppSettin
   return getPriorityLabelFromSettings(settings, priority);
 }
 
-export function getStatusInfo(task: Task, viewerRole: Role): { label: string; color: 'amber' | 'blue' | 'green' | 'red' | 'gray' | 'purple' } {
+export function getStatusInfo(task: Task, viewerRole: Role, users?: Record<string, User>): { label: string; color: 'amber' | 'blue' | 'green' | 'red' | 'gray' | 'purple' } {
   const { status } = task;
 
   if (isTaskArchived(task)) {
@@ -65,9 +65,38 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
     'sent_to_art_director',
     'waiting_art_director_approval'
   ];
+
   const hasActiveComments = !!(
     task.comments &&
-    task.comments.some(c => !c.isDeleted && !c.deletedAt && (c.message?.trim() || (c.sections && c.sections.length > 0)))
+    task.comments.some(c => {
+      if (c.isDeleted || c.deletedAt) return false;
+      const messageText = c.message?.trim() || '';
+      const hasContent = messageText.length > 0 || (c.sections && c.sections.length > 0);
+      if (!hasContent) return false;
+
+      // Filter only reviewer comments (ignore creator/contributor upload comments or non-reviewer notes)
+      const feedbackActions = ['review_note', 'request_edits', 'sent_to_marwa', 'marwa_rejection', 'content_approved', 'content_rejected'];
+      if (!feedbackActions.includes(c.action)) return false;
+
+      // Check author role if users map is available
+      if (users && users[c.authorId]) {
+        const authorRole = users[c.authorId].role;
+        // If author is a team member, it's not a reviewer comment (it might be a reply or request comments)
+        if (authorRole === 'team_member') return false;
+      } else {
+        // Fallback to known reviewer/admin/leader IDs
+        const reviewerIds = [
+          '83e02bb4-11f9-41b0-becb-33e6c4c52b2a', // MINA_ID
+          'd65ea68d-1749-45b9-b0f9-1fdaf23b8f94', // MARWA_ID
+          '094d2844-ca2f-401b-8819-b464eace00d2', // DINA_ID
+          '6d7f8829-23f3-40d3-ba30-b079fda01899', // FAWZY_ID
+          '697a804f-d7b0-4edb-9a0a-b42f0e7f8b53'  // AHMED_SOBEEH_ID
+        ];
+        if (!reviewerIds.includes(c.authorId)) return false;
+      }
+
+      return true;
+    })
   );
 
   if (waitingReviewStatuses.includes(status) && hasActiveComments) {

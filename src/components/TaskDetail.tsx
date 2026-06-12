@@ -5,7 +5,7 @@ import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { getTaskTypeConfigs, cleanTaskTypeKey } from '../lib/appSettings';
-import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, Link2, Settings2, Edit3, Trash2, History, Send, Pause } from 'lucide-react';
+import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, Link2, Settings2, Edit3, Trash2, History, Send, Pause, Reply } from 'lucide-react';
 import { FileContentThumbnail, FilePreview, isLocalOnlyFileUrl } from './FilePreview';
 import { uploadTaskFiles } from '../lib/driveDb';
 import { isTaskArchived } from '../lib/archiveUtils';
@@ -96,6 +96,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [repairError, setRepairError] = useState('');
   const [isRepairingFiles, setIsRepairingFiles] = useState(false);
   const [isSavingAction, setIsSavingAction] = useState(false);
+  const [replyingToCommentId, setReplyingToCommentId] = useState<string | null>(null);
+  const [replyMessage, setReplyMessage] = useState('');
   const [actionError, setActionError] = useState('');
   const [managedContributorIds, setManagedContributorIds] = useState<string[]>([]);
   const [managedReviewMode, setManagedReviewMode] = useState<ReviewMode>('full_review');
@@ -154,7 +156,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
   if (!task || !canUserAccessTask(task, currentUser, appSettings)) return <div>Task not found</div>;
 
-  const statusInfo = getStatusInfo(task, currentUser.role);
+  const statusInfo = getStatusInfo(task, currentUser.role, users);
   const nextAction = getNextActionLabel(task, currentUser.role);
   const creator = users[task.createdBy]?.name || (task.createdBy === currentUser.id ? currentUser.name : initialUsers.find(u => u.id === task.createdBy)?.name) || 'Unknown';
   const handledByNames = task.handledBy
@@ -183,9 +185,9 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const isCurrentActiveOwner = canUserActAsCurrentOwner(task, currentUser);
   const canActAsReviewer = currentUser.role === 'reviewer' && isCurrentActiveOwner;
   const canActAsArtDirector = currentUser.role === 'art_director' && isCurrentActiveOwner;
-  const canManageWorkflowSettings = canManageWorkflow(currentUser, appSettings);
-  const canReassignTask = canAssignContributors(currentUser.id, appSettings);
-  const canResubmitTask = !isReadOnlyObserver && (isSelfCreatedTask || task.handledBy.includes(currentUser.id) || currentOwnerIds.includes(currentUser.id));
+  const canManageWorkflowSettings = currentUser.role !== 'team_member' && canManageWorkflow(currentUser, appSettings);
+  const canReassignTask = currentUser.role !== 'team_member' && canAssignContributors(currentUser.id, appSettings);
+  const canResubmitTask = !isReadOnlyObserver && task.handledBy.includes(currentUser.id);
   const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
   const canResubmitVersion = canResubmitTask &&
     task.versions.length > 0 &&
@@ -198,9 +200,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const humanCommentActions = new Set<TaskComment['action']>(['review_note', 'request_edits', 'sent_to_marwa', 'marwa_rejection', 'content_approved', 'content_rejected']);
   const canEditOrDeleteComment = (comment: TaskComment) => {
     if (comment.isDeleted) return false;
-    return humanCommentActions.has(comment.action)
-      ? comment.authorId === currentUser.id
-      : isAdminUser;
+    return isAdminUser;
   };
   const canViewCommentHistory = (comment: TaskComment) => comment.authorId === currentUser.id || isAdminUser;
   const isReviewerCommentAuthor = (authorId: string) => {
@@ -213,6 +213,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const visibleComments = (task.comments || [])
     .filter(comment => !isInternalReviewerComment(comment) || canViewInternalReviewNotes)
     .sort((first, second) => new Date(first.createdAt).getTime() - new Date(second.createdAt).getTime());
+  const parentComments = visibleComments.filter(comment => !comment.parentId);
+  const getCommentReplies = (parentId: string) => visibleComments.filter(comment => comment.parentId === parentId);
   const minaForwardableComments = (task.comments || []).filter(comment => isInternalReviewerComment(comment));
   const minaForwardableFeedback = minaForwardableComments.flatMap(comment => {
     const items: Array<{
@@ -561,6 +563,19 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       sections,
     });
     cancelEditingComment();
+  };
+
+  const handleAddReply = (parentId: string) => {
+    if (!replyMessage.trim()) return;
+    addTaskComment(task.id, {
+      authorId: currentUser.id,
+      action: 'review_note',
+      message: replyMessage.trim(),
+      sections: [],
+      parentId,
+    });
+    setReplyingToCommentId(null);
+    setReplyMessage('');
   };
 
   const handleSendToAD = async (e: React.FormEvent) => {
@@ -1370,153 +1385,271 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             </form>
 
             <div className="space-y-3">
-              {visibleComments.length === 0 && (
+              {parentComments.length === 0 && (
                 <div className="rounded-xl border border-dashed border-slate-200 bg-white px-4 py-8 text-center text-sm font-bold text-slate-400">
                   No comments yet.
                 </div>
               )}
-              {visibleComments.map(comment => {
+              {parentComments.map(comment => {
                 const author = users[comment.authorId] || (comment.authorId === currentUser.id ? currentUser : undefined) || initialUsers.find(user => user.id === comment.authorId);
                 const canManageComment = canEditOrDeleteComment(comment);
                 const canSeeHistory = canViewCommentHistory(comment) && ((comment.editHistory || []).length > 0 || comment.isDeleted);
                 const historyExpanded = expandedHistoryIds.includes(comment.id);
                 const isEditing = editingCommentId === comment.id;
+                const replies = getCommentReplies(comment.id);
 
                 return (
-                  <div key={comment.id} className={cn("rounded-xl border bg-white p-4 shadow-sm", comment.isDeleted ? "border-slate-200 bg-slate-50" : "border-slate-200")}>
-                    <div className="mb-3 flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-black text-slate-900">{author?.name || 'Unknown'}</p>
-                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-                          {comment.action.replaceAll('_', ' ')}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <span className="block text-[10px] font-bold text-slate-400">{new Date(comment.createdAt).toLocaleString()}</span>
-                        {comment.isEdited && comment.updatedAt && !comment.isDeleted && (
-                          <span className="mt-1 block text-[10px] font-black uppercase tracking-wider text-indigo-500">
-                            Edited {new Date(comment.updatedAt).toLocaleString()}
-                          </span>
-                        )}
-                        {comment.isDeleted && comment.deletedAt && (
-                          <span className="mt-1 block text-[10px] font-black uppercase tracking-wider text-rose-500">
-                            Deleted {new Date(comment.deletedAt).toLocaleString()}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {comment.isDeleted ? (
-                      <p className="rounded-lg bg-white px-3 py-2 text-sm font-bold text-slate-500">Comment deleted.</p>
-                    ) : isEditing ? (
-                      <div className="space-y-3">
-                        <textarea
-                          value={editMessage}
-                          onChange={event => setEditMessage(event.target.value)}
-                          rows={3}
-                          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-                        />
-                        {editSections.length > 0 && (
-                          <div className="space-y-3">
-                            {editSections.map(section => (
-                              <div key={section.id} className="grid gap-3 rounded-lg bg-slate-50 p-3 sm:grid-cols-[88px,1fr]">
-                                {section.imageUrl && (
-                                  <button type="button" onClick={() => setLightboxUrl(section.imageUrl || null)} className="h-20 overflow-hidden rounded-lg border border-slate-200 bg-white">
-                                    <img src={section.imageUrl} alt={section.imageName || 'Comment screen'} loading="lazy" decoding="async" className="h-full w-full object-cover" />
-                                  </button>
-                                )}
-                                <textarea
-                                  value={section.note}
-                                  onChange={event => updateEditSectionNote(section.id, event.target.value)}
-                                  rows={3}
-                                  className="min-h-20 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-                                />
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        <div className="flex flex-wrap gap-2">
-                          <button type="button" onClick={() => handleSaveCommentEdit(comment.id)} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-black text-white hover:bg-indigo-700">
-                            <Check className="h-3.5 w-3.5" /> Save
-                          </button>
-                          <button type="button" onClick={cancelEditingComment} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-50">
-                            <X className="h-3.5 w-3.5" /> Cancel
-                          </button>
+                  <div key={comment.id} className="space-y-3">
+                    <div className={cn("rounded-xl border bg-white p-4 shadow-sm", comment.isDeleted ? "border-slate-200 bg-slate-50" : "border-slate-200")}>
+                      <div className="mb-3 flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-black text-slate-900">{author?.name || 'Unknown'}</p>
+                          <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                            {comment.action.replaceAll('_', ' ')}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <span className="block text-[10px] font-bold text-slate-400">{new Date(comment.createdAt).toLocaleString()}</span>
+                          {comment.isEdited && comment.updatedAt && !comment.isDeleted && (
+                            <span className="mt-1 block text-[10px] font-black uppercase tracking-wider text-indigo-500">
+                              Edited {new Date(comment.updatedAt).toLocaleString()}
+                            </span>
+                          )}
+                          {comment.isDeleted && comment.deletedAt && (
+                            <span className="mt-1 block text-[10px] font-black uppercase tracking-wider text-rose-500">
+                              Deleted {new Date(comment.deletedAt).toLocaleString()}
+                            </span>
+                          )}
                         </div>
                       </div>
-                    ) : (
-                      <>
-                        {comment.message && <p className="mb-3 text-sm font-medium text-slate-700">{comment.message}</p>}
 
-                        {comment.sections.length > 0 && (
-                          <div className="space-y-3">
-                            {comment.sections.map(section => (
-                              <div key={section.id} className="grid gap-3 rounded-lg bg-slate-50 p-3 sm:grid-cols-[88px,1fr]">
-                                {section.imageUrl && (
-                                  <button type="button" onClick={() => setLightboxUrl(section.imageUrl || null)} className="h-20 overflow-hidden rounded-lg border border-slate-200 bg-white">
-                                    <img src={section.imageUrl} alt={section.imageName || 'Comment screen'} loading="lazy" decoding="async" className="h-full w-full object-cover" />
-                                  </button>
-                                )}
-                                {section.note && <p className="text-sm font-medium text-slate-700">{section.note}</p>}
-                              </div>
-                            ))}
+                      {comment.isDeleted ? (
+                        <p className="rounded-lg bg-white px-3 py-2 text-sm font-bold text-slate-500">Comment deleted.</p>
+                      ) : isEditing ? (
+                        <div className="space-y-3">
+                          <textarea
+                            value={editMessage}
+                            onChange={event => setEditMessage(event.target.value)}
+                            rows={3}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                          />
+                          {editSections.length > 0 && (
+                            <div className="space-y-3">
+                              {editSections.map(section => (
+                                <div key={section.id} className="grid gap-3 rounded-lg bg-slate-50 p-3 sm:grid-cols-[88px,1fr]">
+                                  {section.imageUrl && (
+                                    <button type="button" onClick={() => setLightboxUrl(section.imageUrl || null)} className="h-20 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                                      <img src={section.imageUrl} alt={section.imageName || 'Comment screen'} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                                    </button>
+                                  )}
+                                  <textarea
+                                    value={section.note}
+                                    onChange={event => updateEditSectionNote(section.id, event.target.value)}
+                                    rows={3}
+                                    className="min-h-20 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <div className="flex flex-wrap gap-2">
+                            <button type="button" onClick={() => handleSaveCommentEdit(comment.id)} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-black text-white hover:bg-indigo-700">
+                              <Check className="h-3.5 w-3.5" /> Save
+                            </button>
+                            <button type="button" onClick={cancelEditingComment} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-50">
+                              <X className="h-3.5 w-3.5" /> Cancel
+                            </button>
                           </div>
-                        )}
-                      </>
-                    )}
+                        </div>
+                      ) : (
+                        <>
+                          {comment.message && <p className="mb-3 text-sm font-medium text-slate-700">{comment.message}</p>}
 
-                    {(canManageComment || canSeeHistory) && !isEditing && (
-                      <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-                        {canManageComment && (
-                          <>
-                            <button type="button" onClick={() => startEditingComment(comment)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-50">
-                              <Edit3 className="h-3.5 w-3.5" /> Edit
+                          {comment.sections.length > 0 && (
+                            <div className="space-y-3">
+                              {comment.sections.map(section => (
+                                <div key={section.id} className="grid gap-3 rounded-lg bg-slate-50 p-3 sm:grid-cols-[88px,1fr]">
+                                  {section.imageUrl && (
+                                    <button type="button" onClick={() => setLightboxUrl(section.imageUrl || null)} className="h-20 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                                      <img src={section.imageUrl} alt={section.imageName || 'Comment screen'} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                                    </button>
+                                  )}
+                                  {section.note && <p className="text-sm font-medium text-slate-700">{section.note}</p>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {(!comment.isDeleted || canSeeHistory) && !isEditing && (
+                        <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                          {!comment.isDeleted && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReplyingToCommentId(replyingToCommentId === comment.id ? null : comment.id);
+                                setReplyMessage('');
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-50"
+                            >
+                              <Reply className="h-3.5 w-3.5" /> Reply
                             </button>
-                            <button type="button" onClick={() => deleteTaskComment(task.id, comment.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-xs font-black text-rose-600 hover:bg-rose-100">
-                              <Trash2 className="h-3.5 w-3.5" /> Delete
+                          )}
+                          {canManageComment && (
+                            <>
+                              <button type="button" onClick={() => startEditingComment(comment)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-50">
+                                <Edit3 className="h-3.5 w-3.5" /> Edit
+                              </button>
+                              <button type="button" onClick={() => deleteTaskComment(task.id, comment.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-xs font-black text-rose-600 hover:bg-rose-100">
+                                <Trash2 className="h-3.5 w-3.5" /> Delete
+                              </button>
+                            </>
+                          )}
+                          {canSeeHistory && (
+                            <button type="button" onClick={() => toggleCommentHistory(comment.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-600 hover:bg-indigo-100">
+                              <History className="h-3.5 w-3.5" /> {historyExpanded ? 'Hide History' : 'History'}
                             </button>
-                          </>
-                        )}
-                        {canSeeHistory && (
-                          <button type="button" onClick={() => toggleCommentHistory(comment.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-600 hover:bg-indigo-100">
-                            <History className="h-3.5 w-3.5" /> {historyExpanded ? 'Hide History' : 'History'}
+                          )}
+                        </div>
+                      )}
+
+                      {canSeeHistory && historyExpanded && (
+                        <div className="mt-3 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                          {(comment.editHistory || []).map(version => (
+                            <div key={version.id} className="rounded-lg bg-white p-3">
+                              <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                                Edited by {users[version.editedBy]?.name || version.editedBy} at {new Date(version.editedAt).toLocaleString()}
+                              </p>
+                              {version.previousMessage && <p className="text-xs font-semibold text-slate-600">Previous: {version.previousMessage}</p>}
+                              {version.previousSections.length > 0 && (
+                                <div className="mt-2 space-y-1">
+                                  {version.previousSections.map(section => (
+                                    <p key={section.id} className="text-xs font-semibold text-slate-500">{section.note || section.imageName || 'Image section'}</p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                          {comment.isDeleted && comment.deletedAt && (
+                            <div className="rounded-lg bg-white p-3">
+                              <p className="text-xs font-semibold text-slate-600">
+                                Deleted by {users[comment.deletedBy || '']?.name || comment.deletedBy || 'Unknown'} at {new Date(comment.deletedAt).toLocaleString()}
+                              </p>
+                              {comment.message && <p className="mt-2 text-xs font-semibold text-slate-700">Deleted content: {comment.message}</p>}
+                              {comment.sections.length > 0 && (
+                                <div className="mt-2 space-y-1">
+                                  {comment.sections.map(section => (
+                                    <p key={section.id} className="text-xs font-semibold text-slate-500">{section.note || section.imageName || 'Image section'}</p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Reply Input Form */}
+                    {replyingToCommentId === comment.id && (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleAddReply(comment.id);
+                        }}
+                        className="mt-2 pl-6 ml-4 space-y-2 border-l-2 border-indigo-200"
+                      >
+                        <textarea
+                          value={replyMessage}
+                          onChange={e => setReplyMessage(e.target.value)}
+                          placeholder="Write a reply..."
+                          rows={2}
+                          className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            type="submit"
+                            disabled={!replyMessage.trim()}
+                            className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-black text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                          >
+                            Submit Reply
                           </button>
-                        )}
-                      </div>
+                          <button
+                            type="button"
+                            onClick={() => setReplyingToCommentId(null)}
+                            className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-black text-slate-600 hover:bg-slate-50"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </form>
                     )}
 
-                    {canSeeHistory && historyExpanded && (
-                      <div className="mt-3 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                        {(comment.editHistory || []).map(version => (
-                          <div key={version.id} className="rounded-lg bg-white p-3">
-                            <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">
-                              Edited by {users[version.editedBy]?.name || version.editedBy} at {new Date(version.editedAt).toLocaleString()}
-                            </p>
-                            {version.previousMessage && <p className="text-xs font-semibold text-slate-600">Previous: {version.previousMessage}</p>}
-                            {version.previousSections.length > 0 && (
-                              <div className="mt-2 space-y-1">
-                                {version.previousSections.map(section => (
-                                  <p key={section.id} className="text-xs font-semibold text-slate-500">{section.note || section.imageName || 'Image section'}</p>
-                                ))}
+                    {/* Replies List */}
+                    {replies.length > 0 && (
+                      <div className="pl-6 border-l-2 border-slate-200 ml-4 space-y-3">
+                        {replies.map(reply => {
+                          const replyAuthor = users[reply.authorId] || (reply.authorId === currentUser.id ? currentUser : undefined) || initialUsers.find(user => user.id === reply.authorId);
+                          const canManageReply = canEditOrDeleteComment(reply);
+                          const isEditingReply = editingCommentId === reply.id;
+
+                          return (
+                            <div key={reply.id} className={cn("rounded-xl border bg-slate-50/50 p-3 shadow-sm", reply.isDeleted ? "border-slate-200 bg-slate-50" : "border-slate-200")}>
+                              <div className="mb-2 flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-xs font-black text-slate-900">{replyAuthor?.name || 'Unknown'}</p>
+                                </div>
+                                <div className="text-right">
+                                  <span className="block text-[9px] font-bold text-slate-400">{new Date(reply.createdAt).toLocaleString()}</span>
+                                  {reply.isEdited && reply.updatedAt && !reply.isDeleted && (
+                                    <span className="mt-1 block text-[9px] font-black uppercase tracking-wider text-indigo-500">
+                                      Edited
+                                    </span>
+                                  )}
+                                  {reply.isDeleted && reply.deletedAt && (
+                                    <span className="mt-1 block text-[9px] font-black uppercase tracking-wider text-rose-500">
+                                      Deleted
+                                    </span>
+                                  )}
+                                </div>
                               </div>
-                            )}
-                          </div>
-                        ))}
-                        {comment.isDeleted && comment.deletedAt && (
-                          <div className="rounded-lg bg-white p-3">
-                            <p className="text-xs font-semibold text-slate-600">
-                              Deleted by {users[comment.deletedBy || '']?.name || comment.deletedBy || 'Unknown'} at {new Date(comment.deletedAt).toLocaleString()}
-                            </p>
-                            {comment.message && <p className="mt-2 text-xs font-semibold text-slate-700">Deleted content: {comment.message}</p>}
-                            {comment.sections.length > 0 && (
-                              <div className="mt-2 space-y-1">
-                                {comment.sections.map(section => (
-                                  <p key={section.id} className="text-xs font-semibold text-slate-500">{section.note || section.imageName || 'Image section'}</p>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
+
+                              {reply.isDeleted ? (
+                                <p className="text-xs font-bold text-slate-500">Reply deleted.</p>
+                              ) : isEditingReply ? (
+                                <div className="space-y-2">
+                                  <textarea
+                                    value={editMessage}
+                                    onChange={event => setEditMessage(event.target.value)}
+                                    rows={2}
+                                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                                  />
+                                  <div className="flex gap-2">
+                                    <button type="button" onClick={() => handleSaveCommentEdit(reply.id)} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-2.5 py-1.5 text-[10px] font-black text-white hover:bg-indigo-700">
+                                      Save
+                                    </button>
+                                    <button type="button" onClick={cancelEditingComment} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-black text-slate-600 hover:bg-slate-50">
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <p className="text-xs font-medium text-slate-700">{reply.message}</p>
+                              )}
+
+                              {!reply.isDeleted && canManageReply && !isEditingReply && (
+                                <div className="mt-2 flex gap-2 border-t border-slate-100 pt-2">
+                                  <button type="button" onClick={() => startEditingComment(reply)} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-600 hover:bg-slate-50">
+                                    <Edit3 className="h-3 w-3" /> Edit
+                                  </button>
+                                  <button type="button" onClick={() => deleteTaskComment(task.id, reply.id)} className="inline-flex items-center gap-1 rounded-lg border border-rose-100 bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-600 hover:bg-rose-100">
+                                    <Trash2 className="h-3 w-3" /> Delete
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>

@@ -147,6 +147,8 @@ export function Sidebar({
       taskCenterChildren.push({ id: 'my_tasks', label: 'My Tasks', icon: UserRoundCheck });
     }
 
+    taskCenterChildren.push({ id: 'assigned_work', label: 'Assigned Tasks', icon: BriefcaseBusiness });
+
     if (!isFirstRev && !isFinalRev) {
       taskCenterChildren.push({ id: 'waiting_for_mina', label: 'Waiting for First Rev.', icon: Clock });
       taskCenterChildren.push({ id: 'waiting_for_marwa', label: 'Waiting for Final Rev.', icon: Send });

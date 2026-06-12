@@ -201,6 +201,7 @@ export interface TaskComment {
   deletedAt?: string;
   deletedBy?: string;
   isDeleted?: boolean;
+  parentId?: string;
 }
 
 export interface Task {

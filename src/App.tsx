@@ -437,7 +437,11 @@ function WorkspaceContent() {
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={visibleTasks} title="All Tasks" />;
       }
       case 'my_tasks': {
-        const myTasks = visibleEnvTasks.filter(t => t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id));
+        const myTasks = visibleEnvTasks.filter(t => 
+          t.handledBy.includes(currentUser.id) || 
+          (t.currentOwnerUserIds || []).includes(currentUser.id) ||
+          (t.status === 'draft' && t.createdBy === currentUser.id)
+        );
         return <ReviewQueue onOpenTask={handleOpenTask} tasks={myTasks} title="My Tasks" />;
       }
       case 'archived_tasks': {

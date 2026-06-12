@@ -371,6 +371,7 @@ export function CreateTask({
                     onChange={value => setReviewMode(value as ReviewMode)}
                     options={reviewModeOptions}
                     buttonClassName={FORM_SELECT_BUTTON_CLASS}
+                    disabled={currentUser.role === 'team_member'}
                   />
                   {isReviewerCreatedTask && (
                     <p className="mt-2 text-xs font-bold text-slate-500">Reviewer-created tasks go directly to the Final Approvement.</p>

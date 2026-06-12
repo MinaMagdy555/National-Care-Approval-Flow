@@ -10,7 +10,7 @@ import { getPriorityTone, priorityToneClasses } from '../lib/appSettings';
 
 export function TaskCard({ task, onClick }: { task: Task; onClick: (id: string) => void; key?: string | number }) {
   const { currentUser, users, appSettings } = useAppStore();
-  const statusInfo = getStatusInfo(task, currentUser.role);
+  const statusInfo = getStatusInfo(task, currentUser.role, users);
   const nextAction = getNextActionLabel(task, currentUser.role);
 
   const creator = users[task.createdBy]?.name || (task.createdBy === currentUser.id ? currentUser.name : initialUsers.find(u => u.id === task.createdBy)?.name) || 'Unknown';
