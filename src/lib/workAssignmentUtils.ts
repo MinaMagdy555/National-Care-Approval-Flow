@@ -6,7 +6,8 @@ export function canCreateWorkAssignment(user: Pick<User, 'id' | 'role' | 'name' 
 }
 
 export function canManageWorkAssignment(task: Task, user: Pick<User, 'id' | 'role' | 'name' | 'isAdmin'>, settings: AppSettings = defaultAppSettings) {
-  return task.status === 'assigned_work' && canCreateWorkAssignment(user, settings);
+  const isFinished = ['approved_by_art_director', 'completed', 'archived'].includes(task.status);
+  return !isFinished && canCreateWorkAssignment(user, settings);
 }
 
 export function canUploadWorkAssignment(task: Task, user: Pick<User, 'id' | 'isAdmin'>) {

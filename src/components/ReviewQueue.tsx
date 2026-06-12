@@ -8,6 +8,7 @@ import { getCurrentOwnerUserIds } from '../lib/workflowUtils';
 import { CalendarDays, Search, X } from 'lucide-react';
 import { CustomSelect } from './CustomSelect';
 import { TaskThumbnail } from './FilePreview';
+import { MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID } from '../lib/appSettings';
 
 type DateFilterMode = 'all' | 'single' | 'range';
 
@@ -22,7 +23,7 @@ function getDateInputValue(date: string) {
 }
 
 export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: string) => void, tasks: Task[], title: string }) {
-  const { currentUser, users, appSettings } = useAppStore();
+  const { currentUser, users, appSettings, toggleTaskHold } = useAppStore();
   const [creatorFilter, setCreatorFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -281,9 +282,52 @@ export function ReviewQueue({ onOpenTask, tasks, title }: { onOpenTask: (id: str
                     </div>
                   </td>
                   <td className="p-4 text-right">
-                     <button className="px-4 py-1.5 border border-dashed border-indigo-300 text-indigo-600 font-bold text-sm rounded-lg hover:bg-indigo-50 transition-colors">
-                       Review
-                     </button>
+                    {(() => {
+                      const leaderboardIds = [MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID];
+                      const canToggleHold = currentUser.role === 'reviewer' || leaderboardIds.includes(currentUser.id);
+                      if (canToggleHold) {
+                        if (task.status === 'on_hold') {
+                          return (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleTaskHold(task.id);
+                              }}
+                              className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-lg transition-colors shadow-sm"
+                            >
+                              Resume
+                            </button>
+                          );
+                        } else if (task.status === 'assigned_work' || task.status === 'draft') {
+                          return (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleTaskHold(task.id);
+                              }}
+                              className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-sm rounded-lg transition-colors shadow-sm"
+                            >
+                              Hold
+                            </button>
+                          );
+                        }
+                      }
+                      
+                      const isReviewerOrLeader = currentUser.role === 'reviewer' || leaderboardIds.includes(currentUser.id);
+                      if (isReviewerOrLeader) {
+                        return (
+                          <button className="px-4 py-1.5 border border-dashed border-indigo-300 text-indigo-600 font-bold text-sm rounded-lg hover:bg-indigo-50 transition-colors">
+                            Review
+                          </button>
+                        );
+                      } else {
+                        return (
+                          <button className="px-4 py-1.5 border border-dashed border-slate-300 text-slate-600 font-bold text-sm rounded-lg hover:bg-slate-50 transition-colors">
+                            View
+                          </button>
+                        );
+                      }
+                    })()}
                   </td>
                 </tr>
               );

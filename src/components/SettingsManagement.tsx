@@ -20,7 +20,7 @@ const TONES: Array<{ value: PriorityTone; label: string; tone: PriorityTone }> =
 const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
   { value: 'team_member', label: 'Team Member' },
   { value: 'reviewer', label: 'Reviewer' },
-  { value: 'art_director', label: 'Art Director' },
+  { value: 'art_director', label: 'Final Approvement' },
   { value: 'team_leader', label: 'Team Leader' },
   { value: 'manager', label: 'Manager' },
   { value: 'developer', label: 'Developer' },

@@ -60,7 +60,7 @@ export function CreateTask({
   const reviewModeOptions = [
     { value: 'full_review', label: 'Full Review' },
     { value: 'quick_look', label: 'Quick Look' },
-    { value: 'direct_to_ad', label: 'Direct to Art Director' },
+    { value: 'direct_to_ad', label: 'Direct to Final Approvement' },
   ];
   const priorityOptions = [
     { value: 'low', label: 'Low' },
@@ -373,7 +373,7 @@ export function CreateTask({
                     buttonClassName={FORM_SELECT_BUTTON_CLASS}
                   />
                   {isReviewerCreatedTask && (
-                    <p className="mt-2 text-xs font-bold text-slate-500">Reviewer-created tasks go directly to the art director.</p>
+                    <p className="mt-2 text-xs font-bold text-slate-500">Reviewer-created tasks go directly to the Final Approvement.</p>
                   )}
                 </div>
                 {canManageAssignedContributors && (

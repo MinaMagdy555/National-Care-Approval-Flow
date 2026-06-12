@@ -1431,13 +1431,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
       const contributorIds = uniqueIds([task.createdBy, ...task.handledBy]);
       if (newStatus === 'approved_by_art_director' && task.status !== newStatus) {
-        addNotifications([...artDirectorIds, ...teamLeaderIds, ...reviewerIds, ...contributorIds], taskId, `Art director approved "${task.name}".`);
+        addNotifications([...artDirectorIds, ...teamLeaderIds, ...reviewerIds, ...contributorIds], taskId, `Final Approvement approved "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_reviewer' && task.status !== newStatus) {
         addNotifications([...artDirectorIds, ...teamLeaderIds, ...contributorIds], taskId, `Reviewer requested changes on "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_art_director' && task.status !== newStatus) {
-        addNotifications([...teamLeaderIds, ...reviewerIds, ...contributorIds], taskId, `Art director rejected "${task.name}" and requested changes.`);
+        addNotifications([...teamLeaderIds, ...reviewerIds, ...contributorIds], taskId, `Final Approvement rejected "${task.name}" and requested changes.`);
       } else if ((newStatus === 'reviewer_approved' || newStatus === 'sent_to_art_director') && task.status !== newStatus) {
-        addNotifications([...artDirectorIds, ...teamLeaderIds], taskId, `Reviewer sent "${task.name}" to art director for approval.`);
+        addNotifications([...artDirectorIds, ...teamLeaderIds], taskId, `Reviewer sent "${task.name}" to Final Approvement for approval.`);
       }
     }
 
@@ -1542,7 +1542,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const shouldUpdateStatus = canReviewRouteUpdateStatus(task);
     const nextOwnerRole = shouldUpdateStatus ? target.ownerRole : task.currentOwnerRole;
     const nextOwnerIds = shouldUpdateStatus ? getDefaultOwnerIdsForRole(target.ownerRole, task) : getCurrentOwnerUserIds(task);
-    const reviewerLabel = reviewMode === 'full_review' ? 'Full Review' : reviewMode === 'quick_look' ? 'Quick Look' : 'Direct to Art Director';
+    const reviewerLabel = reviewMode === 'full_review' ? 'Full Review' : reviewMode === 'quick_look' ? 'Quick Look' : 'Direct to Final Approvement';
 
     if (shouldUpdateStatus && nextOwnerIds.length > 0) {
       addNotifications(nextOwnerIds, taskId, `"${task.name}" is now routed to ${reviewerLabel}.`);
@@ -1841,15 +1841,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTasks(prev => prev.map(t => {
       if (t.id !== taskId) return t;
       const now = new Date().toISOString();
+      const isAlreadyUploaded = t.status !== 'assigned_work';
       return addAuditComment({
         ...t,
         name: input.name.trim(),
         description: input.description.trim() || null,
         taskType: (input.taskType as TaskType) || t.taskType,
         handledBy,
-        currentOwnerRole: 'team_member',
-        currentOwnerUserId: handledBy[0] || null,
-        currentOwnerUserIds: handledBy,
+        currentOwnerRole: isAlreadyUploaded ? t.currentOwnerRole : 'team_member',
+        currentOwnerUserId: isAlreadyUploaded ? t.currentOwnerUserId : (handledBy[0] || null),
+        currentOwnerUserIds: isAlreadyUploaded ? t.currentOwnerUserIds : handledBy,
         priority: input.priority,
         deadlineText: formatDeadlineText(input.deadlineAt),
         assignmentPeriod,
@@ -1949,7 +1950,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       nextOwnerRole = 'team_member';
       auditMsg = 'New version resubmitted for Content Revision.';
     } else {
-      sendToMarwa = isReviewerCreatedTask(task, usersObj) || task.status === 'changes_requested_by_art_director' || task.reviewMode === 'direct_to_ad';
+      sendToMarwa = isReviewerCreatedTask(task, usersObj) || 
+        task.status === 'changes_requested_by_art_director' || 
+        task.reviewMode === 'direct_to_ad' ||
+        ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(task.status);
       nextStatus = sendToMarwa
         ? 'sent_to_art_director'
         : task.reviewMode === 'quick_look'
@@ -1957,7 +1961,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           : 'waiting_reviewer_full_review';
       nextOwnerRole = sendToMarwa ? 'art_director' : 'reviewer';
       nextOwnerIds = getDefaultOwnerIdsForRole(nextOwnerRole, task);
-      auditMsg = `New version resubmitted for ${nextOwnerRole === 'art_director' ? 'Final' : 'First'} Review.`;
+      auditMsg = `New version resubmitted for ${nextOwnerRole === 'art_director' ? 'Final Approvement' : 'First Review'}.`;
     }
 
     const creatorName = usersObj[task.createdBy]?.name || 'Someone';

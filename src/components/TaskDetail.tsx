@@ -187,7 +187,9 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const canReassignTask = canAssignContributors(currentUser.id, appSettings);
   const canResubmitTask = !isReadOnlyObserver && (isSelfCreatedTask || task.handledBy.includes(currentUser.id) || currentOwnerIds.includes(currentUser.id));
   const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
-  const canResubmitVersion = canResubmitTask && ['changes_requested_by_reviewer', 'changes_requested_by_art_director', 'changes_requested_by_content'].includes(task.status);
+  const canResubmitVersion = canResubmitTask &&
+    task.versions.length > 0 &&
+    !['draft', 'assigned_work', 'approved_by_art_director', 'completed', 'archived', 'on_hold'].includes(task.status);
   const isInternalReviewTask = !isDetailedReviewType;
   const canViewInternalReviewNotes = canViewFullWorkspace;
   const isAdminUser = Boolean(currentUser.isAdmin) || currentUser.role === 'admin';
@@ -252,7 +254,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const reviewModeOptions = [
     { value: 'full_review', label: 'Full Review' },
     { value: 'quick_look', label: 'Quick Look' },
-    { value: 'direct_to_ad', label: 'Direct to Art Director' },
+    { value: 'direct_to_ad', label: 'Direct to Final Approvement' },
   ];
 
   const saveAssignment = () => {
@@ -1221,8 +1223,8 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 }}
                 className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-sm transition-all focus:ring-4 focus:ring-indigo-100"
               >
-                {task.status === 'waiting_reviewer_full_review' ? 'Approve & Send to Art Director' : 
-                 task.status === 'waiting_reviewer_quick_look' ? 'Quick Look Done & Send to Art Director' : 'Send to Art Director'}
+                {task.status === 'waiting_reviewer_full_review' ? 'Approve & Send to Final Approvement' : 
+                 task.status === 'waiting_reviewer_quick_look' ? 'Quick Look Done & Send to Final Approvement' : 'Send to Final Approvement'}
               </button>
               {isDetailedReviewType && task.status !== 'draft' && (
                 <form onSubmit={handleRequestChanges} className="space-y-3 rounded-2xl border border-rose-100 bg-rose-50/40 p-3">
@@ -1246,7 +1248,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
           {currentUser.role === 'reviewer' && task.status === 'sent_to_art_director' && (
             <div className="text-sm font-medium text-gray-500 flex items-center gap-2 justify-center py-2">
-              <Check className="w-4 h-4" /> Sent to Art Director
+              <Check className="w-4 h-4" /> Sent to Final Approvement
             </div>
           )}
 
@@ -1295,7 +1297,10 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             </>
           )}
 
-          {['admin', 'team_leader', 'marketing_manager', 'reviewer', 'art_director'].includes(currentUser.role) && (
+          {['admin', 'team_leader', 'marketing_manager', 'reviewer', 'art_director'].includes(currentUser.role) &&
+           (task.status === 'on_hold' || 
+            ((task.status === 'draft' || task.status === 'assigned_work') && (!task.versions || task.versions.length === 0))
+           ) && (
             <button
               onClick={() => toggleTaskHold(task.id)}
               className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-4 rounded-xl border border-slate-200 shadow-sm transition-all text-sm flex items-center justify-center gap-2 mt-2"
@@ -1565,7 +1570,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
         <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-slate-200">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h3 className="text-lg font-black text-slate-900">Approve & Send to Art Director</h3>
+              <h3 className="text-lg font-black text-slate-900">Approve & Send to Final Approvement</h3>
               <button onClick={() => { setActionError(''); setModal(null); }} className="text-slate-400 hover:text-indigo-600 transition-colors"><X className="w-5 h-5"/></button>
             </div>
             <form onSubmit={handleSendToAD} className="p-6 space-y-5">
@@ -1602,7 +1607,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
               {actionError && <p className="text-sm font-bold text-rose-600">{actionError}</p>}
               <div className="pt-2">
                 <button type="submit" disabled={isSavingAction} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">
-                  {isSavingAction ? 'Saving...' : 'Send to Art Director'}
+                  {isSavingAction ? 'Saving...' : 'Send to Final Approvement'}
                 </button>
               </div>
             </form>
@@ -1674,7 +1679,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                 </div>
               )}
               <div>
-                <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Art Director Comment</label>
+                <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Final Approvement Comment</label>
                 <textarea value={adRejectComment} onChange={event => setAdRejectComment(event.target.value)} rows={3} placeholder="Write new feedback, or select reviewer notes above, or do both..." className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-900 focus:ring-2 focus:ring-rose-500 outline-none"></textarea>
               </div>
               {renderADRejectNotes()}

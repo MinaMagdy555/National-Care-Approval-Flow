@@ -8,6 +8,7 @@ import { isTaskArchived } from '../lib/archiveUtils';
 import { canUserAccessTask, canUserActAsCurrentOwner, userCanViewFullWorkspace } from '../lib/workflowUtils';
 import { cn } from '../lib/utils';
 import { getResponsibilityForLabel, MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID, getTaskTypeConfigs } from '../lib/appSettings';
+import { Task } from '../lib/types';
 
 function SummaryCard({
   label,
@@ -183,12 +184,16 @@ export function Dashboard({
       
       const finishedCount = finishedTasks.length;
       const activeCount = creatorTasks.length - finishedCount - onHoldCount;
+      const workingCount = creatorTasks.filter(t => t.status === 'assigned_work' || t.status === 'draft').length;
+      const reviewCount = activeCount - workingCount;
       
       return {
         creator,
         finishedCount,
         activeCount,
         onHoldCount,
+        workingCount,
+        reviewCount,
         totalCount: creatorTasks.length,
       };
     });
@@ -497,7 +502,7 @@ export function Dashboard({
               </>
             )}
 
-            {isLeaderboardOrMinaUser && creatorsWithStats.map(({ creator, activeCount }) => (
+            {isLeaderboardOrMinaUser && creatorsWithStats.map(({ creator, workingCount, reviewCount }) => (
               <button
                 key={creator.id}
                 type="button"
@@ -512,9 +517,15 @@ export function Dashboard({
                     <span className="truncate text-sm font-bold leading-tight sm:text-base text-slate-800">{creator.name.split(' ')[0]}</span>
                     <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-0.5 truncate">{creator.jobTitle || 'Content Creator'}</span>
                   </div>
-                  <div className="flex items-baseline gap-1.5">
-                    <span className="text-2xl font-black leading-none sm:text-3xl text-amber-600">{activeCount}</span>
-                    <span className="text-[11px] font-semibold text-slate-500">Active Tasks</span>
+                  <div className="flex flex-col gap-1.5 mt-auto">
+                    <div className="flex items-center justify-between text-xs font-semibold">
+                      <span className="text-slate-500">Working On:</span>
+                      <span className="font-bold text-amber-600">{workingCount}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs font-semibold">
+                      <span className="text-slate-500">Sent to Approve:</span>
+                      <span className="font-bold text-indigo-600">{reviewCount}</span>
+                    </div>
                   </div>
                 </div>
               </button>
@@ -776,6 +787,98 @@ export function Dashboard({
                 <div className="py-12 text-center">
                   <p className="text-sm font-semibold text-slate-400">No tasks in this category.</p>
                 </div>
+              ) : popupState === 'active' ? (
+                (() => {
+                  const workingTasks = popupTasks.filter(t => t.status === 'assigned_work' || t.status === 'draft');
+                  const approvalTasks = popupTasks.filter(t => t.status !== 'assigned_work' && t.status !== 'draft');
+
+                  const renderTaskItem = (task: Task) => {
+                    const getStatusBadge = (status: string) => {
+                      switch (status) {
+                        case 'approved':
+                        case 'completed':
+                        case 'approved_by_art_director':
+                          return 'bg-emerald-50 text-emerald-700 border-emerald-100';
+                        case 'on_hold':
+                          return 'bg-slate-100 text-slate-700 border-slate-200';
+                        case 'changes_requested_by_reviewer':
+                        case 'changes_requested_by_art_director':
+                          return 'bg-rose-50 text-rose-700 border-rose-100';
+                        default:
+                          return 'bg-blue-50 text-blue-700 border-blue-100';
+                      }
+                    };
+
+                    const getReadableStatus = (status: string) => {
+                      if (status === 'submitted' || status === 'waiting_reviewer_full_review') return 'Waiting for First Review';
+                      if (status === 'waiting_reviewer_quick_look') return 'Waiting for First Review (Quick Look)';
+                      if (status === 'reviewer_approved' || status === 'sent_to_art_director' || status === 'waiting_art_director_approval') return 'Waiting for Final Approvement';
+                      if (status === 'changes_requested_by_art_director') return 'Final Approvement Requested Changes';
+                      return status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                    };
+
+                    return (
+                      <button
+                        key={task.id}
+                        type="button"
+                        onClick={() => {
+                          onOpenTask(task.id);
+                          setPopupCreatorId(null);
+                          setPopupState(null);
+                        }}
+                        className="w-full text-left p-4 rounded-xl border border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/5 transition-all flex items-center justify-between gap-4 group"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[10px] font-black text-indigo-600 font-mono tracking-wider bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 uppercase">
+                              {task.code || 'TSK'}
+                            </span>
+                            <h4 className="font-bold text-slate-900 group-hover:text-indigo-900 transition-colors truncate">
+                              {task.name}
+                            </h4>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-1 line-clamp-1">
+                            {task.description || 'No description provided.'}
+                          </p>
+                        </div>
+                        
+                        <div className="flex items-center gap-2.5 shrink-0">
+                          <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider ${getStatusBadge(task.status)}`}>
+                            {getReadableStatus(task.status)}
+                          </span>
+                          {task.deadlineAt && (
+                            <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+                              <Clock className="h-3 w-3" />
+                              {new Date(task.deadlineAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  };
+
+                  return (
+                    <div className="space-y-6">
+                      {workingTasks.length > 0 && (
+                        <div className="space-y-2">
+                          <div className="text-[11px] font-black tracking-wider text-slate-400 uppercase pl-1">Still Working On ({workingTasks.length})</div>
+                          <div className="space-y-2">
+                            {workingTasks.map(renderTaskItem)}
+                          </div>
+                        </div>
+                      )}
+
+                      {approvalTasks.length > 0 && (
+                        <div className="space-y-2">
+                          <div className="text-[11px] font-black tracking-wider text-slate-400 uppercase pl-1">Sent for Approval ({approvalTasks.length})</div>
+                          <div className="space-y-2">
+                            {approvalTasks.map(renderTaskItem)}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()
               ) : (
                 popupTasks.map(task => {
                   const getStatusBadge = (status: string) => {
@@ -795,6 +898,10 @@ export function Dashboard({
                   };
 
                   const getReadableStatus = (status: string) => {
+                    if (status === 'submitted' || status === 'waiting_reviewer_full_review') return 'Waiting for First Review';
+                    if (status === 'waiting_reviewer_quick_look') return 'Waiting for First Review (Quick Look)';
+                    if (status === 'reviewer_approved' || status === 'sent_to_art_director' || status === 'waiting_art_director_approval') return 'Waiting for Final Approvement';
+                    if (status === 'changes_requested_by_art_director') return 'Final Approvement Requested Changes';
                     return status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
                   };
 

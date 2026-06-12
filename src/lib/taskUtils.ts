@@ -37,7 +37,7 @@ export function getReviewModeLabel(mode: ReviewMode): string {
   switch (mode) {
     case 'full_review': return 'Full Review';
     case 'quick_look': return 'Quick Look';
-    case 'direct_to_ad': return 'Direct to Art Director';
+    case 'direct_to_ad': return 'Direct to Final Approvement';
     default: return 'Review';
   }
 }
@@ -57,17 +57,34 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
     return { label: 'On Hold', color: 'gray' };
   }
 
+  const waitingReviewStatuses = [
+    'submitted',
+    'waiting_reviewer_full_review',
+    'waiting_reviewer_quick_look',
+    'reviewer_approved',
+    'sent_to_art_director',
+    'waiting_art_director_approval'
+  ];
+  const hasActiveComments = !!(
+    task.comments &&
+    task.comments.some(c => !c.isDeleted && !c.deletedAt && (c.message?.trim() || (c.sections && c.sections.length > 0)))
+  );
+
+  if (waitingReviewStatuses.includes(status) && hasActiveComments) {
+    return { label: 'Had some comments', color: 'amber' };
+  }
+
   if (viewerRole === 'team_member') {
     switch (status) {
-      case 'submitted': return { label: 'Waiting for reviewer', color: 'blue' };
+      case 'submitted': return { label: 'Waiting for First Review', color: 'blue' };
       case 'assigned_work': return { label: 'Assigned work', color: 'purple' };
-      case 'waiting_reviewer_full_review': return { label: 'Waiting for reviewer', color: 'blue' };
-      case 'waiting_reviewer_quick_look': return { label: 'Waiting for reviewer quick look', color: 'blue' };
-      case 'changes_requested_by_reviewer': return { label: 'Changes requested by reviewer', color: 'red' };
-      case 'reviewer_approved': return { label: 'Passed reviewer - waiting for art director', color: 'blue' };
-      case 'sent_to_art_director': return { label: 'Waiting for art director', color: 'blue' };
-      case 'waiting_art_director_approval': return { label: 'Waiting for art director', color: 'blue' };
-      case 'changes_requested_by_art_director': return { label: 'Changes requested by art director', color: 'red' };
+      case 'waiting_reviewer_full_review': return { label: 'Waiting for First Review', color: 'blue' };
+      case 'waiting_reviewer_quick_look': return { label: 'Waiting for First Review (Quick Look)', color: 'blue' };
+      case 'changes_requested_by_reviewer': return { label: 'Changes requested in First Review', color: 'red' };
+      case 'reviewer_approved': return { label: 'First Review Passed - waiting for Final Approvement', color: 'blue' };
+      case 'sent_to_art_director': return { label: 'Waiting for Final Approvement', color: 'blue' };
+      case 'waiting_art_director_approval': return { label: 'Waiting for Final Approvement', color: 'blue' };
+      case 'changes_requested_by_art_director': return { label: 'Changes requested in Final Approvement', color: 'red' };
       case 'waiting_content_revision': return { label: 'Waiting for content rev.', color: 'amber' };
       case 'changes_requested_by_content': return { label: 'Content changes requested', color: 'red' };
       case 'approved_by_art_director': return { label: 'Approved', color: 'green' };
@@ -79,18 +96,18 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
 
   if (viewerRole === 'reviewer') {
     switch (status) {
-      case 'waiting_reviewer_full_review': return { label: 'Waiting for your full review', color: 'amber' };
+      case 'waiting_reviewer_full_review': return { label: 'Waiting for your First Review', color: 'amber' };
       case 'assigned_work': return { label: 'Assigned work', color: 'purple' };
-      case 'submitted': return { label: 'Needs your review', color: 'amber' };
-      case 'waiting_reviewer_quick_look': return { label: 'Needs your quick look', color: 'amber' };
+      case 'submitted': return { label: 'Needs your First Review', color: 'amber' };
+      case 'waiting_reviewer_quick_look': return { label: 'Needs your Quick Look', color: 'amber' };
       case 'changes_requested_by_reviewer': return { label: 'Returned to creator for changes', color: 'red' };
-      case 'reviewer_approved': return { label: 'Sent to art director', color: 'blue' };
-      case 'sent_to_art_director': return { label: 'Sent to art director', color: 'blue' };
-      case 'waiting_art_director_approval': return { label: 'Waiting for art director', color: 'blue' };
-      case 'changes_requested_by_art_director': return { label: 'Art director requested changes', color: 'red' };
+      case 'reviewer_approved': return { label: 'Sent to Final Approvement', color: 'blue' };
+      case 'sent_to_art_director': return { label: 'Sent to Final Approvement', color: 'blue' };
+      case 'waiting_art_director_approval': return { label: 'Waiting for Final Approvement', color: 'blue' };
+      case 'changes_requested_by_art_director': return { label: 'Final Approvement requested changes', color: 'red' };
       case 'waiting_content_revision': return { label: 'Waiting for content rev.', color: 'gray' };
       case 'changes_requested_by_content': return { label: 'Returned for content changes', color: 'red' };
-      case 'approved_by_art_director': return { label: 'Approved by art director', color: 'green' };
+      case 'approved_by_art_director': return { label: 'Approved by Final Approvement', color: 'green' };
       case 'completed': return { label: 'Completed', color: 'green' };
       case 'archived': return { label: 'Archived', color: 'gray' };
       default: return { label: status, color: 'gray' };
@@ -99,12 +116,12 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
 
   if (viewerRole === 'art_director') {
     switch (status) {
-      case 'reviewer_approved': return { label: 'Ready for your approval', color: 'amber' };
+      case 'reviewer_approved': return { label: 'Ready for Final Approvement', color: 'amber' };
       case 'assigned_work': return { label: 'Assigned work', color: 'purple' };
-      case 'sent_to_art_director': return { label: 'Ready for your approval', color: 'amber' };
-      case 'waiting_art_director_approval': return { label: 'Ready for your approval', color: 'amber' };
-      case 'approved_by_art_director': return { label: 'You approved this', color: 'green' };
-      case 'changes_requested_by_art_director': return { label: 'You requested changes', color: 'red' };
+      case 'sent_to_art_director': return { label: 'Ready for Final Approvement', color: 'amber' };
+      case 'waiting_art_director_approval': return { label: 'Ready for Final Approvement', color: 'amber' };
+      case 'approved_by_art_director': return { label: 'Approved by Final Approvement', color: 'green' };
+      case 'changes_requested_by_art_director': return { label: 'Changes requested by Final Approvement', color: 'red' };
       case 'waiting_reviewer_full_review': return { label: 'With Reviewer', color: 'gray' };
       case 'submitted': return { label: 'With Reviewer', color: 'gray' };
       case 'waiting_reviewer_quick_look': return { label: 'With Reviewer', color: 'gray' };
@@ -121,14 +138,14 @@ export function getStatusInfo(task: Task, viewerRole: Role): { label: string; co
     case 'assigned_work': return { label: 'Assigned work', color: 'purple' };
     case 'submitted':
     case 'waiting_reviewer_full_review':
-    case 'waiting_reviewer_quick_look': return { label: 'In Review', color: 'blue' };
-    case 'changes_requested_by_reviewer':
-    case 'changes_requested_by_art_director':
-    case 'changes_requested_by_content': return { label: 'Changes Requested', color: 'red' };
+    case 'waiting_reviewer_quick_look': return { label: 'In First Review', color: 'blue' };
+    case 'changes_requested_by_reviewer': return { label: 'First Review Changes Requested', color: 'red' };
+    case 'changes_requested_by_art_director': return { label: 'Final Approvement Changes Requested', color: 'red' };
+    case 'changes_requested_by_content': return { label: 'Content Changes Requested', color: 'red' };
     case 'waiting_content_revision': return { label: 'Waiting for content rev.', color: 'amber' };
     case 'sent_to_art_director':
-    case 'waiting_art_director_approval': return { label: 'With art director', color: 'blue' };
-    case 'approved_by_art_director': return { label: 'Approved', color: 'green' };
+    case 'waiting_art_director_approval': return { label: 'With Final Approvement', color: 'blue' };
+    case 'approved_by_art_director': return { label: 'Approved by Final Approvement', color: 'green' };
     case 'completed': return { label: 'Completed', color: 'green' };
     default: return { label: status, color: 'gray' };
   }

@@ -17,7 +17,7 @@ const now = new Date().toISOString();
 
 export const defaultResponsibilities: ResponsibilityOption[] = [
   { id: 'senior_brand_designer_video_editor', label: 'Senior Brand Designer & Video Editor', permissionRole: 'reviewer' },
-  { id: 'art_director', label: 'Art Director', permissionRole: 'art_director' },
+  { id: 'art_director', label: 'Final Approvement', permissionRole: 'art_director' },
   { id: 'team_leader', label: 'Team Leader', permissionRole: 'team_leader' },
   { id: 'manager', label: 'Manager', permissionRole: 'manager' },
   { id: 'developer', label: 'Developer', permissionRole: 'developer' },

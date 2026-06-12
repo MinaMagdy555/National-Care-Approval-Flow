@@ -6,7 +6,7 @@ export const demoAccounts: any[] = [];
 
 export const userRoleLabels: Record<string, string> = {
   reviewer: 'Senior Brand Designer & Video Editor',
-  art_director: 'Art Director',
+  art_director: 'Final Approvement',
   team_member: 'Content Creator',
   team_leader: 'Team Leader',
   manager: 'Manager',
