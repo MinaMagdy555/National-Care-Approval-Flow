@@ -93,6 +93,7 @@ const HUMAN_COMMENT_ACTIONS = new Set<TaskComment['action']>([
   'marwa_rejection',
   'content_approved',
   'content_rejected',
+  'clarification_needed',
 ]);
 const GUEST_USER: User = {
   id: 'guest',

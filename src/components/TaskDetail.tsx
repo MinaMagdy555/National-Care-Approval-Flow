@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { Priority, ReviewMode, TaskComment, TaskCommentSection, UploadedTaskFile } from '../lib/types';
+import { Priority, ReviewMode, TaskComment, TaskCommentSection, UploadedTaskFile, TaskStatus } from '../lib/types';
 import { initialUsers } from '../lib/mockData';
 import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { getTaskTypeConfigs, cleanTaskTypeKey } from '../lib/appSettings';
-import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, Link2, Settings2, Edit3, Trash2, History, Send, Pause, Reply } from 'lucide-react';
+import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, Link2, Settings2, Edit3, Trash2, History, Send, Pause, Reply, Play } from 'lucide-react';
 import { FileContentThumbnail, FilePreview, isLocalOnlyFileUrl } from './FilePreview';
 import { uploadTaskFiles } from '../lib/driveDb';
 import { isTaskArchived } from '../lib/archiveUtils';
@@ -37,7 +37,7 @@ function cloneCommentSections(sections: TaskCommentSection[]) {
   return sections.map(section => ({ ...section }));
 }
 
-export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => void }) {
+export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: string; onBack: () => void; onOpenUploadTask?: (taskId: string) => void }) {
   const {
     tasks,
     currentUser,
@@ -98,6 +98,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const [isSavingAction, setIsSavingAction] = useState(false);
   const [replyingToCommentId, setReplyingToCommentId] = useState<string | null>(null);
   const [replyMessage, setReplyMessage] = useState('');
+  const [replyNotes, setReplyNotes] = useState<ReviewNoteSection[]>([]);
   const [actionError, setActionError] = useState('');
   const [managedContributorIds, setManagedContributorIds] = useState<string[]>([]);
   const [managedReviewMode, setManagedReviewMode] = useState<ReviewMode>('full_review');
@@ -197,10 +198,18 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const isAdminUser = Boolean(currentUser.isAdmin) || currentUser.role === 'admin';
   const isContentCreatorUser = currentUser.jobTitle === 'Content Creator' || (currentUser.role === 'team_member' && currentUser.jobTitle === 'Content Creator') || currentUser.role === 'admin' || Boolean(currentUser.isAdmin);
   const canActAsContentCreator = (isContentCreatorUser && task.status === 'waiting_content_revision' && (task.currentOwnerUserIds || []).includes(currentUser.id)) || (isAdminUser && task.status === 'waiting_content_revision');
-  const humanCommentActions = new Set<TaskComment['action']>(['review_note', 'request_edits', 'sent_to_marwa', 'marwa_rejection', 'content_approved', 'content_rejected']);
+  const humanCommentActions = new Set<TaskComment['action']>([
+    'review_note',
+    'request_edits',
+    'sent_to_marwa',
+    'marwa_rejection',
+    'content_approved',
+    'content_rejected',
+    'clarification_needed'
+  ]);
   const canEditOrDeleteComment = (comment: TaskComment) => {
     if (comment.isDeleted) return false;
-    return isAdminUser;
+    return comment.authorId === currentUser.id && humanCommentActions.has(comment.action);
   };
   const canViewCommentHistory = (comment: TaskComment) => comment.authorId === currentUser.id || isAdminUser;
   const isReviewerCommentAuthor = (authorId: string) => {
@@ -459,6 +468,38 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
   const hasFilledADRejectSections = () => adRejectNotes.some(hasFilledSection);
   const hasFilledFollowUpSections = () => followUpNotes.some(hasFilledSection);
 
+  const addReplyNoteSection = () => {
+    setReplyNotes(prev => [...prev, { id: Math.random().toString(36).substring(7), note: '' }]);
+  };
+
+  const updateReplyNote = (id: string, note: string) => {
+    setReplyNotes(prev => prev.map(section => section.id === id ? { ...section, note } : section));
+  };
+
+  const updateReplyNoteImage = (id: string, file?: File) => {
+    if (!file) return;
+    const localPreviewUrl = URL.createObjectURL(file);
+    setReplyNotes(prev => prev.map(section => {
+      if (section.id !== id) return section;
+      revokeLocalPreviewUrl(section.localPreviewUrl);
+      return {
+        ...section,
+        imageName: file.name,
+        imageFile: file,
+        imageUrl: undefined,
+        imageStoragePath: undefined,
+        localPreviewUrl,
+      };
+    }));
+  };
+
+  const hasFilledReplySections = () => replyNotes.some(hasFilledSection);
+
+  const resetReplyNotes = () => {
+    replyNotes.forEach(section => revokeLocalPreviewUrl(section.localPreviewUrl));
+    setReplyNotes([]);
+  };
+
   const getSectionPreviewUrl = (section: ReviewNoteSection | TaskCommentSection) => (
     'localPreviewUrl' in section && section.localPreviewUrl ? section.localPreviewUrl : section.imageUrl
   );
@@ -530,16 +571,54 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     const message = followUpMessage.trim();
     if (!message && !hasFilledFollowUpSections()) return;
 
+    // Check if the commenter is a reviewer and if we should ask for rejection
+    const isReviewerComment = currentUser.role === 'reviewer' || currentUser.role === 'art_director' || currentUser.role === 'admin';
+    const isTaskActiveForReview = !['approved', 'completed', 'archived', 'approved_by_art_director'].includes(task.status);
+    
+    let rejectStatus: TaskStatus | null = null;
+    if (isReviewerComment && isTaskActiveForReview) {
+      if (currentUser.role === 'reviewer') {
+        if (task.reviewMode !== 'quick_look') {
+          rejectStatus = 'changes_requested_by_reviewer';
+        }
+      } else if (currentUser.role === 'art_director') {
+        rejectStatus = 'changes_requested_by_art_director';
+      } else if (currentUser.role === 'admin') {
+        const isFirstReviewState = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
+        if (isFirstReviewState) {
+          if (task.reviewMode !== 'quick_look') {
+            rejectStatus = 'changes_requested_by_reviewer';
+          }
+        } else {
+          rejectStatus = 'changes_requested_by_art_director';
+        }
+      }
+    }
+
+    let shouldReject = false;
+    if (rejectStatus) {
+      shouldReject = window.confirm("Do you want to reject this task because of this comment?");
+    }
+
     setIsSavingAction(true);
     setActionError('');
     try {
       const sections = await prepareCommentSections(followUpNotes);
+      const action = shouldReject
+        ? (rejectStatus === 'changes_requested_by_reviewer' ? 'request_edits' : 'marwa_rejection')
+        : 'review_note';
+
       addTaskComment(task.id, {
         authorId: currentUser.id,
-        action: 'review_note',
+        action,
         message,
         sections,
       });
+
+      if (shouldReject && rejectStatus) {
+        updateTaskStatus(task.id, rejectStatus, 'team_member', [task.createdBy, ...task.handledBy]);
+      }
+
       setFollowUpMessage('');
       resetFollowUpNotes();
     } catch (error) {
@@ -565,17 +644,30 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
     cancelEditingComment();
   };
 
-  const handleAddReply = (parentId: string) => {
-    if (!replyMessage.trim()) return;
-    addTaskComment(task.id, {
-      authorId: currentUser.id,
-      action: 'review_note',
-      message: replyMessage.trim(),
-      sections: [],
-      parentId,
-    });
-    setReplyingToCommentId(null);
-    setReplyMessage('');
+  const handleAddReply = async (parentId: string) => {
+    const message = replyMessage.trim();
+    if (!message && !hasFilledReplySections()) return;
+
+    setIsSavingAction(true);
+    setActionError('');
+    try {
+      const sections = await prepareCommentSections(replyNotes);
+      addTaskComment(task.id, {
+        authorId: currentUser.id,
+        action: 'review_note',
+        message: message || undefined,
+        sections,
+        parentId,
+      });
+      setReplyingToCommentId(null);
+      setReplyMessage('');
+      resetReplyNotes();
+    } catch (error) {
+      console.error('Failed to save reply comment', error);
+      setActionError('Could not save the attached screenshots. Please try again.');
+    } finally {
+      setIsSavingAction(false);
+    }
   };
 
   const handleSendToAD = async (e: React.FormEvent) => {
@@ -737,6 +829,43 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
       setIsSavingAction(false);
     }
   };
+
+  const renderReplyNotes = () => (
+    <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-500 font-bold">Screens</h4>
+        <button type="button" onClick={addReplyNoteSection} className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-indigo-600 shadow-sm ring-1 ring-slate-200 hover:bg-indigo-50">
+          <Plus className="h-3.5 w-3.5" /> Add
+        </button>
+      </div>
+
+      {replyNotes.map((section, index) => (
+        <div key={section.id} className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-[96px,1fr]">
+          <label className="flex h-20 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 text-slate-500 hover:border-indigo-400 hover:bg-indigo-50">
+            {getSectionPreviewUrl(section) ? (
+              <button type="button" onClick={(event) => { event.preventDefault(); setLightboxUrl(getSectionPreviewUrl(section) || null); }} className="h-full w-full overflow-hidden rounded-lg">
+                <img src={getSectionPreviewUrl(section)} alt={section.imageName || `Screen ${index + 1}`} className="h-full w-full object-cover" />
+              </button>
+            ) : (
+              <>
+                <Upload className="h-4 w-4" />
+                <span className="text-[9px] font-black uppercase">Screen</span>
+              </>
+            )}
+            <input type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" className="hidden" onChange={event => updateReplyNoteImage(section.id, event.target.files?.[0])} />
+          </label>
+
+          <textarea
+            rows={2}
+            value={section.note}
+            onChange={event => updateReplyNote(section.id, event.target.value)}
+            placeholder={`Screen note ${index + 1}`}
+            className="min-h-20 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+      ))}
+    </div>
+  );
 
   const renderFollowUpNotes = () => (
     <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -952,7 +1081,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
 
           <div className="mb-6 grid grid-cols-1 gap-y-4 text-sm sm:grid-cols-2">
             <div>
-              <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Created by</span>
+              <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Assigner</span>
               <span className="font-semibold text-slate-900">{creator}</span>
             </div>
             <div>
@@ -985,10 +1114,25 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
             </div>
             <div className="pt-2 mt-1 border-t border-slate-200">
               <span className="block text-[11px] uppercase tracking-wider text-slate-400 font-black mb-1">Next Action</span>
-              <span className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></div>
-                {nextAction}
-              </span>
+              {task && task.status === 'assigned_work' && task.handledBy.includes(currentUser.id) ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onOpenUploadTask) {
+                      onOpenUploadTask(task.id);
+                    }
+                  }}
+                  className="w-full mt-1.5 flex items-center justify-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 text-xs font-black transition-colors"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  Upload Finished Work
+                </button>
+              ) : (
+                <span className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></div>
+                  {nextAction}
+                </span>
+              )}
             </div>
           </div>
 
@@ -1313,14 +1457,12 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
           )}
 
           {['admin', 'team_leader', 'marketing_manager', 'reviewer', 'art_director'].includes(currentUser.role) &&
-           (task.status === 'on_hold' || 
-            ((task.status === 'draft' || task.status === 'assigned_work') && (!task.versions || task.versions.length === 0))
-           ) && (
+           !['approved', 'completed', 'archived', 'approved_by_art_director'].includes(task.status) && (
             <button
               onClick={() => toggleTaskHold(task.id)}
               className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-4 rounded-xl border border-slate-200 shadow-sm transition-all text-sm flex items-center justify-center gap-2 mt-2"
             >
-              <Pause className="w-4 h-4" />
+              {task.status === 'on_hold' ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
               {task.status === 'on_hold' ? 'Resume Task' : 'Put Task On Hold'}
             </button>
           )}
@@ -1488,10 +1630,28 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                             <button
                               type="button"
                               onClick={() => {
-                                setReplyingToCommentId(replyingToCommentId === comment.id ? null : comment.id);
+                                const isOpening = replyingToCommentId !== comment.id;
+                                setReplyingToCommentId(isOpening ? comment.id : null);
                                 setReplyMessage('');
+                                if (isOpening) {
+                                  setTimeout(() => {
+                                    const element = document.getElementById(`reply-form-${comment.id}`);
+                                    if (element) {
+                                      element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                                      const textarea = element.querySelector('textarea');
+                                      if (textarea) {
+                                        (textarea as HTMLTextAreaElement).focus();
+                                      }
+                                    }
+                                  }, 100);
+                                }
                               }}
-                              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-50"
+                              className={cn(
+                                "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-black transition-colors duration-200",
+                                replyingToCommentId === comment.id
+                                  ? "border-indigo-600 bg-indigo-50 text-indigo-700 hover:bg-indigo-100/80"
+                                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                              )}
                             >
                               <Reply className="h-3.5 w-3.5" /> Reply
                             </button>
@@ -1553,11 +1713,12 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                     {/* Reply Input Form */}
                     {replyingToCommentId === comment.id && (
                       <form
+                        id={`reply-form-${comment.id}`}
                         onSubmit={(e) => {
                           e.preventDefault();
                           handleAddReply(comment.id);
                         }}
-                        className="mt-2 pl-6 ml-4 space-y-2 border-l-2 border-indigo-200"
+                        className="mt-2 pl-6 ml-4 space-y-2 border-l-2 border-indigo-200 bg-slate-50/30 p-3 rounded-xl border border-slate-100"
                       >
                         <textarea
                           value={replyMessage}
@@ -1566,17 +1727,21 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                           rows={2}
                           className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
                         />
+                        {renderReplyNotes()}
                         <div className="flex gap-2">
                           <button
                             type="submit"
-                            disabled={!replyMessage.trim()}
+                            disabled={isSavingAction || (!replyMessage.trim() && !hasFilledReplySections())}
                             className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-black text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                           >
                             Submit Reply
                           </button>
                           <button
                             type="button"
-                            onClick={() => setReplyingToCommentId(null)}
+                            onClick={() => {
+                              setReplyingToCommentId(null);
+                              resetReplyNotes();
+                            }}
                             className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-black text-slate-600 hover:bg-slate-50"
                           >
                             Cancel
@@ -1634,7 +1799,23 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                                   </div>
                                 </div>
                               ) : (
-                                <p className="text-xs font-medium text-slate-700">{reply.message}</p>
+                                <>
+                                  {reply.message && <p className="text-xs font-medium text-slate-700">{reply.message}</p>}
+                                  {reply.sections && reply.sections.length > 0 && (
+                                    <div className="space-y-2 mt-2">
+                                      {reply.sections.map(section => (
+                                        <div key={section.id} className="grid gap-2 rounded-lg bg-white border border-slate-200 p-2 sm:grid-cols-[64px,1fr] text-xs">
+                                          {section.imageUrl && (
+                                            <button type="button" onClick={() => setLightboxUrl(section.imageUrl || null)} className="h-12 w-16 overflow-hidden rounded border border-slate-200 bg-slate-50">
+                                              <img src={section.imageUrl} alt={section.imageName || 'Reply screen'} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                                            </button>
+                                          )}
+                                          {section.note && <p className="text-xs font-medium text-slate-600 self-center">{section.note}</p>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </>
                               )}
 
                               {!reply.isDeleted && canManageReply && !isEditingReply && (
@@ -1787,7 +1968,7 @@ export function TaskDetail({ taskId, onBack }: { taskId: string; onBack: () => v
                                   : prev.filter(id => id !== item.id)
                               ));
                             }}
-                            className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            className="mt-1 h-4 w-4 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                           />
                           <div className="min-w-0 flex-1">
                             <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">{item.label}</p>

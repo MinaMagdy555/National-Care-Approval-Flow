@@ -1,4 +1,4 @@
-import { AppSettings, Priority, PriorityOption, PriorityTone, ResponsibilityOption, Role, TaskType, User, TaskTypeConfig } from './types';
+import { AppSettings, Priority, PriorityOption, PriorityTone, ResponsibilityOption, Role, TaskType, User, TaskTypeConfig, CustomWorkingHours } from './types';
 
 export const MINA_ID = '83e02bb4-11f9-41b0-becb-33e6c4c52b2a';
 export const MARWA_ID = 'd65ea68d-1749-45b9-b0f9-1fdaf23b8f94';
@@ -76,6 +76,7 @@ export const defaultAppSettings: AppSettings = {
   ],
   campaignPlatforms: ['Instagram', 'LinkedIn', 'TikTok', 'Snapchat'],
   hiddenColumns: [],
+  customWorkingHours: [],
   updatedAt: now,
 };
 
@@ -223,6 +224,7 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     finalReviewerUserIds,
     viewAllWorkloadUserIds,
     customPermissions: Array.isArray(settings?.customPermissions) ? settings.customPermissions : [],
+    customWorkingHours: Array.isArray(settings?.customWorkingHours) ? settings.customWorkingHours : [],
     taskTypes: Array.isArray(settings?.taskTypes) ? settings.taskTypes : defaultAppSettings.taskTypes || [],
     campaignPlatforms: Array.isArray(settings?.campaignPlatforms) ? settings.campaignPlatforms : defaultAppSettings.campaignPlatforms || [],
     hiddenColumns: Array.isArray(settings?.hiddenColumns) ? settings.hiddenColumns : [],
@@ -344,7 +346,59 @@ export function getAssignableContributorsForTaskWithSettings(settings: AppSettin
   return users.filter(user => isAssignableContributorForTaskWithSettings(settings, user, taskType, creatorId));
 }
 
-export function isDeadlineInsideBusinessHours(settings: AppSettings, deadlineValue: string, nowValue = new Date(), isOvertime = false) {
+export function getWorkingHoursForUser(settings: AppSettings, user: User) {
+  const customList = settings.customWorkingHours || [];
+  
+  // 1. Employee-specific
+  const employeeSetting = customList.find(c => c.targetType === 'employee' && c.targetValue === user.id);
+  if (employeeSetting) {
+    return {
+      workdays: employeeSetting.workdays,
+      startTime: employeeSetting.startTime,
+      endTime: employeeSetting.endTime,
+    };
+  }
+
+  // 2. Position-specific
+  if (user.jobTitle) {
+    const positionSetting = customList.find(
+      c => c.targetType === 'position' && c.targetValue.toLowerCase() === user.jobTitle?.toLowerCase()
+    );
+    if (positionSetting) {
+      return {
+        workdays: positionSetting.workdays,
+        startTime: positionSetting.startTime,
+        endTime: positionSetting.endTime,
+      };
+    }
+  }
+
+  // 3. Role-specific
+  const roleSetting = customList.find(c => c.targetType === 'role' && c.targetValue === user.role);
+  if (roleSetting) {
+    return {
+      workdays: roleSetting.workdays,
+      startTime: roleSetting.startTime,
+      endTime: roleSetting.endTime,
+    };
+  }
+
+  // 4. Global fallback
+  return {
+    workdays: settings.businessCalendar.workdays,
+    startTime: settings.businessCalendar.startTime,
+    endTime: settings.businessCalendar.endTime,
+  };
+}
+
+export function isDeadlineInsideBusinessHours(
+  settings: AppSettings,
+  deadlineValue: string,
+  nowValue = new Date(),
+  isOvertime = false,
+  assigneeIds: string[] = [],
+  userList: User[] = []
+) {
   const deadline = new Date(deadlineValue);
   if (!deadlineValue || Number.isNaN(deadline.getTime())) {
     return { ok: false, message: 'Select a valid deadline date and time.' };
@@ -361,6 +415,35 @@ export function isDeadlineInsideBusinessHours(settings: AppSettings, deadlineVal
   }
 
   if (isOvertime) {
+    return { ok: true, message: '' };
+  }
+
+  if (assigneeIds.length > 0 && userList.length > 0) {
+    for (const assigneeId of assigneeIds) {
+      const user = userList.find(u => u.id === assigneeId);
+      if (!user) continue;
+
+      const schedule = getWorkingHoursForUser(settings, user);
+      if (!schedule.workdays.includes(deadline.getDay())) {
+        return { 
+          ok: false, 
+          message: `Deadline must be on a configured working day for ${user.name}.` 
+        };
+      }
+
+      const minutes = deadline.getHours() * 60 + deadline.getMinutes();
+      const [startHour, startMinute] = schedule.startTime.split(':').map(Number);
+      const [endHour, endMinute] = schedule.endTime.split(':').map(Number);
+      const startMinutes = startHour * 60 + startMinute;
+      const endMinutes = endHour * 60 + endMinute;
+
+      if (minutes < startMinutes || minutes > endMinutes) {
+        return { 
+          ok: false, 
+          message: `Deadline must be between ${schedule.startTime} and ${schedule.endTime} for ${user.name}.` 
+        };
+      }
+    }
     return { ok: true, message: '' };
   }
 

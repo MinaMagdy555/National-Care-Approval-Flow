@@ -171,10 +171,10 @@ export function ThemedTimePicker({ value, onChange, className }: ThemedTimePicke
                     type="button"
                     onClick={() => handleSelectPart(h, selMinute, selAmpm)}
                     className={cn(
-                      "block w-full rounded-lg py-1 text-xs font-bold transition-all text-center",
+                      "block w-full rounded-lg py-1 text-xs font-bold transition-all text-center outline-none focus:outline-none",
                       active 
-                        ? "bg-indigo-600 text-white font-black" 
-                        : "text-slate-700 hover:bg-slate-50"
+                        ? "bg-indigo-600 text-white font-black animate-none" 
+                        : "text-slate-700 hover:bg-indigo-50 hover:text-indigo-950"
                     )}
                   >
                     {h}
@@ -192,10 +192,10 @@ export function ThemedTimePicker({ value, onChange, className }: ThemedTimePicke
                     type="button"
                     onClick={() => handleSelectPart(selHour, m, selAmpm)}
                     className={cn(
-                      "block w-full rounded-lg py-1 text-xs font-bold transition-all text-center",
+                      "block w-full rounded-lg py-1 text-xs font-bold transition-all text-center outline-none focus:outline-none",
                       active 
-                        ? "bg-indigo-600 text-white font-black" 
-                        : "text-slate-700 hover:bg-slate-50"
+                        ? "bg-indigo-600 text-white font-black animate-none" 
+                        : "text-slate-700 hover:bg-indigo-50 hover:text-indigo-950"
                     )}
                   >
                     {m}
@@ -213,10 +213,10 @@ export function ThemedTimePicker({ value, onChange, className }: ThemedTimePicke
                     type="button"
                     onClick={() => handleSelectPart(selHour, selMinute, ap)}
                     className={cn(
-                      "block w-full rounded-lg py-1 text-xs font-bold transition-all text-center mb-1",
+                      "block w-full rounded-lg py-1 text-xs font-bold transition-all text-center mb-1 outline-none focus:outline-none",
                       active 
-                        ? "bg-indigo-600 text-white font-black" 
-                        : "text-slate-700 hover:bg-slate-50"
+                        ? "bg-indigo-600 text-white font-black animate-none" 
+                        : "text-slate-700 hover:bg-indigo-50 hover:text-indigo-950"
                     )}
                   >
                     {ap}

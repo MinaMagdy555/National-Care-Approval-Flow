@@ -174,6 +174,17 @@ export function createLinkedTaskFile(rawUrl: string): UploadedTaskFile {
   };
 }
 
+async function fetchLinkTitleScraped(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(`/api/metadata?url=${encodeURIComponent(url)}`);
+    if (!response.ok) return null;
+    const data = await response.json() as { title?: string };
+    return data.title || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function createLinkedTaskFileWithMetadata(rawUrl: string): Promise<UploadedTaskFile> {
   const parsedUrl = normalizeLinkedUrl(rawUrl);
   if (!isGoogleDriveHost(parsedUrl)) {
@@ -187,13 +198,24 @@ export async function createLinkedTaskFileWithMetadata(rawUrl: string): Promise<
 
   const fallbackFile = createLinkedTaskFile(rawUrl);
   const metadata = await fetchDriveLinkMetadata(driveFileId).catch(() => null);
+
+  let name = fallbackFile.name;
+  if (metadata?.name) {
+    name = metadata.name;
+  } else {
+    const scrapedName = await fetchLinkTitleScraped(rawUrl);
+    if (scrapedName) {
+      name = scrapedName;
+    }
+  }
+
   const previewUrl = metadata?.thumbnailLink || fallbackFile.previewUrl;
   const url = metadata?.webViewLink || fallbackFile.url;
 
   return {
     ...fallbackFile,
     id: driveFileId,
-    name: metadata?.name || fallbackFile.name,
+    name,
     type: getTypeFromMetadata(metadata, url),
     size: Number(metadata?.size || fallbackFile.size || 0),
     url,
@@ -228,8 +250,20 @@ export async function enrichLinkedTaskFileMetadata(file: UploadedTaskFile): Prom
   if (!driveFileId) return file;
 
   const metadata = await fetchDriveLinkMetadata(driveFileId).catch(() => null);
+
+  let name = file.name;
+  if (metadata?.name) {
+    name = metadata.name;
+  } else if (file.name === 'Google Drive file' || file.name === 'Google Docs file' || file.name === 'Google Drive folder') {
+    const scrapedName = await fetchLinkTitleScraped(file.webViewLink || file.url);
+    if (scrapedName) {
+      name = scrapedName;
+    }
+  }
+
   if (!metadata) return {
     ...file,
+    name,
     driveFileId,
     storagePath: file.storagePath || driveFileId,
   };
@@ -239,7 +273,7 @@ export async function enrichLinkedTaskFileMetadata(file: UploadedTaskFile): Prom
 
   return {
     ...file,
-    name: metadata.name || file.name,
+    name,
     type: getTypeFromMetadata(metadata, url),
     size: Number(metadata.size || file.size || 0),
     url,

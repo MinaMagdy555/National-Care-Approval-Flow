@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { CalendarDays, Check, Clock3, Edit3, Link2, Plus, RotateCcw, X, Trash2, Settings } from 'lucide-react';
+import { CalendarDays, Check, Clock3, Edit3, Link2, Plus, RotateCcw, X, Trash2, Settings, Search, Calendar, Clock, HelpCircle } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { Priority, Task, Role, TaskTypeConfig } from '../lib/types';
 import { canCreateWorkAssignment, canManageWorkAssignment, canUploadWorkAssignment, isWorkAssignmentAssignee, sortWorkAssignments } from '../lib/workAssignmentUtils';
-import { getPriorityLabel, getTaskTypeLabel } from '../lib/taskUtils';
+import { getPriorityLabel, getTaskTypeLabel, getStatusInfo } from '../lib/taskUtils';
 import { isAssignableContributorForTask } from '../lib/handlerUtils';
 import { CustomSelect } from './CustomSelect';
 import { UserMultiSelect } from './UserMultiSelect';
@@ -11,7 +11,7 @@ import { ThemedDatePicker } from './ThemedDatePicker';
 import { ThemedTimePicker } from './ThemedTimePicker';
 import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
-import { getActivePriorityOptions, getPriorityTone, isDeadlineInsideBusinessHours, priorityToneClasses, MINA_ID, normalizeTaskTypeId, cleanTaskTypeKey, getTaskTypeConfigs } from '../lib/appSettings';
+import { getActivePriorityOptions, getPriorityTone, isDeadlineInsideBusinessHours, getWorkingHoursForUser, priorityToneClasses, MINA_ID, normalizeTaskTypeId, cleanTaskTypeKey, getTaskTypeConfigs } from '../lib/appSettings';
 import { userCanViewFullWorkspace } from '../lib/workflowUtils';
 
 const CONTROL_CLASS = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10';
@@ -19,6 +19,32 @@ const SELECT_BUTTON_CLASS = 'rounded-xl border-slate-200 px-3 py-2.5 text-sm fon
 
 function getUserName(users: ReturnType<typeof useAppStore>['users'], userId: string) {
   return users[userId]?.name || initialUsers.find(user => user.id === userId)?.name || userId;
+}
+
+function getDateInputValue(date: string) {
+  const parsedDate = new Date(date);
+  if (Number.isNaN(parsedDate.getTime())) return '';
+
+  const year = parsedDate.getFullYear();
+  const month = String(parsedDate.getMonth() + 1).padStart(2, '0');
+  const day = String(parsedDate.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function isValidUrl(str: string) {
+  const trimmed = str.trim();
+  if (!trimmed) return false;
+  if (/\s/.test(trimmed)) return false;
+  try {
+    let urlString = trimmed;
+    if (!/^https?:\/\//i.test(trimmed)) {
+      urlString = 'https://' + trimmed;
+    }
+    const url = new URL(urlString);
+    return url.hostname.includes('.') && url.hostname.split('.').every(part => part.length > 0);
+  } catch (e) {
+    return false;
+  }
 }
 
 function formatDeadline(value?: string | null) {
@@ -84,15 +110,37 @@ export function AssignedWorkSection({
   tasks,
   onOpenAssignmentUpload,
   onOpenTask,
+  mode = 'create',
 }: {
   tasks: Task[];
   onOpenAssignmentUpload: (taskId: string) => void;
   onOpenTask?: (taskId: string) => void;
+  mode?: 'create' | 'tracking';
 }) {
-  const { currentUser, userList, users, appSettings, updateAppSettings, createWorkAssignment, updateWorkAssignment } = useAppStore();
+  const { currentUser, userList, users, appSettings, updateAppSettings, createWorkAssignment, updateWorkAssignment, addTaskComment, addNotifications } = useAppStore();
   const [activeTab, setActiveTab] = useState<'assignments' | 'task_types'>('assignments');
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [name, setName] = useState('');
+  
+  // Advanced filters state for tracking tasks
+  const [filterCreator, setFilterCreator] = useState('all');
+  const [filterAssignee, setFilterAssignee] = useState('all');
+  const [filterType, setFilterType] = useState('all');
+  const [filterPriority, setFilterPriority] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Assignment Date
+  const [dateFilterMode, setDateFilterMode] = useState<'all' | 'single' | 'range'>('all');
+  const [singleDate, setSingleDate] = useState('');
+  const [rangeStartDate, setRangeStartDate] = useState('');
+  const [rangeEndDate, setRangeEndDate] = useState('');
+
+  // Deadline Date
+  const [deadlineFilterMode, setDeadlineFilterMode] = useState<'all' | 'single' | 'range'>('all');
+  const [deadlineSingleDate, setDeadlineSingleDate] = useState('');
+  const [deadlineStartDate, setDeadlineStartDate] = useState('');
+  const [deadlineEndDate, setDeadlineEndDate] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<Priority>('normal');
   const [deadlineDate, setDeadlineDate] = useState('');
@@ -121,6 +169,43 @@ export function AssignedWorkSection({
   const [editingFullReviewers, setEditingFullReviewers] = useState<string[]>([]);
   const [editingQuickLookReviewers, setEditingQuickLookReviewers] = useState<string[]>([]);
   const [editingFinalReviewers, setEditingFinalReviewers] = useState<string[]>([]);
+  const [clarificationTaskId, setClarificationTaskId] = useState<string | null>(null);
+  const [clarificationQuestion, setClarificationQuestion] = useState('');
+
+  const handleSendClarification = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!clarificationTaskId || !clarificationQuestion.trim()) return;
+
+    addTaskComment(clarificationTaskId, {
+      authorId: currentUser.id,
+      action: 'clarification_needed',
+      message: clarificationQuestion.trim(),
+      sections: [],
+    });
+
+    const task = tasks.find(t => t.id === clarificationTaskId);
+    if (task) {
+      const notifyUsers = new Set<string>();
+      if (task.createdBy && task.createdBy !== currentUser.id) {
+        notifyUsers.add(task.createdBy);
+      }
+      task.handledBy.forEach(userId => {
+        if (userId !== currentUser.id) {
+          notifyUsers.add(userId);
+        }
+      });
+      if (notifyUsers.size > 0) {
+        addNotifications(
+          Array.from(notifyUsers),
+          clarificationTaskId,
+          `${currentUser.name} requested clarifications on "${task.name}": ${clarificationQuestion.trim().slice(0, 60)}${clarificationQuestion.trim().length > 60 ? '...' : ''}`
+        );
+      }
+    }
+
+    setClarificationTaskId(null);
+    setClarificationQuestion('');
+  };
 
   const canCreate = canCreateWorkAssignment(currentUser, appSettings);
   const priorityOptions = getActivePriorityOptions(appSettings);
@@ -141,9 +226,99 @@ export function AssignedWorkSection({
     return canViewAllWorkload || task.handledBy.includes(currentUser.id) || task.createdBy === currentUser.id;
   });
 
-  const assignmentGroups = getAssignmentGroups(visibleTasks, users, currentUser.id, appSettings);
+  const filteredTasks = visibleTasks.filter(task => {
+    if (filterCreator !== 'all' && task.createdBy !== filterCreator) return false;
+    if (filterType !== 'all' && task.taskType !== filterType) return false;
+    if (filterAssignee !== 'all') {
+      if (filterAssignee === 'solo' && task.handledBy.length !== 1) return false;
+      if (filterAssignee === 'cooperation' && task.handledBy.length <= 1) return false;
+    }
+    if (filterPriority !== 'all' && task.priority !== filterPriority) return false;
+
+    const statusInfo = getStatusInfo(task, currentUser.role, users);
+    if (filterStatus !== 'all' && statusInfo.label !== filterStatus) return false;
+
+    const taskDate = getDateInputValue(task.createdAt);
+    if (dateFilterMode === 'single' && singleDate && taskDate !== singleDate) return false;
+    if (dateFilterMode === 'range' && (rangeStartDate || rangeEndDate)) {
+      const [startDate, endDate] = rangeStartDate && rangeEndDate && rangeStartDate > rangeEndDate
+        ? [rangeEndDate, rangeStartDate]
+        : [rangeStartDate, rangeEndDate];
+
+      if (startDate && taskDate < startDate) return false;
+      if (endDate && taskDate > endDate) return false;
+    }
+
+    if (deadlineFilterMode !== 'all') {
+      if (!task.deadlineAt) return false;
+      const dlDate = getDateInputValue(task.deadlineAt);
+      if (deadlineFilterMode === 'single' && deadlineSingleDate && dlDate !== deadlineSingleDate) return false;
+      if (deadlineFilterMode === 'range' && (deadlineStartDate || deadlineEndDate)) {
+        const [startDate, endDate] = deadlineStartDate && deadlineEndDate && deadlineStartDate > deadlineEndDate
+          ? [deadlineEndDate, deadlineStartDate]
+          : [deadlineStartDate, deadlineEndDate];
+
+        if (startDate && dlDate < startDate) return false;
+        if (endDate && dlDate > endDate) return false;
+      }
+    }
+
+    if (searchQuery) {
+      const lowerQuery = searchQuery.toLowerCase();
+      const matchesName = task.name.toLowerCase().includes(lowerQuery);
+      const matchesDescription = (task.description || '').toLowerCase().includes(lowerQuery);
+      const matchesId = task.id.toLowerCase().includes(lowerQuery);
+      const matchesCode = (task.code || '').toLowerCase().includes(lowerQuery);
+      const matchesDate = new Date(task.createdAt).toLocaleDateString().includes(lowerQuery);
+      if (!matchesName && !matchesDescription && !matchesId && !matchesCode && !matchesDate) return false;
+    }
+
+    return true;
+  });
+
+  const assignmentGroups = getAssignmentGroups(filteredTasks, users, currentUser.id, appSettings);
+
+  const getUserById = (id: string) => users[id] || (id === currentUser.id ? currentUser : undefined) || initialUsers.find(user => user.id === id);
+
+  const uniqueCreators = Array.from(new Set(visibleTasks.map(t => t.createdBy))).map(getUserById).filter(Boolean) as Array<NonNullable<ReturnType<typeof getUserById>>>;
+  const filterCreatorOptions = [
+    { value: 'all', label: 'All Assigners' },
+    ...uniqueCreators.map(u => ({ value: u.id, label: u.name }))
+  ];
+
+  const filterAssigneeOptions = [
+    { value: 'all', label: 'All (Solo/Coop)' },
+    { value: 'solo', label: 'Solo Task' },
+    { value: 'cooperation', label: 'Cooperation' }
+  ];
+
+  const filterPriorityOptions = [
+    { value: 'all', label: 'All Priorities' },
+    { value: 'low', label: 'Low' },
+    { value: 'normal', label: 'Normal' },
+    { value: 'high', label: 'High' },
+    { value: 'urgent', label: 'Urgent' }
+  ];
+
+  const uniqueStatuses = Array.from(new Set(visibleTasks.map(t => getStatusInfo(t, currentUser.role, users).label)));
+  const filterStatusOptions = [
+    { value: 'all', label: 'All Statuses' },
+    ...uniqueStatuses.map(label => ({ value: label, label }))
+  ];
+
+  const uniqueTypes = Array.from(new Set(visibleTasks.map(t => t.taskType)));
+  const filterTypeOptions = [
+    { value: 'all', label: 'All Types' },
+    ...uniqueTypes.map(t => ({ value: t, label: getTaskTypeLabel(t, appSettings) }))
+  ];
+
+  const dateFilterOptions = [
+    { value: 'all', label: 'All Dates' },
+    { value: 'single', label: 'Specific Date' },
+    { value: 'range', label: 'Date Range' },
+  ];
   const deadlineAt = combineDeadline(deadlineDate, deadlineTime);
-  const deadlineValidation = deadlineAt ? isDeadlineInsideBusinessHours(appSettings, deadlineAt, new Date(), isOvertime) : { ok: false, message: 'Select a deadline.' };
+  const deadlineValidation = deadlineAt ? isDeadlineInsideBusinessHours(appSettings, deadlineAt, new Date(), isOvertime, assigneeIds, userList) : { ok: false, message: 'Select a deadline.' };
 
   const normalizeSettingId = (value: string) => {
     return value
@@ -261,24 +436,34 @@ export function AssignedWorkSection({
 
   const addLink = () => {
     const nextLink = linkInput.trim();
-    if (!nextLink) return;
-    setLinks(prev => prev.includes(nextLink) ? prev : [...prev, nextLink]);
+    if (!nextLink || !isValidUrl(nextLink)) return;
+
+    let formattedLink = nextLink;
+    if (!/^https?:\/\//i.test(nextLink)) {
+      formattedLink = 'https://' + nextLink;
+    }
+
+    setLinks(prev => prev.includes(formattedLink) ? prev : [...prev, formattedLink]);
     setLinkInput('');
   };
 
   const submitAssignment = (event: React.FormEvent) => {
     event.preventDefault();
-    const validation = isDeadlineInsideBusinessHours(appSettings, deadlineAt, new Date(), isOvertime);
-    if (!validation.ok) {
-      setDeadlineError(validation.message);
-      return;
+
+    const hasDeadlineInput = Boolean(deadlineDate || deadlineTime);
+    if (hasDeadlineInput) {
+      const validation = isDeadlineInsideBusinessHours(appSettings, deadlineAt, new Date(), isOvertime, assigneeIds, userList);
+      if (!validation.ok) {
+        setDeadlineError(validation.message);
+        return;
+      }
     }
 
     const input = {
       name,
       description,
       priority,
-      deadlineAt,
+      deadlineAt: hasDeadlineInput ? deadlineAt : null,
       assignmentLinks: normalizeLinks(links),
       handledByIds: assigneeIds,
       isOvertime,
@@ -319,14 +504,16 @@ export function AssignedWorkSection({
     }
   };
 
-  const formIsValid = name.trim() && description.trim() && deadlineAt && deadlineValidation.ok && assigneeIds.length > 0;
+  const hasDeadlineInput = Boolean(deadlineDate || deadlineTime);
+  const deadlineIsValid = !hasDeadlineInput || (Boolean(deadlineDate && deadlineTime) && deadlineValidation.ok);
+  const formIsValid = name.trim() && description.trim() && deadlineIsValid && assigneeIds.length > 0;
 
   return (
     <section className="space-y-4">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-2">
         <h3 className="text-lg font-black text-slate-900 font-extrabold uppercase tracking-wider">Assigned Work</h3>
         
-        {canCreate && (
+        {canCreate && mode === 'create' && (
           <div className="flex gap-2">
             <button
               type="button"
@@ -356,7 +543,7 @@ export function AssignedWorkSection({
         )}
       </div>
 
-      {activeTab === 'task_types' && canCreate ? (
+      {activeTab === 'task_types' && canCreate && mode === 'create' ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 space-y-6">
           <div>
             <h4 className="text-base font-black text-slate-900">Configure Task Types & Workflows</h4>
@@ -496,7 +683,7 @@ export function AssignedWorkSection({
                   type="checkbox"
                   checked={taskTypeDetailed}
                   onChange={event => setTaskTypeDetailed(event.target.checked)}
-                  className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                 />
                 Detailed Review Workflow (Request Edits Form)
               </label>
@@ -649,7 +836,7 @@ export function AssignedWorkSection({
                               type="checkbox"
                               checked={editingDetailed}
                               onChange={event => setEditingDetailed(event.target.checked)}
-                              className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                              className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                             />
                             Detailed Review Workflow
                           </label>
@@ -742,7 +929,7 @@ export function AssignedWorkSection({
         </div>
       ) : (
         <>
-          {canCreate && (
+          {((canCreate && mode === 'create') || Boolean(editingTaskId)) && (
             <form onSubmit={submitAssignment} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
               <div className="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
             <div className="space-y-3">
@@ -774,7 +961,7 @@ export function AssignedWorkSection({
                       value={linkInput}
                       onChange={event => setLinkInput(event.target.value)}
                       onKeyDown={event => {
-                        if (event.key === 'Enter' && linkInput.trim()) {
+                        if (event.key === 'Enter' && linkInput.trim() && isValidUrl(linkInput)) {
                           event.preventDefault();
                           addLink();
                         }
@@ -785,7 +972,7 @@ export function AssignedWorkSection({
                   <button
                     type="button"
                     onClick={addLink}
-                    disabled={!linkInput.trim()}
+                    disabled={!linkInput.trim() || !isValidUrl(linkInput)}
                     className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white transition-colors hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
                     <Plus className="h-4 w-4" />
@@ -862,7 +1049,7 @@ export function AssignedWorkSection({
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Deadline *</label>
+                <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Deadline</label>
                 <div className="grid gap-2 sm:grid-cols-[1fr,140px]">
                   <ThemedDatePicker
                     value={deadlineDate}
@@ -884,7 +1071,18 @@ export function AssignedWorkSection({
                 )}
                 <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
                   <p className="text-[11px] font-semibold text-slate-400">
-                    Working hours: {appSettings.businessCalendar.startTime} - {appSettings.businessCalendar.endTime}
+                    Working hours: {(() => {
+                      if (assigneeIds.length === 1) {
+                        const selectedUser = userList.find(u => u.id === assigneeIds[0]);
+                        if (selectedUser) {
+                          const schedule = getWorkingHoursForUser(appSettings, selectedUser);
+                          return `${schedule.startTime} - ${schedule.endTime}`;
+                        }
+                      } else if (assigneeIds.length > 1) {
+                        return "Multiple assignees (custom hours apply per employee)";
+                      }
+                      return `${appSettings.businessCalendar.startTime} - ${appSettings.businessCalendar.endTime}`;
+                    })()}
                   </p>
                   <div className="flex gap-2">
                     <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-0.5 text-[11px] font-black uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors">
@@ -895,7 +1093,7 @@ export function AssignedWorkSection({
                           setIsOvertime(event.target.checked);
                           setDeadlineError('');
                         }}
-                        className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                       />
                       Overtime Task
                     </label>
@@ -906,7 +1104,7 @@ export function AssignedWorkSection({
                         onChange={event => {
                           setNeedsContentRevision(event.target.checked);
                         }}
-                        className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                       />
                       Needs Content Revision
                     </label>
@@ -967,6 +1165,200 @@ export function AssignedWorkSection({
           </div>
         </form>
       )}
+
+      {/* Filtering Panel */}
+      <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
+          {/* Search */}
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Search</label>
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input 
+                type="text" 
+                placeholder="Search by name, desc, code or ID..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="w-full h-10 border border-slate-300 rounded-lg pl-10 pr-4 py-2 text-sm font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none transition-all placeholder:font-medium"
+              />
+            </div>
+          </div>
+
+          {/* Assigner */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Assigner</label>
+            <CustomSelect 
+              value={filterCreator} 
+              onChange={setFilterCreator}
+              options={filterCreatorOptions}
+            />
+          </div>
+
+          {/* Solo / Cooperation */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Solo / Cooperation</label>
+            <CustomSelect 
+              value={filterAssignee} 
+              onChange={setFilterAssignee}
+              options={filterAssigneeOptions}
+            />
+          </div>
+
+          {/* Task Type */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Task Type</label>
+            <CustomSelect 
+              value={filterType} 
+              onChange={setFilterType}
+              options={filterTypeOptions}
+            />
+          </div>
+
+          {/* Priority */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Priority</label>
+            <CustomSelect 
+              value={filterPriority} 
+              onChange={setFilterPriority}
+              options={filterPriorityOptions}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {/* Status */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Status</label>
+            <CustomSelect 
+              value={filterStatus} 
+              onChange={setFilterStatus}
+              options={filterStatusOptions}
+            />
+          </div>
+
+          {/* Assignment Date */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Assignment Date</label>
+              {(dateFilterMode !== 'all' || singleDate || rangeStartDate || rangeEndDate) && (
+                <button 
+                  onClick={() => {
+                    setDateFilterMode('all');
+                    setSingleDate('');
+                    setRangeStartDate('');
+                    setRangeEndDate('');
+                  }}
+                  className="text-[10px] font-black text-rose-600 uppercase hover:underline"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="flex flex-col gap-2">
+              <div className="w-full">
+                <CustomSelect 
+                  value={dateFilterMode} 
+                  onChange={(val) => setDateFilterMode(val as any)}
+                  options={dateFilterOptions}
+                />
+              </div>
+              <div className="w-full">
+                {dateFilterMode === 'single' && (
+                  <input 
+                    type="date"
+                    value={singleDate}
+                    onChange={e => setSingleDate(e.target.value)}
+                    className="w-full h-10 border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+                )}
+                {dateFilterMode === 'range' && (
+                  <div className="grid gap-2 grid-cols-[1fr,auto,1fr] items-center">
+                    <input 
+                      type="date"
+                      value={rangeStartDate}
+                      onChange={e => setRangeStartDate(e.target.value)}
+                      className="w-full h-10 border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                    <span className="text-xs font-bold text-slate-400 text-center">to</span>
+                    <input 
+                      type="date"
+                      value={rangeEndDate}
+                      onChange={e => setRangeEndDate(e.target.value)}
+                      className="w-full h-10 border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                  </div>
+                )}
+                {dateFilterMode === 'all' && (
+                  <div className="w-full h-10 border border-slate-200 bg-slate-50 rounded-lg flex items-center px-3 text-xs font-semibold text-slate-400">
+                    Showing all assignment dates
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Deadline Date */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Deadline Date</label>
+              {(deadlineFilterMode !== 'all' || deadlineSingleDate || deadlineStartDate || deadlineEndDate) && (
+                <button 
+                  onClick={() => {
+                    setDeadlineFilterMode('all');
+                    setDeadlineSingleDate('');
+                    setDeadlineStartDate('');
+                    setDeadlineEndDate('');
+                  }}
+                  className="text-[10px] font-black text-rose-600 uppercase hover:underline"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="flex flex-col gap-2">
+              <div className="w-full">
+                <CustomSelect 
+                  value={deadlineFilterMode} 
+                  onChange={(val) => setDeadlineFilterMode(val as any)}
+                  options={dateFilterOptions}
+                />
+              </div>
+              <div className="w-full">
+                {deadlineFilterMode === 'single' && (
+                  <input 
+                    type="date"
+                    value={deadlineSingleDate}
+                    onChange={e => setDeadlineSingleDate(e.target.value)}
+                    className="w-full h-10 border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+                )}
+                {deadlineFilterMode === 'range' && (
+                  <div className="grid gap-2 grid-cols-[1fr,auto,1fr] items-center">
+                    <input 
+                      type="date"
+                      value={deadlineStartDate}
+                      onChange={e => setDeadlineStartDate(e.target.value)}
+                      className="w-full h-10 border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                    <span className="text-xs font-bold text-slate-400 text-center">to</span>
+                    <input 
+                      type="date"
+                      value={deadlineEndDate}
+                      onChange={e => setDeadlineEndDate(e.target.value)}
+                      className="w-full h-10 border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                  </div>
+                )}
+                {deadlineFilterMode === 'all' && (
+                  <div className="w-full h-10 border border-slate-200 bg-slate-50 rounded-lg flex items-center px-3 text-xs font-semibold text-slate-400">
+                    Showing all deadline dates
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div className="space-y-4">
         {assignmentGroups.length === 0 ? (
@@ -1053,25 +1445,39 @@ export function AssignedWorkSection({
                   </div>
                 )}
 
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onOpenAssignmentUpload(task.id);
-                  }}
-                  disabled={isUploaded || !canUpload}
-                  className={cn(
-                    'inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-black transition-colors',
-                    isUploaded
-                      ? 'cursor-default border border-emerald-200 bg-emerald-50 text-emerald-700'
-                      : canUpload
-                        ? 'bg-slate-900 text-white hover:bg-black'
-                        : 'cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400'
-                  )}
-                >
-                  <Check className="h-4 w-4" />
-                  {isUploaded ? 'Finished Work Uploaded' : canUpload ? 'Upload Finished Work' : 'Waiting for Upload'}
-                </button>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenAssignmentUpload(task.id);
+                    }}
+                    disabled={isUploaded || !canUpload}
+                    className={cn(
+                      'inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black transition-colors',
+                      isUploaded
+                        ? 'cursor-default border border-emerald-200 bg-emerald-50 text-emerald-700'
+                        : canUpload
+                          ? 'bg-slate-900 text-white hover:bg-black'
+                          : 'cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400'
+                    )}
+                  >
+                    <Check className="h-4 w-4" />
+                    {isUploaded ? 'Finished Work Uploaded' : canUpload ? 'Upload Finished Work' : 'Waiting for Upload'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setClarificationTaskId(task.id);
+                    }}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-black text-slate-700 transition-colors hover:bg-slate-50"
+                  >
+                    <HelpCircle className="h-4 w-4" />
+                    Need Clarifications
+                  </button>
+                </div>
               </article>
             );
           };
@@ -1110,6 +1516,70 @@ export function AssignedWorkSection({
       </div>
         </>
       )}
+
+      {clarificationTaskId && (() => {
+        const task = tasks.find(t => t.id === clarificationTaskId);
+        if (!task) return null;
+        return (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm transition-all" onClick={() => { setClarificationTaskId(null); setClarificationQuestion(''); }}>
+            <div className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+              <div className="border-b border-slate-100 px-6 py-4 flex items-center justify-between bg-slate-50/50">
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">Need Clarifications</h3>
+                  <p className="text-xs font-bold text-slate-500 mt-0.5">Ask a question about: {task.name}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setClarificationTaskId(null);
+                    setClarificationQuestion('');
+                  }}
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSendClarification} className="p-6 space-y-4">
+                <div>
+                  <label htmlFor="clarification-msg" className="block text-xs font-black uppercase tracking-wider text-slate-500 mb-2">
+                    Your Question / Request
+                  </label>
+                  <textarea
+                    id="clarification-msg"
+                    value={clarificationQuestion}
+                    onChange={(e) => setClarificationQuestion(e.target.value)}
+                    placeholder="Type your question or what needs clarification..."
+                    rows={4}
+                    required
+                    autoFocus
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setClarificationTaskId(null);
+                      setClarificationQuestion('');
+                    }}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-black text-slate-700 transition-colors hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-black text-white hover:bg-indigo-700 transition-colors shadow-sm shadow-indigo-600/10 focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
+                  >
+                    Submit Question
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
     </section>
   );
 }

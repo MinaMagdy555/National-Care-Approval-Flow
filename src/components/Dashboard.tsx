@@ -1,7 +1,7 @@
 import React from 'react';
 import { useAppStore } from '../lib/store';
 import { TaskCard } from './TaskCard';
-import { AlertCircle, Clock, CheckCircle2, History, LucideIcon, XCircle, Search, Users, LayoutDashboard, X, FileText } from 'lucide-react';
+import { AlertCircle, Clock, CheckCircle2, History, LucideIcon, XCircle, Search, Users, LayoutDashboard, X, FileText, BriefcaseBusiness } from 'lucide-react';
 import { initialUsers } from '../lib/mockData';
 import { isDueThisWeek, isDueToday } from '../lib/deadlineUtils';
 import { isTaskArchived } from '../lib/archiveUtils';
@@ -95,8 +95,9 @@ export function Dashboard({
 }) {
   const { tasks, currentUser, environment, userList, appSettings } = useAppStore();
   const [popupCreatorId, setPopupCreatorId] = React.useState<string | null>(null);
-  const [popupState, setPopupState] = React.useState<'total' | 'finished' | 'active' | 'on_hold' | null>(null);
+  const [popupState, setPopupState] = React.useState<'total' | 'finished' | 'active' | 'on_hold' | 'working' | 'waiting_review' | 'to_review' | null>(null);
   const [searchQuery, setSearchQuery] = React.useState('');
+  const configs = getTaskTypeConfigs(appSettings);
 
   React.useEffect(() => {
     if (viewMode === 'performance') {
@@ -162,13 +163,8 @@ export function Dashboard({
 
   const creatorsWithStats = React.useMemo(() => {
     return graphicAndVideoUsers.map(creator => {
-      const isMinaCreator = creator.role === 'reviewer' || creator.email === 'minamagdy5555@gmail.com' || creator.id === 'user_1';
       const creatorTasks = tasks.filter(t => {
         if (t.environment !== environment) return false;
-        if (isMinaCreator) {
-          const isWaitingForMina = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status);
-          return t.handledBy.includes(creator.id) || isWaitingForMina;
-        }
         return t.handledBy.includes(creator.id);
       });
       
@@ -186,6 +182,26 @@ export function Dashboard({
       const activeCount = creatorTasks.length - finishedCount - onHoldCount;
       const workingCount = creatorTasks.filter(t => t.status === 'assigned_work' || t.status === 'draft').length;
       const reviewCount = activeCount - workingCount;
+
+      const creatorIsFirstRev = (appSettings.firstReviewerUserIds || []).includes(creator.id) ||
+        configs.some(c => c.fullReviewerUserIds?.includes(creator.id) || c.quickLookUserIds?.includes(creator.id));
+      const creatorIsFinalRev = (appSettings.finalReviewerUserIds || []).includes(creator.id) ||
+        configs.some(c => c.finalReviewerUserIds?.includes(creator.id));
+
+      let toReviewCount = 0;
+      if (creatorIsFirstRev) {
+        toReviewCount = tasks.filter(t => 
+          t.environment === environment && 
+          !isTaskArchived(t) &&
+          ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status)
+        ).length;
+      } else if (creatorIsFinalRev) {
+        toReviewCount = tasks.filter(t => 
+          t.environment === environment && 
+          !isTaskArchived(t) &&
+          (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director'))
+        ).length;
+      }
       
       return {
         creator,
@@ -194,10 +210,13 @@ export function Dashboard({
         onHoldCount,
         workingCount,
         reviewCount,
+        toReviewCount,
+        creatorIsFirstRev,
+        creatorIsFinalRev,
         totalCount: creatorTasks.length,
       };
     });
-  }, [graphicAndVideoUsers, tasks, environment]);
+  }, [graphicAndVideoUsers, tasks, environment, appSettings, configs]);
 
   const filteredCreators = React.useMemo(() => {
     if (!searchQuery.trim()) return creatorsWithStats;
@@ -208,7 +227,6 @@ export function Dashboard({
     );
   }, [creatorsWithStats, searchQuery]);
 
-  const configs = getTaskTypeConfigs(appSettings);
   const isFirstRev = (appSettings.firstReviewerUserIds || []).includes(currentUser.id) ||
     configs.some(c => c.fullReviewerUserIds?.includes(currentUser.id) || c.quickLookUserIds?.includes(currentUser.id));
   const isFinalRev = (appSettings.finalReviewerUserIds || []).includes(currentUser.id) ||
@@ -218,6 +236,7 @@ export function Dashboard({
   const canViewFullWorkspace = userCanViewFullWorkspace(currentUser, appSettings);
   const envTasks = tasks.filter(t => t.environment === environment && !isTaskArchived(t) && (canViewFullWorkspace || canUserAccessTask(t, currentUser, appSettings)));
   const workflowTasks = envTasks.filter(task => task.status !== 'assigned_work');
+  const myActiveTasks = envTasks.filter(t => t.status === 'assigned_work' && t.handledBy.includes(currentUser.id));
   const isScopedToCurrentOwner = (task: typeof envTasks[number]) => (
     !isFirstRev && !isFinalRev
       ? true
@@ -270,20 +289,47 @@ export function Dashboard({
   const popupTasks = React.useMemo(() => {
     if (!popupCreatorId || !popupState) return [];
 
-    const isSelectedMina = userList.find(u => u.id === popupCreatorId)?.role === 'reviewer' || 
-                           userList.find(u => u.id === popupCreatorId)?.email === 'minamagdy5555@gmail.com' ||
-                           popupCreatorId === 'user_1';
+    const creator = userList.find(u => u.id === popupCreatorId);
+    const creatorIsFirstRev = creator ? (appSettings.firstReviewerUserIds || []).includes(creator.id) ||
+      configs.some(c => c.fullReviewerUserIds?.includes(creator.id) || c.quickLookUserIds?.includes(creator.id)) : false;
+    const creatorIsFinalRev = creator ? (appSettings.finalReviewerUserIds || []).includes(creator.id) ||
+      configs.some(c => c.finalReviewerUserIds?.includes(creator.id)) : false;
 
     return tasks.filter(t => {
       if (t.environment !== environment) return false;
       
-      let belongsToCreator = false;
-      if (isSelectedMina) {
-        const isWaitingForMina = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status);
-        belongsToCreator = t.handledBy.includes(popupCreatorId) || isWaitingForMina;
-      } else {
-        belongsToCreator = t.handledBy.includes(popupCreatorId);
+      // If we clicked on 'to_review' (from Team Performance)
+      if (popupState === 'to_review') {
+        if (creatorIsFirstRev) {
+          return ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status) && !isTaskArchived(t);
+        }
+        if (creatorIsFinalRev) {
+          return (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && !isTaskArchived(t);
+        }
+        return false;
       }
+
+      // Check if task belongs to the creator
+      const belongsToCreator = t.handledBy.includes(popupCreatorId);
+
+      // If we are looking for 'active' tasks, for reviewers we also include tasks waiting for their review
+      if (popupState === 'active') {
+        const isFinished = t.status === 'approved' || t.status === 'completed' || t.status === 'approved_by_art_director' || isTaskArchived(t);
+        if (isFinished || t.status === 'on_hold') return false;
+        
+        if (belongsToCreator) return true;
+        
+        // If it doesn't belong to them but they are a reviewer, check if it is waiting for their review
+        if (creatorIsFirstRev) {
+          return ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status);
+        }
+        if (creatorIsFinalRev) {
+          return ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director');
+        }
+        return false;
+      }
+
+      // Otherwise, the task must belong to the creator:
       if (!belongsToCreator) return false;
 
       // Filter based on selected state:
@@ -293,14 +339,17 @@ export function Dashboard({
       if (popupState === 'on_hold') {
         return t.status === 'on_hold';
       }
-      if (popupState === 'active') {
+      if (popupState === 'working') {
+        return t.status === 'assigned_work' || t.status === 'draft';
+      }
+      if (popupState === 'waiting_review') {
         const isFinished = t.status === 'approved' || t.status === 'completed' || t.status === 'approved_by_art_director' || isTaskArchived(t);
-        return !isFinished && t.status !== 'on_hold';
+        return !isFinished && t.status !== 'on_hold' && t.status !== 'assigned_work' && t.status !== 'draft';
       }
       
       return true;
     });
-  }, [tasks, popupCreatorId, popupState, environment, userList]);
+  }, [tasks, popupCreatorId, popupState, environment, userList, appSettings, configs]);
 
   const needsFullReviewCount = workflowTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status) && isScopedToCurrentOwner(t)).length;
   const needsQuickLookCount = workflowTasks.filter(t => t.status === 'waiting_reviewer_quick_look' && isScopedToCurrentOwner(t)).length;
@@ -502,34 +551,43 @@ export function Dashboard({
               </>
             )}
 
-            {isLeaderboardOrMinaUser && creatorsWithStats.map(({ creator, workingCount, reviewCount }) => (
-              <button
-                key={creator.id}
-                type="button"
-                onClick={() => {
-                  setPopupCreatorId(creator.id);
-                  setPopupState('active');
-                }}
-                className="group relative flex h-28 min-w-0 overflow-hidden rounded-xl border bg-white text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:h-32 sm:rounded-2xl border-slate-200"
-              >
-                <div className="relative z-10 flex w-full flex-col justify-between p-4">
-                  <div className="flex flex-col min-w-0">
-                    <span className="truncate text-sm font-bold leading-tight sm:text-base text-slate-800">{creator.name.split(' ')[0]}</span>
-                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-0.5 truncate">{creator.jobTitle || 'Content Creator'}</span>
-                  </div>
-                  <div className="flex flex-col gap-1.5 mt-auto">
-                    <div className="flex items-center justify-between text-xs font-semibold">
-                      <span className="text-slate-500">Working On:</span>
-                      <span className="font-bold text-amber-600">{workingCount}</span>
+            {isLeaderboardOrMinaUser && creatorsWithStats.map(({ creator, workingCount, reviewCount, toReviewCount, creatorIsFirstRev, creatorIsFinalRev }) => {
+              const isReviewer = creatorIsFirstRev || creatorIsFinalRev;
+              return (
+                <button
+                  key={creator.id}
+                  type="button"
+                  onClick={() => {
+                    setPopupCreatorId(creator.id);
+                    setPopupState('active');
+                  }}
+                  className="group relative flex h-32 sm:h-36 min-w-0 overflow-hidden rounded-xl border bg-white text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md border-slate-200 sm:rounded-2xl"
+                >
+                  <div className="relative z-10 flex w-full flex-col justify-between p-4">
+                    <div className="flex flex-col min-w-0">
+                      <span className="truncate text-sm font-bold leading-tight sm:text-base text-slate-800">{creator.name.split(' ')[0]}</span>
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-0.5 truncate">{creator.jobTitle || 'Content Creator'}</span>
                     </div>
-                    <div className="flex items-center justify-between text-xs font-semibold">
-                      <span className="text-slate-500">Sent to Approve:</span>
-                      <span className="font-bold text-indigo-600">{reviewCount}</span>
+                    <div className="flex flex-col gap-1 mt-auto">
+                      <div className="flex items-center justify-between text-xs font-semibold">
+                        <span className="text-slate-500">Working On:</span>
+                        <span className="font-bold text-amber-600">{workingCount}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs font-semibold">
+                        <span className="text-slate-500">Sent to Approve:</span>
+                        <span className="font-bold text-indigo-600">{reviewCount}</span>
+                      </div>
+                      {isReviewer && (
+                        <div className="flex items-center justify-between text-xs font-semibold">
+                          <span className="text-slate-500">To Review:</span>
+                          <span className="font-bold text-rose-600">{toReviewCount}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
-              </button>
-            ))}
+                </button>
+              );
+            })}
           </div>
         )}
 
@@ -582,16 +640,21 @@ export function Dashboard({
           </div>
 
           <div className="flex flex-col gap-4 w-full">
-            {filteredCreators.map(({ creator, finishedCount, activeCount, onHoldCount, totalCount }) => {
+            {filteredCreators.map(({ creator, finishedCount, activeCount, onHoldCount, totalCount, workingCount, reviewCount, toReviewCount, creatorIsFirstRev, creatorIsFinalRev }) => {
               const handleCreatorSelect = () => {
                 setPopupCreatorId(creator.id);
                 setPopupState('total');
               };
 
-              const handleStateClick = (state: 'total' | 'finished' | 'active' | 'on_hold') => {
+              const handleStateClick = (state: 'total' | 'finished' | 'active' | 'on_hold' | 'working' | 'waiting_review' | 'to_review') => {
                 setPopupCreatorId(creator.id);
                 setPopupState(state);
               };
+
+              const isReviewer = creatorIsFirstRev || creatorIsFinalRev;
+              const gridStyle = isReviewer 
+                ? { gridTemplateColumns: 'repeat(6, minmax(0, 1fr))' } 
+                : { gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' };
 
               return (
                 <div
@@ -617,7 +680,7 @@ export function Dashboard({
                     </div>
                   </div>
 
-                  <div className="mt-4 grid grid-cols-4 gap-2 border-t border-slate-100 pt-3 text-center">
+                  <div className="mt-4 grid gap-2 border-t border-slate-100 pt-3 text-center" style={gridStyle}>
                     <button
                       type="button"
                       onClick={(e) => {
@@ -644,13 +707,37 @@ export function Dashboard({
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleStateClick('active');
+                        handleStateClick('working');
                       }}
                       className="rounded-lg p-1.5 transition-colors hover:bg-amber-50/50 flex flex-col items-center"
                     >
-                      <span className="block text-[9px] font-black text-amber-600/80 uppercase tracking-wide">Active</span>
-                      <span className="mt-0.5 block text-sm font-black text-amber-600 sm:text-base">{activeCount}</span>
+                      <span className="block text-[9px] font-black text-amber-600/80 uppercase tracking-wide">Working On</span>
+                      <span className="mt-0.5 block text-sm font-black text-amber-600 sm:text-base">{workingCount}</span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleStateClick('waiting_review');
+                      }}
+                      className="rounded-lg p-1.5 transition-colors hover:bg-indigo-50/50 flex flex-col items-center"
+                    >
+                      <span className="block text-[9px] font-black text-indigo-600/80 uppercase tracking-wide">Waiting Review</span>
+                      <span className="mt-0.5 block text-sm font-black text-indigo-600 sm:text-base">{reviewCount}</span>
+                    </button>
+                    {isReviewer && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStateClick('to_review');
+                        }}
+                        className="rounded-lg p-1.5 transition-colors hover:bg-rose-50/50 flex flex-col items-center"
+                      >
+                        <span className="block text-[9px] font-black text-rose-600/80 uppercase tracking-wide">To Review</span>
+                        <span className="mt-0.5 block text-sm font-black text-rose-600 sm:text-base">{toReviewCount}</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={(e) => {
@@ -672,6 +759,22 @@ export function Dashboard({
 
       {viewMode === 'overview' && (
         <>
+          {myActiveTasks.length > 0 && (
+            <section>
+              <div className="mb-6 flex items-center justify-between border-b border-slate-200 pb-3">
+                <h3 className="flex items-center gap-3 text-lg font-bold text-slate-900">
+                  Active Tasks to Work On
+                  <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-black text-amber-700">{myActiveTasks.length}</span>
+                </h3>
+              </div>
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
+                {myActiveTasks.map(task => (
+                  <TaskCard key={task.id} task={task} onClick={onOpenTask} />
+                ))}
+              </div>
+            </section>
+          )}
+
           {needsAction.length > 0 && (
             <section>
               <div className="mb-6 flex items-center justify-between border-b border-slate-200 pb-3">
@@ -736,7 +839,7 @@ export function Dashboard({
             </section>
           )}
 
-          {needsAction.length === 0 && returned.length === 0 && waitingOthers.length === 0 && approved.length === 0 && (
+          {needsAction.length === 0 && returned.length === 0 && waitingOthers.length === 0 && approved.length === 0 && myActiveTasks.length === 0 && (
             <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white py-20 text-center">
               <p className="font-medium text-slate-500">{isWorkspaceMonitor ? 'No tasks in this workspace.' : 'No tasks in your queue.'}</p>
             </div>
@@ -764,6 +867,9 @@ export function Dashboard({
                   {popupState === 'finished' && 'Finished Tasks'}
                   {popupState === 'active' && 'Active Tasks'}
                   {popupState === 'on_hold' && 'On Hold Tasks'}
+                  {popupState === 'working' && 'Working On Tasks'}
+                  {popupState === 'waiting_review' && 'Waiting Review Tasks'}
+                  {popupState === 'to_review' && 'Tasks to Review'}
                 </h3>
                 <p className="text-xs font-semibold text-slate-500 mt-0.5">
                   For {userList.find(u => u.id === popupCreatorId)?.name} • {popupTasks.length} {popupTasks.length === 1 ? 'task' : 'tasks'} found
@@ -789,8 +895,9 @@ export function Dashboard({
                 </div>
               ) : popupState === 'active' ? (
                 (() => {
-                  const workingTasks = popupTasks.filter(t => t.status === 'assigned_work' || t.status === 'draft');
-                  const approvalTasks = popupTasks.filter(t => t.status !== 'assigned_work' && t.status !== 'draft');
+                  const workingTasks = popupTasks.filter(t => t.handledBy.includes(popupCreatorId) && (t.status === 'assigned_work' || t.status === 'draft'));
+                  const approvalTasks = popupTasks.filter(t => t.handledBy.includes(popupCreatorId) && t.status !== 'assigned_work' && t.status !== 'draft');
+                  const toReviewTasks = popupTasks.filter(t => !t.handledBy.includes(popupCreatorId));
 
                   const renderTaskItem = (task: Task) => {
                     const getStatusBadge = (status: string) => {
@@ -873,6 +980,15 @@ export function Dashboard({
                           <div className="text-[11px] font-black tracking-wider text-slate-400 uppercase pl-1">Sent for Approval ({approvalTasks.length})</div>
                           <div className="space-y-2">
                             {approvalTasks.map(renderTaskItem)}
+                          </div>
+                        </div>
+                      )}
+
+                      {toReviewTasks.length > 0 && (
+                        <div className="space-y-2">
+                          <div className="text-[11px] font-black tracking-wider text-slate-400 uppercase pl-1">Tasks I Need to Review ({toReviewTasks.length})</div>
+                          <div className="space-y-2">
+                            {toReviewTasks.map(renderTaskItem)}
                           </div>
                         </div>
                       )}

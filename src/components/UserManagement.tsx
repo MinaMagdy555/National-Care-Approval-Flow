@@ -194,7 +194,7 @@ export function UserManagement() {
                         type="checkbox"
                         checked={appSettings.workAssignmentCreatorIds.includes(user.id)}
                         onChange={() => togglePermission(user.id, 'workAssignmentCreatorIds')}
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        className="mt-1 h-4 w-4 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                       />
                       <div>
                         <p className="text-xs font-black text-slate-900">Assign Work to Team</p>
@@ -207,7 +207,7 @@ export function UserManagement() {
                         type="checkbox"
                         checked={(appSettings.firstReviewerUserIds || []).includes(user.id)}
                         onChange={() => togglePermission(user.id, 'firstReviewerUserIds')}
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        className="mt-1 h-4 w-4 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                       />
                       <div>
                         <p className="text-xs font-black text-slate-900">First Reviewer (First Rev.)</p>
@@ -220,7 +220,7 @@ export function UserManagement() {
                         type="checkbox"
                         checked={(appSettings.finalReviewerUserIds || []).includes(user.id)}
                         onChange={() => togglePermission(user.id, 'finalReviewerUserIds')}
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        className="mt-1 h-4 w-4 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                       />
                       <div>
                         <p className="text-xs font-black text-slate-900">Final Reviewer (Final Rev.)</p>
@@ -233,7 +233,7 @@ export function UserManagement() {
                         type="checkbox"
                         checked={(appSettings.viewAllWorkloadUserIds || []).includes(user.id)}
                         onChange={() => togglePermission(user.id, 'viewAllWorkloadUserIds')}
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        className="mt-1 h-4 w-4 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                       />
                       <div>
                         <p className="text-xs font-black text-slate-900">View All Workload</p>
@@ -246,7 +246,7 @@ export function UserManagement() {
                         type="checkbox"
                         checked={!appSettings.selfAssignmentBlockedIds.includes(user.id)}
                         onChange={() => togglePermission(user.id, 'selfAssignmentBlockedIds')}
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        className="mt-1 h-4 w-4 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                       />
                       <div>
                         <p className="text-xs font-black text-slate-900">Assign Tasks to Self</p>
@@ -259,7 +259,7 @@ export function UserManagement() {
                         type="checkbox"
                         checked={!appSettings.neverHandlerIds.includes(user.id)}
                         onChange={() => togglePermission(user.id, 'neverHandlerIds')}
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        className="mt-1 h-4 w-4 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                       />
                       <div>
                         <p className="text-xs font-black text-slate-900">Can Be Assigned Tasks</p>
@@ -272,7 +272,7 @@ export function UserManagement() {
                         type="checkbox"
                         checked={appSettings.videoOnlyHandlerIds.includes(user.id)}
                         onChange={() => togglePermission(user.id, 'videoOnlyHandlerIds')}
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        className="mt-1 h-4 w-4 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                       />
                       <div>
                         <p className="text-xs font-black text-slate-900">Video Tasks Only</p>
@@ -285,7 +285,7 @@ export function UserManagement() {
                         type="checkbox"
                         checked={appSettings.settingsManagerUserIds.includes(user.id)}
                         onChange={() => togglePermission(user.id, 'settingsManagerUserIds')}
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        className="mt-1 h-4 w-4 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                       />
                       <div>
                         <p className="text-xs font-black text-slate-900">Manage Tool Settings</p>
@@ -298,7 +298,7 @@ export function UserManagement() {
                         type="checkbox"
                         checked={appSettings.contributorAssignerIds.includes(user.id)}
                         onChange={() => togglePermission(user.id, 'contributorAssignerIds')}
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        className="mt-1 h-4 w-4 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                       />
                       <div>
                         <p className="text-xs font-black text-slate-900">Assign Contributors</p>
@@ -311,7 +311,7 @@ export function UserManagement() {
                         type="checkbox"
                         checked={appSettings.alwaysAssignableHandlerIds.includes(user.id)}
                         onChange={() => togglePermission(user.id, 'alwaysAssignableHandlerIds')}
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        className="mt-1 h-4 w-4 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                       />
                       <div>
                         <p className="text-xs font-black text-slate-900">Always Assignable</p>

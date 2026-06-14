@@ -72,6 +72,22 @@ function MissingSharedFile({ compact = false }: { compact?: boolean }) {
   );
 }
 
+function NoFilesUploadedPlaceholder({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-slate-100 p-3 text-center text-slate-500">
+      <FileText className={compact ? 'h-5 w-5' : 'h-8 w-8'} />
+      <span className={`${compact ? 'text-[10px]' : 'text-sm'} font-black uppercase tracking-wide`}>
+        No files uploaded yet
+      </span>
+      {!compact && (
+        <p className="max-w-sm text-xs font-semibold text-slate-400">
+          This task has been assigned but no work has been uploaded yet.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function isDriveFile(file?: Pick<UploadedTaskFile, 'storageProvider' | 'driveFileId' | 'webViewLink'>) {
   return file?.storageProvider === 'drive' || Boolean(file?.driveFileId || file?.webViewLink);
 }
@@ -439,7 +455,9 @@ export function TaskThumbnail({ task }: { task: Task }) {
 
   let content: React.ReactNode;
 
-  if (hasLocalOnlyFile) {
+  if (task.status === 'assigned_work') {
+    content = <NoFilesUploadedPlaceholder compact />;
+  } else if (hasLocalOnlyFile) {
     content = <MissingSharedFile compact />;
   } else if (isStoredTaskThumbnail(task)) {
     const previewFile = file || { id: task.id, name: task.name, type: 'image/jpeg', size: 0, url: task.thumbnailUrl };

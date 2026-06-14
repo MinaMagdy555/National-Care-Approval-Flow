@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Plus, Settings, ShieldCheck } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Plus, Settings, ShieldCheck, X, Clock } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { PriorityTone, Role, TaskTypeConfig } from '../lib/types';
 import { normalizeSettingId, priorityToneClasses, normalizeTaskTypeId, cleanTaskTypeKey, getTaskTypeConfigs } from '../lib/appSettings';
@@ -45,6 +45,24 @@ function toggleValue(values: string[], value: string) {
 export function SettingsManagement() {
   const { appSettings, canManageSettings, updateAppSettings, userList, users } = useAppStore();
   const [priorityLabel, setPriorityLabel] = useState('');
+  const [showCustomWorkingHoursModal, setShowCustomWorkingHoursModal] = useState(false);
+  const [customHoursTargetType, setCustomHoursTargetType] = useState<'employee' | 'position' | 'role'>('employee');
+  const [customHoursTargetValue, setCustomHoursTargetValue] = useState<string>('');
+  const [customHoursStartTime, setCustomHoursStartTime] = useState<string>('09:00');
+  const [customHoursEndTime, setCustomHoursEndTime] = useState<string>('17:30');
+  const [customHoursWorkdays, setCustomHoursWorkdays] = useState<number[]>([0, 1, 2, 3, 4]);
+
+  // Sync target value on target type change
+  useEffect(() => {
+    if (customHoursTargetType === 'employee') {
+      setCustomHoursTargetValue(userList[0]?.id || '');
+    } else if (customHoursTargetType === 'position') {
+      const uniquePositions = Array.from(new Set(userList.map(u => u.jobTitle).filter(Boolean))) as string[];
+      setCustomHoursTargetValue(uniquePositions[0] || '');
+    } else {
+      setCustomHoursTargetValue('team_member');
+    }
+  }, [customHoursTargetType, userList]);
   const [priorityTone, setPriorityTone] = useState<PriorityTone>('blue');
 
   
@@ -249,30 +267,278 @@ export function SettingsManagement() {
             />
           </label>
         </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {WEEKDAYS.map(day => {
-            const active = appSettings.businessCalendar.workdays.includes(day.value);
-            return (
-              <button
-                key={day.value}
-                type="button"
-                onClick={() => updateAppSettings(settings => ({
-                  ...settings,
-                  businessCalendar: {
-                    ...settings.businessCalendar,
-                    workdays: active
-                      ? settings.businessCalendar.workdays.filter(value => value !== day.value)
-                      : [...settings.businessCalendar.workdays, day.value].sort(),
-                  },
-                }))}
-                className={cn("rounded-lg border px-3 py-2 text-xs font-black", active ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-500")}
-              >
-                {day.label}
-              </button>
-            );
-          })}
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-2">
+            {WEEKDAYS.map(day => {
+              const active = appSettings.businessCalendar.workdays.includes(day.value);
+              return (
+                <button
+                  key={day.value}
+                  type="button"
+                  onClick={() => updateAppSettings(settings => ({
+                    ...settings,
+                    businessCalendar: {
+                      ...settings.businessCalendar,
+                      workdays: active
+                        ? settings.businessCalendar.workdays.filter(value => value !== day.value)
+                        : [...settings.businessCalendar.workdays, day.value].sort(),
+                    },
+                  }))}
+                  className={cn("rounded-lg border px-3 py-2 text-xs font-black", active ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-500")}
+                >
+                  {day.label}
+                </button>
+              );
+            })}
+          </div>
+          
+          <button
+            type="button"
+            onClick={() => setShowCustomWorkingHoursModal(true)}
+            className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-black text-white hover:bg-indigo-700 transition-colors shadow-sm"
+          >
+            <Clock className="h-4 w-4" /> Customize Working Hours
+          </button>
         </div>
       </section>
+
+      {showCustomWorkingHoursModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-2xl rounded-2xl bg-white shadow-xl flex flex-col max-h-[85vh] overflow-hidden border border-slate-100">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 p-4">
+              <div>
+                <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
+                  <Clock className="h-5 w-5 text-indigo-600" /> Customized Working Hours
+                </h3>
+                <p className="text-xs font-semibold text-slate-400 mt-0.5">Configure schedules for specific positions, roles, or employees.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCustomWorkingHoursModal(false)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Tabs Header */}
+            <div className="flex border-b border-slate-200 bg-slate-50/50 p-1">
+              {(['position', 'role', 'employee'] as const).map(tab => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setCustomHoursTargetType(tab)}
+                  className={cn(
+                    "flex-1 py-2.5 text-xs font-black uppercase tracking-wider rounded-lg transition-all border border-transparent",
+                    customHoursTargetType === tab
+                      ? "bg-white text-indigo-600 shadow-sm border-slate-200/50 font-black"
+                      : "text-slate-500 hover:text-slate-800 font-bold"
+                  )}
+                >
+                  {tab === 'position' ? 'Position' : tab === 'role' ? 'Role' : 'Employee'}
+                </button>
+              ))}
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {/* Form Card */}
+              <div className="rounded-xl border border-slate-100 bg-slate-50/30 p-3.5 space-y-3.5">
+                <h4 className="text-xs font-black uppercase tracking-wider text-indigo-600">
+                  New {customHoursTargetType === 'position' ? 'Position' : customHoursTargetType === 'role' ? 'Role' : 'Employee'} Schedule
+                </h4>
+                
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="text-xs font-black uppercase tracking-wider text-slate-400">
+                    Select {customHoursTargetType === 'position' ? 'Position' : customHoursTargetType === 'role' ? 'Role' : 'Employee'}
+                    {customHoursTargetType === 'employee' ? (
+                      <select
+                        value={customHoursTargetValue}
+                        onChange={event => setCustomHoursTargetValue(event.target.value)}
+                        className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 shadow-sm outline-none"
+                      >
+                        {userList.map(u => (
+                          <option key={u.id} value={u.id}>{u.name} ({u.jobTitle || u.role})</option>
+                        ))}
+                      </select>
+                    ) : customHoursTargetType === 'position' ? (
+                      <select
+                        value={customHoursTargetValue}
+                        onChange={event => setCustomHoursTargetValue(event.target.value)}
+                        className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 shadow-sm outline-none"
+                      >
+                        {Array.from(new Set(userList.map(u => u.jobTitle).filter(Boolean))).map(pos => (
+                          <option key={pos} value={pos}>{pos}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <select
+                        value={customHoursTargetValue}
+                        onChange={event => setCustomHoursTargetValue(event.target.value)}
+                        className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 shadow-sm outline-none"
+                      >
+                        <option value="team_member">Team Member</option>
+                        <option value="reviewer">Reviewer</option>
+                        <option value="art_director">Art Director</option>
+                        <option value="team_leader">Team Leader</option>
+                        <option value="manager">Manager</option>
+                        <option value="developer">Developer</option>
+                        <option value="marketing_manager">Marketing Manager</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                    )}
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-xs font-black uppercase tracking-wider text-slate-400">
+                      Start Time
+                      <input
+                        type="time"
+                        value={customHoursStartTime}
+                        onChange={event => setCustomHoursStartTime(event.target.value)}
+                        onClick={(e) => {
+                          try { e.currentTarget.showPicker(); } catch (err) {}
+                        }}
+                        className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-900 cursor-pointer outline-none"
+                      />
+                    </label>
+                    <label className="text-xs font-black uppercase tracking-wider text-slate-400">
+                      End Time
+                      <input
+                        type="time"
+                        value={customHoursEndTime}
+                        onChange={event => setCustomHoursEndTime(event.target.value)}
+                        onClick={(e) => {
+                          try { e.currentTarget.showPicker(); } catch (err) {}
+                        }}
+                        className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-900 cursor-pointer outline-none"
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-xs font-black uppercase tracking-wider text-slate-400">Workdays</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {WEEKDAYS.map(day => {
+                      const active = customHoursWorkdays.includes(day.value);
+                      return (
+                        <button
+                          key={day.value}
+                          type="button"
+                          onClick={() => setCustomHoursWorkdays(prev => 
+                            active ? prev.filter(v => v !== day.value) : [...prev, day.value].sort()
+                          )}
+                          className={cn(
+                            "rounded-lg border px-2.5 py-1.5 text-xs font-black transition-colors",
+                            active ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                          )}
+                        >
+                          {day.label.slice(0, 3)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!customHoursTargetValue) return;
+                      const newSetting = {
+                        id: `wh_${Date.now().toString(36)}`,
+                        targetType: customHoursTargetType,
+                        targetValue: customHoursTargetValue,
+                        startTime: customHoursStartTime,
+                        endTime: customHoursEndTime,
+                        workdays: customHoursWorkdays,
+                      };
+
+                      updateAppSettings(settings => {
+                        const currentList = settings.customWorkingHours || [];
+                        const filteredList = currentList.filter(item => 
+                          !(item.targetType === customHoursTargetType && item.targetValue === customHoursTargetValue)
+                        );
+                        return {
+                          ...settings,
+                          customWorkingHours: [...filteredList, newSetting],
+                        };
+                      });
+                    }}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white hover:bg-indigo-700 transition-colors shadow-sm"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Save Schedule
+                  </button>
+                </div>
+              </div>
+
+              {/* List Configured Schedules for Active Tab */}
+              <div className="space-y-2">
+                <h4 className="text-xs font-black uppercase tracking-wider text-slate-500">
+                  Configured {customHoursTargetType === 'position' ? 'Positions' : customHoursTargetType === 'role' ? 'Roles' : 'Employees'}
+                </h4>
+                {(() => {
+                  const filteredWH = (appSettings.customWorkingHours || []).filter(item => item.targetType === customHoursTargetType);
+                  if (filteredWH.length === 0) {
+                    return <p className="text-xs text-slate-400 italic py-2">No schedules configured for this tab yet.</p>;
+                  }
+                  return (
+                    <div className="divide-y divide-slate-100 rounded-xl border border-slate-100 bg-slate-50/20 overflow-hidden shadow-sm">
+                      {filteredWH.map(schedule => {
+                        let displayLabel = '';
+                        if (schedule.targetType === 'employee') {
+                          const emp = userList.find(u => u.id === schedule.targetValue);
+                          displayLabel = emp ? emp.name : schedule.targetValue;
+                        } else if (schedule.targetType === 'position') {
+                          displayLabel = schedule.targetValue;
+                        } else {
+                          displayLabel = schedule.targetValue.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase());
+                        }
+
+                        const daysStr = schedule.workdays.map(d => WEEKDAYS.find(wd => wd.value === d)?.label).join(', ');
+
+                        return (
+                          <div key={schedule.id} className="flex items-center justify-between p-3">
+                            <div>
+                              <div className="text-xs font-bold text-slate-900">{displayLabel}</div>
+                              <div className="text-[10px] text-slate-500 font-semibold mt-0.5">
+                                Hours: {schedule.startTime} - {schedule.endTime} | Days: {daysStr || 'None'}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => updateAppSettings(settings => ({
+                                ...settings,
+                                customWorkingHours: (settings.customWorkingHours || []).filter(item => item.id !== schedule.id)
+                              }))}
+                              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-50 hover:text-rose-600 transition-all"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-slate-100 bg-slate-50/50 p-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowCustomWorkingHoursModal(false)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="mb-3 text-sm font-black uppercase tracking-wider text-slate-500">Priorities</h2>
@@ -444,7 +710,7 @@ export function SettingsManagement() {
                 type="checkbox"
                 checked={taskTypeDetailed}
                 onChange={event => setTaskTypeDetailed(event.target.checked)}
-                className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
               />
               Detailed Review Workflow (Request Edits Form)
             </label>
@@ -595,7 +861,7 @@ export function SettingsManagement() {
                           type="checkbox"
                           checked={editingDetailed}
                           onChange={event => setEditingDetailed(event.target.checked)}
-                          className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                         />
                         Detailed Review Workflow
                       </label>
@@ -834,7 +1100,7 @@ export function SettingsManagement() {
                               ...settings,
                               [col.key]: toggleValue(settings[col.key], user.id),
                             }))}
-                            className="h-4.5 w-4.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/30 transition-all cursor-pointer"
+                            className="h-4.5 w-4.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500/30 transition-all cursor-pointer"
                           />
                         </div>
                       </td>
@@ -863,7 +1129,7 @@ export function SettingsManagement() {
                                 }),
                               };
                             })}
-                            className="h-4.5 w-4.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/30 transition-all cursor-pointer"
+                            className="h-4.5 w-4.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500/30 transition-all cursor-pointer"
                           />
                         </div>
                       </td>

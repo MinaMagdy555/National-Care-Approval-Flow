@@ -105,6 +105,7 @@ export interface AppSettings {
   alwaysAssignableHandlerIds: string[];
   flowLabels: Record<string, string>;
   customPermissions?: Array<{ id: string; label: string; userIds: string[] }>;
+  customWorkingHours?: CustomWorkingHours[];
   taskTypes?: Array<string | TaskTypeConfig>;
   campaignPlatforms?: string[];
   hiddenColumns?: string[];
@@ -112,6 +113,15 @@ export interface AppSettings {
   finalReviewerUserIds?: string[];
   viewAllWorkloadUserIds?: string[];
   updatedAt: string;
+}
+
+export interface CustomWorkingHours {
+  id: string;
+  targetType: 'employee' | 'position' | 'role';
+  targetValue: string;
+  startTime: string;
+  endTime: string;
+  workdays: number[];
 }
 
 export type AuthStatus =
@@ -183,6 +193,7 @@ export interface TaskComment {
     | 'marwa_rejection'
     | 'content_approved'
     | 'content_rejected'
+    | 'clarification_needed'
     | 'assignment_change'
     | 'review_route_change'
     | 'publish_schedule_change'

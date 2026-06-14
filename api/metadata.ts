@@ -1,7 +1,3 @@
-import tailwindcss from '@tailwindcss/vite';
-import react from '@vitejs/plugin-react';
-import path from 'path';
-import {defineConfig, loadEnv} from 'vite';
 import https from 'https';
 
 function fetchUrlTitle(targetUrl: string): Promise<string | null> {
@@ -80,51 +76,19 @@ function fetchUrlTitle(targetUrl: string): Promise<string | null> {
   });
 }
 
-export default defineConfig(({mode}) => {
-  const env = loadEnv(mode, '.', '');
-  return {
-    plugins: [
-      react(),
-      tailwindcss(),
-      {
-        name: 'metadata-scraper',
-        configureServer(server) {
-          server.middlewares.use('/api/metadata', async (req, res) => {
-            const urlObj = new URL(req.url || '', 'http://localhost');
-            const targetUrl = urlObj.searchParams.get('url');
-            if (!targetUrl) {
-              res.statusCode = 400;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ error: 'url parameter is required' }));
-              return;
-            }
-            try {
-              const title = await fetchUrlTitle(targetUrl);
-              res.statusCode = 200;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ title }));
-            } catch (err) {
-              res.statusCode = 500;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ error: String(err) }));
-            }
-          });
-        }
-      }
-    ],
-    base: env.VITE_BASE_PATH || '/',
-    define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-    },
-    resolve: {
-      alias: {
-        '@': path.resolve(__dirname, '.'),
-      },
-    },
-    server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modify—file watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
-    },
-  };
-});
+export default async function handler(req: any, res: any) {
+  const urlObj = new URL(req.url || '', 'http://localhost');
+  const targetUrl = urlObj.searchParams.get('url');
+
+  if (!targetUrl) {
+    res.status(400).json({ error: 'url parameter is required' });
+    return;
+  }
+
+  try {
+    const title = await fetchUrlTitle(targetUrl);
+    res.status(200).json({ title });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+}

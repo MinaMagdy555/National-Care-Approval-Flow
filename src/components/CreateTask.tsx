@@ -100,12 +100,7 @@ export function CreateTask({
       if (taskType === 'video' && !linkedFile.type.startsWith('video/')) {
         throw new Error('This is a video task. Please provide a link to a video file.');
       }
-      if (customFileName.trim()) {
-        linkedFile.name = customFileName.trim();
-      } else if (!linkedFile.name || linkedFile.name === 'Google Drive file' || linkedFile.name === 'Google Docs file' || linkedFile.name === 'Google Drive folder' || linkedFile.name === 'Uploaded file') {
-        const nextIndex = linkedFiles.length + 1;
-        linkedFile.name = taskName ? (linkedFiles.length > 0 ? `${taskName} (${nextIndex})` : taskName) : 'Attachment';
-      }
+      linkedFile.name = customFileName.trim() || linkedFile.name || 'Shared Link';
       setLinkedFiles(prev => (
         prev.some(file => file.url === linkedFile.url || (file.driveFileId && file.driveFileId === linkedFile.driveFileId))
           ? prev
@@ -342,7 +337,7 @@ export function CreateTask({
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {canChooseCreator && (
                   <div className="col-span-2">
-                    <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Task Creator *</label>
+                    <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Task Assigner *</label>
                     <CustomSelect
                       value={createdBy}
                       onChange={value => {
@@ -393,7 +388,7 @@ export function CreateTask({
                   />
                 </div>
                 )}
-                {taskType === 'campaign' && (
+                {taskType === 'campaign' && !isAssignmentUploadMode && (
                   <div className="col-span-2 grid grid-cols-1 gap-4 rounded-xl border border-emerald-100 bg-emerald-50/60 p-4 sm:grid-cols-2">
                     <div>
                       <label className="block text-[10px] font-black text-emerald-700 uppercase tracking-wider mb-1.5">Publish Date & Time</label>
@@ -462,12 +457,12 @@ export function CreateTask({
                 Paste a shared Google Drive or Google Docs link. The task preview opens inside this tool.
               </p>
 
-              <div className="mb-3">
+               <div className="mb-3">
                 <input
                   type="text"
                   value={customFileName}
                   onChange={e => setCustomFileName(e.target.value)}
-                  placeholder="File Name (Optional)"
+                  placeholder="File Name"
                   className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm font-bold text-slate-900 outline-none transition-all placeholder:text-slate-400 placeholder:font-medium focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
                 />
               </div>

@@ -1,8 +1,14 @@
-import { defaultAppSettings, getPriorityWeightFromSettings, isAssignableHandlerWithSettings } from './appSettings';
+import { AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID, MARWA_ID, MINA_ID, defaultAppSettings, getPriorityWeightFromSettings, isAssignableHandlerWithSettings } from './appSettings';
 import { AppSettings, AssignmentPeriod, Priority, Task, User } from './types';
 
-export function canCreateWorkAssignment(user: Pick<User, 'id' | 'role' | 'name' | 'isAdmin'>, settings: AppSettings = defaultAppSettings) {
-  return settings.workAssignmentCreatorIds.includes(user.id);
+export const LEADERBOARD_USER_IDS: readonly string[] = [MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID];
+
+export function isLeaderboardUser(userId: string) {
+  return LEADERBOARD_USER_IDS.includes(userId);
+}
+
+export function canCreateWorkAssignment(user: Pick<User, 'id' | 'role' | 'name' | 'isAdmin'>, _settings?: AppSettings) {
+  return isLeaderboardUser(user.id);
 }
 
 export function canManageWorkAssignment(task: Task, user: Pick<User, 'id' | 'role' | 'name' | 'isAdmin'>, settings: AppSettings = defaultAppSettings) {

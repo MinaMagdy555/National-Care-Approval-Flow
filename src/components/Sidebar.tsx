@@ -26,6 +26,7 @@ import {
 import { cn } from '../lib/utils';
 import { userRoleLabels } from '../lib/mockData';
 import { getTaskTypeConfigs } from '../lib/appSettings';
+import { isLeaderboardUser } from '../lib/workAssignmentUtils';
 
 type MenuItem = {
   id: string;
@@ -70,6 +71,7 @@ export function Sidebar({
       currentView === 'all_tasks' ||
       currentView === 'campaign_scheduler' ||
       currentView === 'assigned_work' ||
+      currentView === 'assigned_tasks' ||
       currentView === 'my_tasks' ||
       currentView === 'review_queue' ||
       currentView === 'quick_look_queue' ||
@@ -109,7 +111,7 @@ export function Sidebar({
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
       ...(isLoaderOrMina ? [{ id: 'performance', label: 'Team Performance', icon: UsersRound }] : []),
       { id: 'campaign_scheduler', label: 'Campaign Scheduler', icon: CalendarClock },
-      { id: 'assigned_work', label: 'Assigned Work', icon: BriefcaseBusiness },
+      ...(isLeaderboardUser(currentUser.id) ? [{ id: 'assigned_work', label: 'Assigned Work', icon: BriefcaseBusiness }] : []),
       { id: 'notifications', label: `Notifications${unreadCount > 0 ? ` (${unreadCount})` : ''}`, icon: Bell },
     ];
     const adminItems = canManageUsers && showUserManagement ? [{ id: 'users', label: 'Users & Roles', icon: UsersRound }] : [];
@@ -147,7 +149,7 @@ export function Sidebar({
       taskCenterChildren.push({ id: 'my_tasks', label: 'My Tasks', icon: UserRoundCheck });
     }
 
-    taskCenterChildren.push({ id: 'assigned_work', label: 'Assigned Tasks', icon: BriefcaseBusiness });
+    taskCenterChildren.push({ id: 'assigned_tasks', label: 'Assigned Tasks', icon: BriefcaseBusiness });
 
     if (!isFirstRev && !isFinalRev) {
       taskCenterChildren.push({ id: 'waiting_for_mina', label: 'Waiting for First Rev.', icon: Clock });
@@ -179,6 +181,7 @@ export function Sidebar({
     'all_tasks',
     'campaign_scheduler',
     'assigned_work',
+    'assigned_tasks',
     'my_tasks',
     'review_queue',
     'quick_look_queue',

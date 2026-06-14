@@ -15,7 +15,7 @@ import { isDueThisWeek, isDueToday } from './lib/deadlineUtils';
 import { isTaskArchived } from './lib/archiveUtils';
 import { canUserAccessTask, canUserActAsCurrentOwner, parsePublishDate, userCanViewFullWorkspace } from './lib/workflowUtils';
 import { Task } from './lib/types';
-import { isWorkAssignmentTask } from './lib/workAssignmentUtils';
+import { canCreateWorkAssignment, isWorkAssignmentTask } from './lib/workAssignmentUtils';
 import { Menu } from 'lucide-react';
 
 let notificationAudioContext: AudioContext | null = null;
@@ -352,7 +352,7 @@ function WorkspaceContent() {
 
   const renderContent = () => {
     if (activeTaskId) {
-      return <TaskDetail taskId={activeTaskId} onBack={handleBack} />;
+      return <TaskDetail taskId={activeTaskId} onBack={handleBack} onOpenUploadTask={handleOpenAssignmentUpload} />;
     }
 
     switch (currentView) {
@@ -370,9 +370,28 @@ function WorkspaceContent() {
         return <CampaignScheduler onOpenTask={handleOpenTask} />;
       case 'assigned_work': {
         const assignedWorkTasks = visibleEnvTasks.filter(isWorkAssignmentTask);
+        const canCreate = canCreateWorkAssignment(currentUser, appSettings);
         return (
           <div className="mx-auto max-w-7xl px-4 pb-6 pt-0 sm:px-6 sm:py-6 lg:px-8">
-            <AssignedWorkSection tasks={assignedWorkTasks} onOpenAssignmentUpload={handleOpenAssignmentUpload} onOpenTask={handleOpenTask} />
+            <AssignedWorkSection
+              tasks={assignedWorkTasks}
+              onOpenAssignmentUpload={handleOpenAssignmentUpload}
+              onOpenTask={handleOpenTask}
+              mode={canCreate ? 'create' : 'tracking'}
+            />
+          </div>
+        );
+      }
+      case 'assigned_tasks': {
+        const assignedTasksList = visibleEnvTasks.filter(isWorkAssignmentTask);
+        return (
+          <div className="mx-auto max-w-7xl px-4 pb-6 pt-0 sm:px-6 sm:py-6 lg:px-8">
+            <AssignedWorkSection
+              tasks={assignedTasksList}
+              onOpenAssignmentUpload={handleOpenAssignmentUpload}
+              onOpenTask={handleOpenTask}
+              mode="tracking"
+            />
           </div>
         );
       }
@@ -386,46 +405,46 @@ function WorkspaceContent() {
           : <Dashboard viewMode="overview" onOpenTask={handleOpenTask} onNavigate={handleNavigate} />;
       case 'review_queue': {
         const needsFullReview = workflowVisibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status) && isScopedToCurrentOwner(t));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsFullReview} title="Waiting for First Rev." />;
+        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={needsFullReview} title="Waiting for First Rev." />;
       }
       case 'content_revision_queue': {
         const contentTasks = workflowVisibleEnvTasks.filter(t => t.status === 'waiting_content_revision' && isScopedToCurrentOwner(t));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={contentTasks} title="Waiting for Content Rev." />;
+        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={contentTasks} title="Waiting for Content Rev." />;
       }
       case 'quick_look_queue': {
         const needsQuickLook = workflowVisibleEnvTasks.filter(t => t.status === 'waiting_reviewer_quick_look' && isScopedToCurrentOwner(t));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsQuickLook} title="Needs Quick Look" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={needsQuickLook} title="Needs Quick Look" />;
       }
       case 'ad_queue': {
         const needsAd = workflowVisibleEnvTasks.filter(t => (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && isScopedToCurrentOwner(t));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={needsAd} title="Waiting for Final Rev." />;
+        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={needsAd} title="Waiting for Final Rev." />;
       }
       case 'due_today': {
         const dueToday = workflowVisibleEnvTasks.filter(isDueToday);
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={dueToday} title="Due Today" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={dueToday} title="Due Today" />;
       }
       case 'due_this_week': {
         const dueThisWeek = workflowVisibleEnvTasks.filter(isDueThisWeek);
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={dueThisWeek} title="Due This Week" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={dueThisWeek} title="Due This Week" />;
       }
       case 'waiting_for_mina': {
         const waitingForMina = workflowVisibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMina} title="Waiting for First Rev." />;
+        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={waitingForMina} title="Waiting for First Rev." />;
       }
       case 'waiting_for_marwa': {
         const waitingForMarwa = workflowVisibleEnvTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={waitingForMarwa} title="Waiting for Final Rev." />;
+        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={waitingForMarwa} title="Waiting for Final Rev." />;
       }
       case 'approved_by_me': {
         const approved = workflowVisibleEnvTasks.filter(t => t.status === 'approved_by_art_director');
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={approved} title="Approved Tasks" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={approved} title="Approved Tasks" />;
       }
       case 'rejected_reopened': {
         const isFinalRev = (appSettings.finalReviewerUserIds || []).includes(currentUser.id);
         const rejected = isFinalRev
           ? workflowVisibleEnvTasks.filter(t => t.status === 'changes_requested_by_art_director')
           : workflowVisibleEnvTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={rejected} title="Rejected / Returned" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={rejected} title="Rejected / Returned" />;
       }
       case 'all_tasks': {
         let visibleTasks = visibleEnvTasks;
@@ -434,7 +453,7 @@ function WorkspaceContent() {
           // exclude tasks that haven't reached AD yet
           visibleTasks = visibleEnvTasks.filter(t => !['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'changes_requested_by_reviewer', 'reviewer_approved'].includes(t.status) || t.reviewMode === 'direct_to_ad');
         }
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={visibleTasks} title="All Tasks" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={visibleTasks} title="All Tasks" />;
       }
       case 'my_tasks': {
         const myTasks = visibleEnvTasks.filter(t => 
@@ -442,10 +461,10 @@ function WorkspaceContent() {
           (t.currentOwnerUserIds || []).includes(currentUser.id) ||
           (t.status === 'draft' && t.createdBy === currentUser.id)
         );
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={myTasks} title="My Tasks" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={myTasks} title="My Tasks" />;
       }
       case 'archived_tasks': {
-        return <ReviewQueue onOpenTask={handleOpenTask} tasks={visibleArchivedTasks} title="Archived Tasks" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={visibleArchivedTasks} title="Archived Tasks" />;
       }
       default:
         return (

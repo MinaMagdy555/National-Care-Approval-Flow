@@ -111,22 +111,28 @@ export function CustomSelect({ options, value, onChange, placeholder, className,
               menuClassName
             )}
           >
-            {options.map((option) => (
-               <button
-                 key={option.value}
-                 onClick={() => {
-                   onChange(option.value);
-                   setIsOpen(false);
-                 }}
-                 className="group flex w-full items-center justify-between px-4 py-2.5 text-left text-sm font-bold transition-colors hover:bg-slate-100"
-               >
-                 <span className={cn("flex min-w-0 items-center gap-2 truncate", option.value === value ? "text-slate-950" : "text-slate-600")}>
-                   {option.tone && <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full border", priorityToneClasses(option.tone))} />}
-                   {option.label}
-                 </span>
-                 {option.value === value && <Check className="h-4 w-4 text-slate-900" />}
-               </button>
-            ))}
+             {options.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    onChange(option.value);
+                    setIsOpen(false);
+                  }}
+                  className={cn(
+                    "group flex w-full items-center justify-between px-4 py-2.5 text-left text-sm font-bold transition-colors outline-none focus:outline-none",
+                    option.value === value
+                      ? "bg-indigo-600 text-white"
+                      : "text-slate-700 hover:bg-indigo-50 hover:text-indigo-950"
+                  )}
+                >
+                  <span className={cn("flex min-w-0 items-center gap-2 truncate", option.value === value ? "text-white" : "text-slate-600 group-hover:text-indigo-950")}>
+                    {option.tone && <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full border", priorityToneClasses(option.tone))} />}
+                    {option.label}
+                  </span>
+                  {option.value === value && <Check className="h-4 w-4 text-white" />}
+                </button>
+             ))}
           </div>,
           document.body
         )
