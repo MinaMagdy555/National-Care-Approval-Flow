@@ -71,6 +71,7 @@ type WorkAssignmentInput = {
   isOvertime?: boolean;
   taskType?: string;
   needsContentRevision?: boolean;
+  contentRevisionAssigneeIds?: string[];
 };
 
 type WorkAssignmentUploadPayload = {
@@ -304,6 +305,9 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
     driveMetadataFileId: task.driveMetadataFileId,
     archivedAt: task.archivedAt ?? null,
     archivedReason: task.archivedReason ?? null,
+    isOvertime: task.isOvertime || false,
+    needsContentRevision: task.needsContentRevision || false,
+    contentRevisionAssigneeIds: Array.isArray(task.contentRevisionAssigneeIds) ? task.contentRevisionAssigneeIds : ((task as any).contentRevisionAssigneeId ? [(task as any).contentRevisionAssigneeId] : []),
     createdAt: task.createdAt || now,
     updatedAt: task.updatedAt || task.createdAt || now,
   };
@@ -532,6 +536,7 @@ interface AppContextType extends AppState {
   editScheduledCampaign: (taskId: string, input: { name: string; taskType: 'campaign' | 'media_buying'; scheduledPublishAt: string; publishNote?: string | null; platform?: string | null; budgetAmount?: number | null; budgetCurrency?: string | null }) => void;
   createWorkAssignment: (input: WorkAssignmentInput) => void;
   updateWorkAssignment: (taskId: string, input: WorkAssignmentInput) => void;
+  updateTaskContentRevisionAssignees: (taskId: string, assigneeIds: string[]) => void;
   submitWorkAssignmentUpload: (taskId: string, payload: WorkAssignmentUploadPayload) => void;
   addTaskComment: (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => void;
   updateTaskComment: (taskId: string, commentId: string, changes: Pick<TaskComment, 'message' | 'sections'>) => void;
@@ -541,12 +546,14 @@ interface AppContextType extends AppState {
   updateTaskMediaPreviews: (taskId: string, updates: { versions: TaskVersion[]; comments?: TaskComment[]; thumbnailUrl: string; thumbnailStoragePath?: string }) => void;
   addTask: (task: Task) => void;
   addNotification: (notification: Omit<Notification, 'id' | 'createdAt' | 'read'>) => void;
+  addNotifications: (userIds: string[], taskId: string, message: string) => void;
   markNotificationAsRead: (id: string) => void;
   loginWithPassword: (identifier: string, password: string) => Promise<AuthActionResult>;
   signupWithEmail: (email: string, password: string, name?: string) => Promise<AuthActionResult>;
   updateUserRole: (userId: string, role: Role) => void;
   updateUserResponsibility: (userId: string, responsibility: string, permissionRole?: Role) => void;
   addCustomResponsibility: (responsibility: string) => void;
+  getEffectiveReviewMode: (taskType: string, isContentCreatorTask: boolean, selectedMode: 'full_review' | 'quick_look' | 'direct_to_ad') => 'full_review' | 'quick_look' | 'direct_to_ad';
   updateAppSettings: (updater: AppSettings | ((settings: AppSettings) => AppSettings)) => void;
   deleteUserAccount: (userId: string) => void;
   logout: () => Promise<void>;
@@ -1061,12 +1068,54 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const checkIsContentCreatorTask = (task: Task) => {
+    return task.handledBy.some(id => {
+      const u = usersObj[id];
+      return u && (u.jobTitle === 'Content Creator' || (u.role === 'team_member' && u.jobTitle === 'Content Creator'));
+    }) || (task.contentRevisionAssigneeIds || []).some(id => {
+      const u = usersObj[id];
+      return u && (u.jobTitle === 'Content Creator' || (u.role === 'team_member' && u.jobTitle === 'Content Creator'));
+    }) || (() => {
+      const creator = usersObj[task.createdBy];
+      return creator && (creator.jobTitle === 'Content Creator' || (creator.role === 'team_member' && creator.jobTitle === 'Content Creator'));
+    })();
+  };
+
+  const getEffectiveReviewMode = (taskType: string, isContentCreatorTask: boolean, selectedMode: 'full_review' | 'quick_look' | 'direct_to_ad'): 'full_review' | 'quick_look' | 'direct_to_ad' => {
+    if (isContentCreatorTask) {
+      return selectedMode;
+    }
+    const configs = getTaskTypeConfigs(appSettings);
+    const config = configs.find(c => cleanTaskTypeKey(c.id) === cleanTaskTypeKey(taskType));
+    if (config) {
+      return config.isDetailedReview ? 'full_review' : 'quick_look';
+    }
+    const clean = cleanTaskTypeKey(taskType);
+    const isFullReviewType = clean === 'video' || 
+                             clean === 'ai packet' || 
+                             clean === 'ai packets' || 
+                             clean === 'new products add' || 
+                             clean === 'new product add' ||
+                             clean === 'new product' ||
+                             clean === 'new products';
+    if (isFullReviewType) {
+      return 'full_review';
+    }
+    return 'quick_look';
+  };
+
   const getDefaultOwnerIdsForRole = (role: Role | null, task?: Task) => {
     if (!role) return [];
+
+    const isContentCreatorTask = task && checkIsContentCreatorTask(task);
+
     if (task && task.taskType) {
       const config = getTaskTypeConfigs(appSettings).find(c => cleanTaskTypeKey(c.id) === cleanTaskTypeKey(task.taskType));
       if (config) {
         if (role === 'reviewer') {
+          if (isContentCreatorTask) {
+            return getUserIdsByRole(userList, ['team_leader']);
+          }
           if (task.status === 'waiting_reviewer_quick_look') {
             if (config.quickLookUserIds && config.quickLookUserIds.length > 0) {
               return config.quickLookUserIds;
@@ -1084,7 +1133,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
     }
-    if (role === 'reviewer') return getUserIdsByRole(userList, ['reviewer', 'admin']);
+    if (role === 'reviewer') {
+      if (isContentCreatorTask) {
+        return getUserIdsByRole(userList, ['team_leader']);
+      }
+      return getUserIdsByRole(userList, ['reviewer', 'admin']);
+    }
     if (role === 'art_director') return getUserIdsByRole(userList, ['art_director']);
     if (role === 'team_leader') return getUserIdsByRole(userList, ['team_leader']);
     if (role === 'team_member' && task) return sanitizeHandledByWithSettings(appSettings, [task.createdBy, ...task.handledBy]);
@@ -1427,18 +1481,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const taskIndex = tasks.findIndex(t => t.id === taskId);
     if (taskIndex !== -1) {
       const task = tasks[taskIndex];
-      const reviewerIds = getUserIdsByRole(userList, ['reviewer', 'admin']);
-      const artDirectorIds = getUserIdsByRole(userList, ['art_director']);
+      const reviewerIds = uniqueIds([
+        ...getUserIdsByRole(userList, ['reviewer', 'admin']),
+        ...(appSettings.firstReviewerUserIds || [])
+      ]);
+      const artDirectorIds = uniqueIds([
+        ...getUserIdsByRole(userList, ['art_director']),
+        ...(appSettings.finalReviewerUserIds || [])
+      ]);
       const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
-      const contributorIds = uniqueIds([task.createdBy, ...task.handledBy]);
+      const contributorIds = uniqueIds([
+        task.createdBy,
+        ...task.handledBy,
+        ...(task.contentRevisionAssigneeIds || [])
+      ]);
+      const allRecipients = uniqueIds([
+        ...reviewerIds,
+        ...artDirectorIds,
+        ...teamLeaderIds,
+        ...contributorIds
+      ]);
+
       if (newStatus === 'approved_by_art_director' && task.status !== newStatus) {
-        addNotifications([...artDirectorIds, ...teamLeaderIds, ...reviewerIds, ...contributorIds], taskId, `Final Approvement approved "${task.name}".`);
+        addNotifications(allRecipients, taskId, `Final Approvement approved "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_reviewer' && task.status !== newStatus) {
-        addNotifications([...artDirectorIds, ...teamLeaderIds, ...contributorIds], taskId, `Reviewer requested changes on "${task.name}".`);
+        addNotifications(allRecipients, taskId, `Reviewer requested changes on "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_art_director' && task.status !== newStatus) {
-        addNotifications([...teamLeaderIds, ...reviewerIds, ...contributorIds], taskId, `Final Approvement rejected "${task.name}" and requested changes.`);
+        addNotifications(allRecipients, taskId, `Final Approvement rejected "${task.name}" and requested changes.`);
       } else if ((newStatus === 'reviewer_approved' || newStatus === 'sent_to_art_director') && task.status !== newStatus) {
-        addNotifications([...artDirectorIds, ...teamLeaderIds], taskId, `Reviewer sent "${task.name}" to Final Approvement for approval.`);
+        addNotifications(allRecipients, taskId, `Reviewer approved "${task.name}" and sent to Final Approvement.`);
       }
     }
 
@@ -1773,20 +1844,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!canCreateWorkAssignment(currentUser, appSettings)) return;
 
     const handledBy = sanitizeHandledByWithSettings(appSettings, input.handledByIds, currentUser.id);
-    if (!input.name.trim() || !input.description.trim() || !input.deadlineAt || handledBy.length === 0) return;
+    if (!input.name.trim() || !input.description.trim() || handledBy.length === 0) return;
 
     const now = new Date().toISOString();
     const taskId = Math.random().toString(36).substring(7);
     const normalizedLinks = input.assignmentLinks.map(link => link.trim()).filter(Boolean);
     const deadlineText = formatDeadlineText(input.deadlineAt);
     const assignmentPeriod = getAssignmentPeriodFromDeadline(input.deadlineAt);
+    const isContentCreatorTask = handledBy.some(id => {
+      const u = usersObj[id];
+      return u && (u.jobTitle === 'Content Creator' || (u.role === 'team_member' && u.jobTitle === 'Content Creator'));
+    }) || (() => {
+      const creator = usersObj[currentUser.id];
+      return creator && (creator.jobTitle === 'Content Creator' || (creator.role === 'team_member' && creator.jobTitle === 'Content Creator'));
+    })();
     const task: Task = {
       id: taskId,
       code: createTaskCode('WRK'),
       name: input.name.trim(),
       description: input.description.trim() || null,
       taskType: (input.taskType as TaskType) || 'others',
-      reviewMode: 'full_review',
+      reviewMode: getEffectiveReviewMode(input.taskType || 'others', isContentCreatorTask, 'full_review'),
       environment,
       createdBy: currentUser.id,
       handledBy,
@@ -1809,6 +1887,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       thumbnailUrl: '',
       isOvertime: input.isOvertime || false,
       needsContentRevision: input.needsContentRevision || false,
+      contentRevisionAssigneeIds: input.needsContentRevision ? (input.contentRevisionAssigneeIds || []) : [],
       createdAt: now,
       updatedAt: now,
     };
@@ -1826,7 +1905,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!task || !canManageWorkAssignment(task, currentUser, appSettings)) return;
 
     const handledBy = sanitizeHandledByWithSettings(appSettings, input.handledByIds, currentUser.id);
-    if (!input.name.trim() || !input.description.trim() || !input.deadlineAt || handledBy.length === 0) return;
+    if (!input.name.trim() || !input.description.trim() || handledBy.length === 0) return;
 
     const previousAssignees = new Set(task.handledBy);
     const addedAssignees = handledBy.filter(userId => !previousAssignees.has(userId));
@@ -1843,11 +1922,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (t.id !== taskId) return t;
       const now = new Date().toISOString();
       const isAlreadyUploaded = t.status !== 'assigned_work';
+      const isContentCreatorTask = handledBy.some(id => {
+        const u = usersObj[id];
+        return u && (u.jobTitle === 'Content Creator' || (u.role === 'team_member' && u.jobTitle === 'Content Creator'));
+      }) || (t.contentRevisionAssigneeIds || []).some(id => {
+        const u = usersObj[id];
+        return u && (u.jobTitle === 'Content Creator' || (u.role === 'team_member' && u.jobTitle === 'Content Creator'));
+      }) || (() => {
+        const creator = usersObj[t.createdBy];
+        return creator && (creator.jobTitle === 'Content Creator' || (creator.role === 'team_member' && creator.jobTitle === 'Content Creator'));
+      })();
       return addAuditComment({
         ...t,
         name: input.name.trim(),
         description: input.description.trim() || null,
         taskType: (input.taskType as TaskType) || t.taskType,
+        reviewMode: getEffectiveReviewMode((input.taskType as TaskType) || t.taskType, isContentCreatorTask, t.reviewMode),
         handledBy,
         currentOwnerRole: isAlreadyUploaded ? t.currentOwnerRole : 'team_member',
         currentOwnerUserId: isAlreadyUploaded ? t.currentOwnerUserId : (handledBy[0] || null),
@@ -1859,8 +1949,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
         deadlineAt: input.deadlineAt || null,
         isOvertime: input.isOvertime || false,
         needsContentRevision: input.needsContentRevision || false,
+        contentRevisionAssigneeIds: input.needsContentRevision ? (input.contentRevisionAssigneeIds || []) : [],
         updatedAt: now,
       }, currentUser.id, 'work_assignment_updated', message, now);
+    }));
+  };
+
+  const updateTaskContentRevisionAssignees = (taskId: string, assigneeIds: string[]) => {
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+
+      const now = new Date().toISOString();
+      const previousAssigneeIds = t.contentRevisionAssigneeIds || [];
+
+      const updatedTask = {
+        ...t,
+        contentRevisionAssigneeIds: assigneeIds,
+        currentOwnerUserIds: t.status === 'waiting_content_revision' ? assigneeIds : t.currentOwnerUserIds,
+        currentOwnerUserId: t.status === 'waiting_content_revision' ? (assigneeIds[0] || null) : t.currentOwnerUserId,
+        updatedAt: now,
+      };
+
+      // Notify newly added assignees
+      assigneeIds.forEach(id => {
+        if (!previousAssigneeIds.includes(id)) {
+          addNotification({
+            userId: id,
+            taskId,
+            message: `You have a new content revision task: "${t.name}".`,
+          });
+        }
+      });
+
+      const assigneeNames = assigneeIds.length > 0
+        ? assigneeIds.map(id => getUserDisplayName(usersObj, id)).join(', ')
+        : 'Decide Later';
+      const auditMsg = `Content revision assignees updated to: ${assigneeNames}.`;
+
+      return addAuditComment(updatedTask, currentUser.id, 'work_assignment_updated', auditMsg, now);
     }));
   };
 
@@ -1868,14 +1995,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const task = tasks.find(t => t.id === taskId);
     if (!task || task.status !== 'assigned_work') return;
 
-    const target = getReviewRouteTarget(payload.reviewMode);
+    const isContentCreatorTask = checkIsContentCreatorTask(task);
+    const effectiveReviewMode = payload.reviewMode || task.reviewMode || 'full_review';
+    const target = getReviewRouteTarget(effectiveReviewMode);
     const contentCreatorIds = userList.filter(user => user.jobTitle === 'Content Creator' || (user.role === 'team_member' && user.jobTitle === 'Content Creator')).map(user => user.id);
     const contentReviewerIds = contentCreatorIds.length > 0 ? contentCreatorIds : getUserIdsByRole(userList, ['team_leader']);
     
     const isContentRevNeeded = task.needsContentRevision;
     const nextStatus = isContentRevNeeded ? 'waiting_content_revision' : target.status;
     const nextOwnerRole = isContentRevNeeded ? 'team_member' : target.ownerRole;
-    const nextOwnerUserIds = isContentRevNeeded ? contentReviewerIds : getDefaultOwnerIdsForRole(target.ownerRole, task);
+    const nextOwnerUserIds = isContentRevNeeded 
+      ? (task.contentRevisionAssigneeIds || [])
+      : getDefaultOwnerIdsForRole(target.ownerRole, task);
 
     const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
     const recipients = uniqueIds([
@@ -1887,6 +2018,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     addNotifications(recipients, taskId, `${getUserDisplayName(usersObj, payload.version.submittedBy)} uploaded finished work for "${task.name}".`);
 
+    if (isContentRevNeeded && task.contentRevisionAssigneeIds && task.contentRevisionAssigneeIds.length > 0) {
+      task.contentRevisionAssigneeIds.forEach(userId => {
+        addNotification({
+          userId,
+          taskId,
+          message: `You have a new content revision task: "${task.name}".`,
+        });
+      });
+    }
+
     queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(t => {
       if (t.id !== taskId) return t;
@@ -1894,7 +2035,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const updatedTask: Task = {
         ...t,
         taskType: payload.taskType,
-        reviewMode: payload.reviewMode,
+        reviewMode: effectiveReviewMode,
         status: nextStatus,
         currentOwnerRole: nextOwnerRole,
         currentOwnerUserId: nextOwnerUserIds[0] || null,
@@ -1945,8 +2086,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let sendToMarwa = false;
 
     if (isContentRevNeeded) {
-      const contentCreatorIds = userList.filter(user => user.jobTitle === 'Content Creator' || (user.role === 'team_member' && user.jobTitle === 'Content Creator')).map(user => user.id);
-      nextOwnerIds = contentCreatorIds.length > 0 ? contentCreatorIds : getUserIdsByRole(userList, ['team_leader']);
+      nextOwnerIds = task.contentRevisionAssigneeIds || [];
       nextStatus = 'waiting_content_revision';
       nextOwnerRole = 'team_member';
       auditMsg = 'New version resubmitted for Content Revision.';
@@ -2177,6 +2317,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       editScheduledCampaign,
       createWorkAssignment,
       updateWorkAssignment,
+      updateTaskContentRevisionAssignees,
       submitWorkAssignmentUpload,
       addTaskComment,
       updateTaskComment,
@@ -2186,12 +2327,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTaskMediaPreviews,
       addTask,
       addNotification,
+      addNotifications,
       markNotificationAsRead,
       loginWithPassword,
       signupWithEmail,
       updateUserRole,
       updateUserResponsibility,
       addCustomResponsibility,
+      getEffectiveReviewMode,
       updateAppSettings,
       deleteUserAccount,
       logout,

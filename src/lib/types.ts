@@ -193,6 +193,7 @@ export interface TaskComment {
     | 'marwa_rejection'
     | 'content_approved'
     | 'content_rejected'
+    | 'content_approval_undone'
     | 'clarification_needed'
     | 'assignment_change'
     | 'review_route_change'
@@ -253,6 +254,7 @@ export interface Task {
   archivedReason?: string | null;
   isOvertime?: boolean | null;
   needsContentRevision?: boolean | null;
+  contentRevisionAssigneeIds?: string[];
   previousStatusBeforeHold?: TaskStatus | null;
   createdAt: string;
   updatedAt: string;

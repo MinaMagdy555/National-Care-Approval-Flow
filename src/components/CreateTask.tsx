@@ -5,7 +5,7 @@ import { Task, ReviewMode, Priority, TaskType, UploadedTaskFile } from '../lib/t
 import { CustomSelect } from './CustomSelect';
 import { UserMultiSelect } from './UserMultiSelect';
 import { canAssignContributors, getAssignableContributorsForTask, sanitizeHandledBy } from '../lib/handlerUtils';
-import { createLinkedTaskFileWithMetadata, getLinkHostLabel } from '../lib/linkAttachments';
+import { createLinkedTaskFileWithMetadata, getLinkHostLabel, parseAssignmentLink } from '../lib/linkAttachments';
 import { getReviewRouteTarget, uniqueIds } from '../lib/workflowUtils';
 import { canUploadWorkAssignment } from '../lib/workAssignmentUtils';
 import { getTaskTypeLabel } from '../lib/taskUtils';
@@ -19,7 +19,7 @@ export function CreateTask({
   assignmentTaskId?: string | null;
   onAssignmentUploaded?: (taskId: string) => void;
 }) {
-  const { tasks, currentUser, userList, users, environment, addTask, addNotification, submitWorkAssignmentUpload, appSettings } = useAppStore();
+  const { tasks, currentUser, userList, users, environment, addTask, addNotification, submitWorkAssignmentUpload, appSettings, getEffectiveReviewMode } = useAppStore();
   const [taskName, setTaskName] = useState('');
   const [createdBy, setCreatedBy] = useState('');
   const [taskType, setTaskType] = useState<TaskType>('video');
@@ -90,7 +90,20 @@ export function CreateTask({
     if (assignmentTask.taskType) {
       setTaskType(assignmentTask.taskType as TaskType);
     }
+    if (assignmentTask.reviewMode) {
+      setReviewMode(assignmentTask.reviewMode);
+    }
   }, [assignmentTask?.id]);
+
+  useEffect(() => {
+    if (isAssignmentUploadMode && assignmentTask) {
+      return;
+    }
+    const creator = users[selectedCreatorId] || (selectedCreatorId === currentUser.id ? currentUser : undefined);
+    const isContentCreator = creator ? (creator.jobTitle === 'Content Creator' || (creator.role === 'team_member' && creator.jobTitle === 'Content Creator')) : false;
+    const defaultMode = getEffectiveReviewMode(taskType, isContentCreator, 'full_review');
+    setReviewMode(defaultMode);
+  }, [taskType, selectedCreatorId, isAssignmentUploadMode, assignmentTask?.id]);
 
   const addLinkedFile = async () => {
     if (!linkUrl.trim() || isAddingLink) return;
@@ -309,12 +322,15 @@ export function CreateTask({
                 </div>
                 {(assignmentTask.assignmentLinks || []).length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {(assignmentTask.assignmentLinks || []).map(link => (
-                      <a key={link} href={link} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-indigo-100 bg-white px-2 py-1 text-xs font-black text-indigo-600 hover:bg-indigo-50">
-                        <Link2 className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{link}</span>
-                      </a>
-                    ))}
+                    {(assignmentTask.assignmentLinks || []).map(link => {
+                      const { url, name } = parseAssignmentLink(link);
+                      return (
+                        <a key={url} href={url} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-indigo-100 bg-white px-2 py-1 text-xs font-black text-indigo-600 hover:bg-indigo-50">
+                          <Link2 className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">{name}</span>
+                        </a>
+                      );
+                    })}
                   </div>
                 )}
               </div>

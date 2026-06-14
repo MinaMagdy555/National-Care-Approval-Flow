@@ -102,7 +102,8 @@ export function Sidebar({
   const getMenuForRole = (): MenuItem[] => {
     const configs = getTaskTypeConfigs(appSettings);
     const isFirstRev = (appSettings.firstReviewerUserIds || []).includes(currentUser.id) ||
-      configs.some(c => c.fullReviewerUserIds?.includes(currentUser.id) || c.quickLookUserIds?.includes(currentUser.id));
+      configs.some(c => c.fullReviewerUserIds?.includes(currentUser.id) || c.quickLookUserIds?.includes(currentUser.id)) ||
+      currentUser.role === 'team_leader';
     const isFinalRev = (appSettings.finalReviewerUserIds || []).includes(currentUser.id) ||
       configs.some(c => c.finalReviewerUserIds?.includes(currentUser.id));
     const isLoaderOrMina = isFirstRev || isFinalRev || (appSettings.viewAllWorkloadUserIds || []).includes(currentUser.id);
@@ -120,13 +121,22 @@ export function Sidebar({
     const taskCenterChildren: MenuItem[] = [];
 
     const isContentCreator = currentUser.jobTitle === 'Content Creator' || (currentUser.role === 'team_member' && currentUser.jobTitle === 'Content Creator');
+    const isHighboard = isFirstRev || isFinalRev || currentUser.role !== 'team_member' || isLeaderboardUser(currentUser.id);
+
+    const isDina = currentUser.id === 'user_3' || currentUser.name.toLowerCase().includes('dina') || currentUser.email?.toLowerCase().includes('dina.');
+    const showMyTasks = !(appSettings.neverHandlerIds || []).includes(currentUser.id) &&
+      (!isFirstRev && !isFinalRev || isDina);
+
+    if (showMyTasks) {
+      taskCenterChildren.push({ id: 'my_tasks', label: 'My Tasks', icon: UserRoundCheck });
+    }
+
+    if (isContentCreator || isHighboard) {
+      taskCenterChildren.push({ id: 'content_revision_queue', label: 'Waiting for Content Rev.', icon: FileText });
+    }
 
     if (isFirstRev || isFinalRev) {
       taskCenterChildren.push({ id: 'all_tasks', label: 'All Tasks', icon: ClipboardList });
-    }
-
-    if (isContentCreator) {
-      taskCenterChildren.push({ id: 'content_revision_queue', label: 'Waiting for Content Rev.', icon: FileText });
     }
 
     if (isFirstRev) {
@@ -141,17 +151,9 @@ export function Sidebar({
       taskCenterChildren.push({ id: 'ad_queue', label: 'Waiting for Final Rev.', icon: FilePenLine });
     }
 
-    const isDina = currentUser.id === 'user_3' || currentUser.name.toLowerCase().includes('dina') || currentUser.email?.toLowerCase().includes('dina.');
-    const showMyTasks = !(appSettings.neverHandlerIds || []).includes(currentUser.id) &&
-      (!isFirstRev && !isFinalRev || isDina);
-
-    if (showMyTasks) {
-      taskCenterChildren.push({ id: 'my_tasks', label: 'My Tasks', icon: UserRoundCheck });
-    }
-
     taskCenterChildren.push({ id: 'assigned_tasks', label: 'Assigned Tasks', icon: BriefcaseBusiness });
 
-    if (!isFirstRev && !isFinalRev) {
+    if (!isFirstRev && !isFinalRev && !isContentCreator) {
       taskCenterChildren.push({ id: 'waiting_for_mina', label: 'Waiting for First Rev.', icon: Clock });
       taskCenterChildren.push({ id: 'waiting_for_marwa', label: 'Waiting for Final Rev.', icon: Send });
     }
@@ -183,6 +185,7 @@ export function Sidebar({
     'assigned_work',
     'assigned_tasks',
     'my_tasks',
+    'content_revision_queue',
     'review_queue',
     'quick_look_queue',
     'ad_queue',

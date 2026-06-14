@@ -9,6 +9,7 @@ import { canUserAccessTask, canUserActAsCurrentOwner, userCanViewFullWorkspace }
 import { cn } from '../lib/utils';
 import { getResponsibilityForLabel, MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID, getTaskTypeConfigs } from '../lib/appSettings';
 import { Task } from '../lib/types';
+import { isLeaderboardUser } from '../lib/workAssignmentUtils';
 
 function SummaryCard({
   label,
@@ -165,7 +166,7 @@ export function Dashboard({
     return graphicAndVideoUsers.map(creator => {
       const creatorTasks = tasks.filter(t => {
         if (t.environment !== environment) return false;
-        return t.handledBy.includes(creator.id);
+        return t.handledBy.includes(creator.id) || (t.contentRevisionAssigneeIds || []).includes(creator.id);
       });
       
       const onHoldTasks = creatorTasks.filter(t => t.status === 'on_hold');
@@ -180,26 +181,40 @@ export function Dashboard({
       
       const finishedCount = finishedTasks.length;
       const activeCount = creatorTasks.length - finishedCount - onHoldCount;
-      const workingCount = creatorTasks.filter(t => t.status === 'assigned_work' || t.status === 'draft').length;
+      const workingCount = creatorTasks.filter(t => 
+        t.status === 'assigned_work' || 
+        t.status === 'draft' ||
+        (t.status === 'waiting_content_revision' && (t.contentRevisionAssigneeIds || []).includes(creator.id))
+      ).length;
       const reviewCount = activeCount - workingCount;
 
       const creatorIsFirstRev = (appSettings.firstReviewerUserIds || []).includes(creator.id) ||
         configs.some(c => c.fullReviewerUserIds?.includes(creator.id) || c.quickLookUserIds?.includes(creator.id));
       const creatorIsFinalRev = (appSettings.finalReviewerUserIds || []).includes(creator.id) ||
         configs.some(c => c.finalReviewerUserIds?.includes(creator.id));
+      const creatorIsContentCreator = creator.jobTitle === 'Content Creator' || (creator.role === 'team_member' && creator.jobTitle === 'Content Creator');
 
       let toReviewCount = 0;
       if (creatorIsFirstRev) {
         toReviewCount = tasks.filter(t => 
           t.environment === environment && 
           !isTaskArchived(t) &&
-          ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status)
+          ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status) &&
+          canUserActAsCurrentOwner(t, creator)
         ).length;
       } else if (creatorIsFinalRev) {
         toReviewCount = tasks.filter(t => 
           t.environment === environment && 
           !isTaskArchived(t) &&
-          (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director'))
+          (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) &&
+          canUserActAsCurrentOwner(t, creator)
+        ).length;
+      } else if (creatorIsContentCreator) {
+        toReviewCount = tasks.filter(t => 
+          t.environment === environment && 
+          !isTaskArchived(t) &&
+          t.status === 'waiting_content_revision' &&
+          (t.contentRevisionAssigneeIds || []).includes(creator.id)
         ).length;
       }
       
@@ -213,6 +228,7 @@ export function Dashboard({
         toReviewCount,
         creatorIsFirstRev,
         creatorIsFinalRev,
+        creatorIsContentCreator,
         totalCount: creatorTasks.length,
       };
     });
@@ -228,10 +244,12 @@ export function Dashboard({
   }, [creatorsWithStats, searchQuery]);
 
   const isFirstRev = (appSettings.firstReviewerUserIds || []).includes(currentUser.id) ||
-    configs.some(c => c.fullReviewerUserIds?.includes(currentUser.id) || c.quickLookUserIds?.includes(currentUser.id));
+    configs.some(c => c.fullReviewerUserIds?.includes(currentUser.id) || c.quickLookUserIds?.includes(currentUser.id)) ||
+    currentUser.role === 'team_leader';
   const isFinalRev = (appSettings.finalReviewerUserIds || []).includes(currentUser.id) ||
     configs.some(c => c.finalReviewerUserIds?.includes(currentUser.id));
   const isContentCreator = currentUser.jobTitle === 'Content Creator' || (currentUser.role === 'team_member' && currentUser.jobTitle === 'Content Creator');
+  const isHighboard = isFirstRev || isFinalRev || currentUser.role !== 'team_member' || isLeaderboardUser(currentUser.id);
 
   const canViewFullWorkspace = userCanViewFullWorkspace(currentUser, appSettings);
   const envTasks = tasks.filter(t => t.environment === environment && !isTaskArchived(t) && (canViewFullWorkspace || canUserAccessTask(t, currentUser, appSettings)));
@@ -291,9 +309,11 @@ export function Dashboard({
 
     const creator = userList.find(u => u.id === popupCreatorId);
     const creatorIsFirstRev = creator ? (appSettings.firstReviewerUserIds || []).includes(creator.id) ||
-      configs.some(c => c.fullReviewerUserIds?.includes(creator.id) || c.quickLookUserIds?.includes(creator.id)) : false;
+      configs.some(c => c.fullReviewerUserIds?.includes(creator.id) || c.quickLookUserIds?.includes(creator.id)) ||
+      creator.role === 'team_leader' : false;
     const creatorIsFinalRev = creator ? (appSettings.finalReviewerUserIds || []).includes(creator.id) ||
       configs.some(c => c.finalReviewerUserIds?.includes(creator.id)) : false;
+    const creatorIsContentCreator = creator ? (creator.jobTitle === 'Content Creator' || (creator.role === 'team_member' && creator.jobTitle === 'Content Creator')) : false;
 
     return tasks.filter(t => {
       if (t.environment !== environment) return false;
@@ -301,16 +321,19 @@ export function Dashboard({
       // If we clicked on 'to_review' (from Team Performance)
       if (popupState === 'to_review') {
         if (creatorIsFirstRev) {
-          return ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status) && !isTaskArchived(t);
+          return ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status) && !isTaskArchived(t) && creator && canUserActAsCurrentOwner(t, creator);
         }
         if (creatorIsFinalRev) {
-          return (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && !isTaskArchived(t);
+          return (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && !isTaskArchived(t) && creator && canUserActAsCurrentOwner(t, creator);
+        }
+        if (creatorIsContentCreator) {
+          return t.status === 'waiting_content_revision' && (t.contentRevisionAssigneeIds || []).includes(popupCreatorId) && !isTaskArchived(t);
         }
         return false;
       }
 
       // Check if task belongs to the creator
-      const belongsToCreator = t.handledBy.includes(popupCreatorId);
+      const belongsToCreator = t.handledBy.includes(popupCreatorId) || (t.contentRevisionAssigneeIds || []).includes(popupCreatorId);
 
       // If we are looking for 'active' tasks, for reviewers we also include tasks waiting for their review
       if (popupState === 'active') {
@@ -321,10 +344,10 @@ export function Dashboard({
         
         // If it doesn't belong to them but they are a reviewer, check if it is waiting for their review
         if (creatorIsFirstRev) {
-          return ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status);
+          return ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status) && creator && canUserActAsCurrentOwner(t, creator);
         }
         if (creatorIsFinalRev) {
-          return ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director');
+          return (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && creator && canUserActAsCurrentOwner(t, creator);
         }
         return false;
       }
@@ -340,11 +363,12 @@ export function Dashboard({
         return t.status === 'on_hold';
       }
       if (popupState === 'working') {
-        return t.status === 'assigned_work' || t.status === 'draft';
+        return t.status === 'assigned_work' || t.status === 'draft' || (t.status === 'waiting_content_revision' && (t.contentRevisionAssigneeIds || []).includes(popupCreatorId));
       }
       if (popupState === 'waiting_review') {
         const isFinished = t.status === 'approved' || t.status === 'completed' || t.status === 'approved_by_art_director' || isTaskArchived(t);
-        return !isFinished && t.status !== 'on_hold' && t.status !== 'assigned_work' && t.status !== 'draft';
+        const isWorking = t.status === 'assigned_work' || t.status === 'draft' || (t.status === 'waiting_content_revision' && (t.contentRevisionAssigneeIds || []).includes(popupCreatorId));
+        return !isFinished && t.status !== 'on_hold' && !isWorking;
       }
       
       return true;
@@ -355,10 +379,11 @@ export function Dashboard({
   const needsQuickLookCount = workflowTasks.filter(t => t.status === 'waiting_reviewer_quick_look' && isScopedToCurrentOwner(t)).length;
   const waitingMarwaCount = workflowTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) && (currentUser.role !== 'art_director' || isScopedToCurrentOwner(t))).length;
   const approvedCount = workflowTasks.filter(t => t.status === 'approved_by_art_director').length;
+  const waitingContentRevCount = workflowTasks.filter(t => t.status === 'waiting_content_revision').length;
   const rejectedCount = returned.length;
   const dueTodayCount = workflowTasks.filter(isDueToday).length;
   const dueThisWeekCount = workflowTasks.filter(isDueThisWeek).length;
-  const hasStatusCards = usesWorkspaceOverview || currentUser.role === 'reviewer' || currentUser.role === 'art_director' || isContentCreator;
+  const hasStatusCards = usesWorkspaceOverview || isFirstRev || isFinalRev || currentUser.role === 'reviewer' || currentUser.role === 'art_director' || isContentCreator;
 
   return (
     <div className="mx-auto max-w-7xl space-y-5 px-4 pb-6 pt-0 sm:space-y-8 sm:px-6 sm:py-6 lg:space-y-12 lg:px-8">
@@ -370,9 +395,22 @@ export function Dashboard({
       {viewMode === 'overview' && (
         <div className="space-y-3 sm:space-y-4">
         {hasStatusCards && (
-          <div className={`grid auto-rows-fr grid-cols-2 gap-3 sm:gap-4 ${(isFirstRev || isContentCreator) ? 'xl:grid-cols-5' : 'xl:grid-cols-4'}`}>
+          <div className={`grid auto-rows-fr grid-cols-2 gap-3 sm:gap-4 ${
+            isFirstRev ? 'xl:grid-cols-6' : 
+            (isFinalRev || isHighboard) ? 'xl:grid-cols-5' : 
+            isContentCreator ? 'xl:grid-cols-3' : 'xl:grid-cols-4'
+          }`}>
             {isFirstRev ? (
               <>
+            <SummaryCard
+              label="Waiting for Content Rev."
+              value={waitingContentRevCount}
+              icon={FileText}
+              textClassName="text-amber-800"
+              borderClassName="border-amber-100"
+              iconClassName="text-amber-600"
+              onClick={() => onNavigate('content_revision_queue')}
+            />
             <SummaryCard
               label="Waiting for First Rev."
               value={needsFullReviewCount}
@@ -434,24 +472,6 @@ export function Dashboard({
               onClick={() => onNavigate('content_revision_queue')}
             />
             <SummaryCard
-              label="Waiting for First Rev."
-              value={waitingForMina.length}
-              icon={AlertCircle}
-              textClassName="text-amber-800"
-              borderClassName="border-amber-100"
-              iconClassName="text-amber-600"
-              onClick={() => onNavigate('waiting_for_mina')}
-            />
-            <SummaryCard
-              label="Waiting for Final Rev."
-              value={waitingForMarwa.length}
-              icon={History}
-              textClassName="text-slate-800"
-              borderClassName="border-slate-200"
-              iconClassName="text-slate-600"
-              onClick={() => onNavigate('waiting_for_marwa')}
-            />
-            <SummaryCard
               label="Rejected"
               value={returned.length}
               icon={XCircle}
@@ -473,6 +493,15 @@ export function Dashboard({
               </>
             ) : isFinalRev ? (
               <>
+            <SummaryCard
+              label="Waiting for Content Rev."
+              value={waitingContentRevCount}
+              icon={FileText}
+              textClassName="text-amber-800"
+              borderClassName="border-amber-100"
+              iconClassName="text-amber-600"
+              onClick={() => onNavigate('content_revision_queue')}
+            />
             <SummaryCard
               label="Waiting for First Rev."
               value={waitingForMina.length}
@@ -512,6 +541,17 @@ export function Dashboard({
               </>
             ) : (
               <>
+            {isHighboard && (
+              <SummaryCard
+                label="Waiting for Content Rev."
+                value={waitingContentRevCount}
+                icon={FileText}
+                textClassName="text-amber-800"
+                borderClassName="border-amber-100"
+                iconClassName="text-amber-600"
+                onClick={() => onNavigate('content_revision_queue')}
+              />
+            )}
             <SummaryCard
               label="Waiting for First Rev."
               value={waitingForMina.length}
@@ -551,8 +591,8 @@ export function Dashboard({
               </>
             )}
 
-            {isLeaderboardOrMinaUser && creatorsWithStats.map(({ creator, workingCount, reviewCount, toReviewCount, creatorIsFirstRev, creatorIsFinalRev }) => {
-              const isReviewer = creatorIsFirstRev || creatorIsFinalRev;
+            {isLeaderboardOrMinaUser && creatorsWithStats.map(({ creator, workingCount, reviewCount, toReviewCount, creatorIsFirstRev, creatorIsFinalRev, creatorIsContentCreator }) => {
+              const isReviewer = creatorIsFirstRev || creatorIsFinalRev || creatorIsContentCreator;
               return (
                 <button
                   key={creator.id}
@@ -570,7 +610,7 @@ export function Dashboard({
                     </div>
                     <div className="flex flex-col gap-1 mt-auto">
                       <div className="flex items-center justify-between text-xs font-semibold">
-                        <span className="text-slate-500">Working On:</span>
+                        <span className="text-slate-500">Active:</span>
                         <span className="font-bold text-amber-600">{workingCount}</span>
                       </div>
                       <div className="flex items-center justify-between text-xs font-semibold">
@@ -640,7 +680,7 @@ export function Dashboard({
           </div>
 
           <div className="flex flex-col gap-4 w-full">
-            {filteredCreators.map(({ creator, finishedCount, activeCount, onHoldCount, totalCount, workingCount, reviewCount, toReviewCount, creatorIsFirstRev, creatorIsFinalRev }) => {
+            {filteredCreators.map(({ creator, finishedCount, activeCount, onHoldCount, totalCount, workingCount, reviewCount, toReviewCount, creatorIsFirstRev, creatorIsFinalRev, creatorIsContentCreator }) => {
               const handleCreatorSelect = () => {
                 setPopupCreatorId(creator.id);
                 setPopupState('total');
@@ -651,7 +691,7 @@ export function Dashboard({
                 setPopupState(state);
               };
 
-              const isReviewer = creatorIsFirstRev || creatorIsFinalRev;
+              const isReviewer = creatorIsFirstRev || creatorIsFinalRev || creatorIsContentCreator;
               const gridStyle = isReviewer 
                 ? { gridTemplateColumns: 'repeat(6, minmax(0, 1fr))' } 
                 : { gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' };
@@ -895,9 +935,18 @@ export function Dashboard({
                 </div>
               ) : popupState === 'active' ? (
                 (() => {
-                  const workingTasks = popupTasks.filter(t => t.handledBy.includes(popupCreatorId) && (t.status === 'assigned_work' || t.status === 'draft'));
-                  const approvalTasks = popupTasks.filter(t => t.handledBy.includes(popupCreatorId) && t.status !== 'assigned_work' && t.status !== 'draft');
-                  const toReviewTasks = popupTasks.filter(t => !t.handledBy.includes(popupCreatorId));
+                  const workingTasks = popupTasks.filter(t => 
+                    (t.handledBy.includes(popupCreatorId) || (t.contentRevisionAssigneeIds || []).includes(popupCreatorId)) && 
+                    (t.status === 'assigned_work' || t.status === 'draft' || (t.status === 'waiting_content_revision' && (t.contentRevisionAssigneeIds || []).includes(popupCreatorId)))
+                  );
+                  const approvalTasks = popupTasks.filter(t => 
+                    (t.handledBy.includes(popupCreatorId) || (t.contentRevisionAssigneeIds || []).includes(popupCreatorId)) && 
+                    !workingTasks.some(wt => wt.id === t.id)
+                  );
+                  const toReviewTasks = popupTasks.filter(t => 
+                    !t.handledBy.includes(popupCreatorId) && 
+                    !(t.contentRevisionAssigneeIds || []).includes(popupCreatorId)
+                  );
 
                   const renderTaskItem = (task: Task) => {
                     const getStatusBadge = (status: string) => {

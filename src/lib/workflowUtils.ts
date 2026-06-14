@@ -29,7 +29,10 @@ export function userCanViewFullWorkspace(user: Pick<User, 'id' | 'role' | 'isAdm
 
 export function canUserAccessTask(task: Task, user: Pick<User, 'id' | 'role' | 'isAdmin'>, settings?: AppSettings) {
   if (userCanViewFullWorkspace(user, settings)) return true;
-  return task.createdBy === user.id || task.handledBy.includes(user.id) || getCurrentOwnerUserIds(task).includes(user.id);
+  return task.createdBy === user.id || 
+         task.handledBy.includes(user.id) || 
+         getCurrentOwnerUserIds(task).includes(user.id) ||
+         (task.contentRevisionAssigneeIds || []).includes(user.id);
 }
 
 export function canManageWorkflow(user: Pick<User, 'id' | 'role' | 'isAdmin'>, settings?: AppSettings) {

@@ -15,6 +15,8 @@ import { CustomSelect } from './CustomSelect';
 import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText } from '../lib/uploadLimits';
 import { createLinkedTaskFileWithMetadata, getLinkHostLabel } from '../lib/linkAttachments';
 import { canManageWorkflow, canUserAccessTask, canUserActAsCurrentOwner, getCurrentOwnerUserIds, userCanViewFullWorkspace } from '../lib/workflowUtils';
+import { isLeaderboardUser } from '../lib/workAssignmentUtils';
+import { DINA_ID } from '../lib/appSettings';
 import {
   addLowResPreviewsToFiles,
   getTaskFiles,
@@ -60,6 +62,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     unarchiveTask,
     deleteTask,
     appSettings,
+    updateTaskContentRevisionAssignees,
   } = useAppStore();
   const task = tasks.find(t => t.id === taskId);
 
@@ -104,6 +107,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   const [managedReviewMode, setManagedReviewMode] = useState<ReviewMode>('full_review');
   const [managedPublishAt, setManagedPublishAt] = useState('');
   const [managedPublishNote, setManagedPublishNote] = useState('');
+  const [managedRevisionAssigneeIds, setManagedRevisionAssigneeIds] = useState<string[]>([]);
   const repairInputRef = useRef<HTMLInputElement>(null);
   const previewOptimizationAttemptedRef = useRef<Set<string>>(new Set());
   const updateTaskMediaPreviewsRef = useRef(updateTaskMediaPreviews);
@@ -121,7 +125,8 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     setManagedReviewMode(task.reviewMode);
     setManagedPublishAt(task.scheduledPublishAt || '');
     setManagedPublishNote(task.publishNote || '');
-  }, [taskId, (task?.handledBy || []).join('|'), (task?.currentOwnerUserIds || []).join('|'), task?.currentOwnerUserId, task?.reviewMode, task?.scheduledPublishAt, task?.publishNote]);
+    setManagedRevisionAssigneeIds(task.contentRevisionAssigneeIds || []);
+  }, [taskId, (task?.handledBy || []).join('|'), (task?.currentOwnerUserIds || []).join('|'), task?.currentOwnerUserId, task?.reviewMode, task?.scheduledPublishAt, task?.publishNote, (task?.contentRevisionAssigneeIds || []).join('|')]);
 
   useEffect(() => {
     if (task && selectedVersionIndex > task.versions.length - 1) {
@@ -155,6 +160,13 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     };
   }, [canViewFullWorkspace, currentUser.id, task]);
 
+  const isDetailedReviewType = React.useMemo(() => {
+    if (!task) return false;
+    const configs = getTaskTypeConfigs(appSettings);
+    const config = configs.find(c => cleanTaskTypeKey(c.id) === cleanTaskTypeKey(task.taskType));
+    return config ? config.isDetailedReview : (cleanTaskTypeKey(task.taskType) === 'ai packet' || cleanTaskTypeKey(task.taskType) === 'video');
+  }, [appSettings, task?.taskType]);
+
   if (!task || !canUserAccessTask(task, currentUser, appSettings)) return <div>Task not found</div>;
 
   const statusInfo = getStatusInfo(task, currentUser.role, users);
@@ -176,15 +188,11 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   const selectedFile = files[selectedFileIndex] || files[0];
   const currentVersionHasLocalOnlyFiles = files.some(file => isLocalOnlyFileUrl(file.url));
   const isArchived = isTaskArchived(task);
-  const isDetailedReviewType = React.useMemo(() => {
-    const configs = getTaskTypeConfigs(appSettings);
-    const config = configs.find(c => cleanTaskTypeKey(c.id) === cleanTaskTypeKey(task.taskType));
-    return config ? config.isDetailedReview : (cleanTaskTypeKey(task.taskType) === 'ai packet' || cleanTaskTypeKey(task.taskType) === 'video');
-  }, [appSettings, task.taskType]);
+
   const isSelfCreatedTask = task.createdBy === currentUser.id;
   const isReadOnlyObserver = currentUser.role === 'manager' || currentUser.role === 'developer';
   const isCurrentActiveOwner = canUserActAsCurrentOwner(task, currentUser);
-  const canActAsReviewer = currentUser.role === 'reviewer' && isCurrentActiveOwner;
+  const canActAsReviewer = (currentUser.role === 'reviewer' || currentUser.role === 'team_leader') && isCurrentActiveOwner;
   const canActAsArtDirector = currentUser.role === 'art_director' && isCurrentActiveOwner;
   const canManageWorkflowSettings = currentUser.role !== 'team_member' && canManageWorkflow(currentUser, appSettings);
   const canReassignTask = currentUser.role !== 'team_member' && canAssignContributors(currentUser.id, appSettings);
@@ -198,6 +206,16 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   const isAdminUser = Boolean(currentUser.isAdmin) || currentUser.role === 'admin';
   const isContentCreatorUser = currentUser.jobTitle === 'Content Creator' || (currentUser.role === 'team_member' && currentUser.jobTitle === 'Content Creator') || currentUser.role === 'admin' || Boolean(currentUser.isAdmin);
   const canActAsContentCreator = (isContentCreatorUser && task.status === 'waiting_content_revision' && (task.currentOwnerUserIds || []).includes(currentUser.id)) || (isAdminUser && task.status === 'waiting_content_revision');
+  const jobTitleLower = (currentUser.jobTitle || '').toLowerCase();
+  const isInGraphicOrVideoDept = jobTitleLower.includes('designer') || 
+                                 jobTitleLower.includes('video') || 
+                                 jobTitleLower.includes('editor') || 
+                                 jobTitleLower.includes('graphic');
+  const isContentOrSeniorContent = jobTitleLower.includes('content');
+  const isLeaderboard = isLeaderboardUser(currentUser.id);
+  const canUndoContentApproval = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'sent_to_art_director'].includes(task.status) &&
+    !isInGraphicOrVideoDept &&
+    ((isContentOrSeniorContent && (task.contentRevisionAssigneeIds || []).includes(currentUser.id)) || isLeaderboard || isAdminUser);
   const humanCommentActions = new Set<TaskComment['action']>([
     'review_note',
     'request_edits',
@@ -214,7 +232,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   const canViewCommentHistory = (comment: TaskComment) => comment.authorId === currentUser.id || isAdminUser;
   const isReviewerCommentAuthor = (authorId: string) => {
     const role = users[authorId]?.role || initialUsers.find(user => user.id === authorId)?.role;
-    return role === 'reviewer' || role === 'admin';
+    return role === 'reviewer' || role === 'admin' || role === 'team_leader';
   };
   const isInternalReviewerComment = (comment: { authorId: string; action: string }) => (
     isInternalReviewTask && isReviewerCommentAuthor(comment.authorId) && comment.action === 'sent_to_marwa'
@@ -275,6 +293,10 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
 
   const saveReviewRoute = () => {
     updateTaskReviewMode(task.id, managedReviewMode);
+  };
+
+  const saveRevisionAssignees = () => {
+    updateTaskContentRevisionAssignees(task.id, managedRevisionAssigneeIds);
   };
 
   const savePublishSchedule = () => {
@@ -572,12 +594,12 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     if (!message && !hasFilledFollowUpSections()) return;
 
     // Check if the commenter is a reviewer and if we should ask for rejection
-    const isReviewerComment = currentUser.role === 'reviewer' || currentUser.role === 'art_director' || currentUser.role === 'admin';
+    const isReviewerComment = currentUser.role === 'reviewer' || currentUser.role === 'team_leader' || currentUser.role === 'art_director' || currentUser.role === 'admin';
     const isTaskActiveForReview = !['approved', 'completed', 'archived', 'approved_by_art_director'].includes(task.status);
     
     let rejectStatus: TaskStatus | null = null;
     if (isReviewerComment && isTaskActiveForReview) {
-      if (currentUser.role === 'reviewer') {
+      if (currentUser.role === 'reviewer' || currentUser.role === 'team_leader') {
         if (task.reviewMode !== 'quick_look') {
           rejectStatus = 'changes_requested_by_reviewer';
         }
@@ -796,6 +818,26 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     } catch (error) {
       console.error('Failed to approve content', error);
       setActionError('Could not approve content revision. Please try again.');
+    } finally {
+      setIsSavingAction(false);
+    }
+  };
+
+  const handleContentUndo = async () => {
+    if (isSavingAction) return;
+    setIsSavingAction(true);
+    setActionError('');
+    try {
+      addTaskComment(task.id, {
+        authorId: currentUser.id,
+        action: 'content_approval_undone',
+        message: 'Content approval undone, returned to Content Revision.',
+        sections: [],
+      });
+      updateTaskStatus(task.id, 'waiting_content_revision', 'team_member', task.contentRevisionAssigneeIds || []);
+    } catch (error) {
+      console.error('Failed to undo content approval', error);
+      setActionError('Could not undo content approval. Please try again.');
     } finally {
       setIsSavingAction(false);
     }
@@ -1100,6 +1142,16 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
               <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Review mode</span>
               <span className="font-semibold text-slate-900">{getReviewModeLabel(task.reviewMode)}</span>
             </div>
+            {task.needsContentRevision && (
+              <div>
+                <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Revision Assignees</span>
+                <span className="font-semibold text-slate-900 font-bold">
+                  {task.contentRevisionAssigneeIds && task.contentRevisionAssigneeIds.length > 0 
+                    ? task.contentRevisionAssigneeIds.map(id => users[id]?.name || 'Assigned').join(', ') 
+                    : 'Decide Later'}
+                </span>
+              </div>
+            )}
           </div>
           
           <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 flex flex-col gap-3">
@@ -1185,6 +1237,36 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                       className="w-full rounded-lg border border-slate-200 bg-slate-900 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-black"
                     >
                       Save Assignment
+                    </button>
+                  </>
+                )}
+
+                {isLeaderboardUser(currentUser.id) && task.needsContentRevision && (
+                  <>
+                    <div className="space-y-2 pt-2 border-t border-slate-100">
+                      <div>
+                        <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Content Revision Assignees</label>
+                      </div>
+                      <UserMultiSelect
+                        users={userList.filter(user => 
+                          user.id !== 'guest' && (
+                            user.jobTitle === 'Content Creator' || 
+                            (user.role === 'team_member' && user.jobTitle === 'Content Creator') || 
+                            user.id === DINA_ID
+                          )
+                        )}
+                        selectedIds={managedRevisionAssigneeIds}
+                        onChange={setManagedRevisionAssigneeIds}
+                        layout="single"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={saveRevisionAssignees}
+                      className="w-full rounded-lg border border-slate-200 bg-slate-900 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-black"
+                    >
+                      Save Revision Assignees
                     </button>
                   </>
                 )}
@@ -1373,6 +1455,16 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
             </>
           )}
 
+          {canUndoContentApproval && (
+            <button 
+              onClick={handleContentUndo}
+              disabled={isSavingAction}
+              className="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 px-4 rounded-xl shadow-sm transition-all focus:ring-4 focus:ring-amber-100 flex items-center justify-center gap-2"
+            >
+              Undo Content Approval
+            </button>
+          )}
+
           {canActAsReviewer && isReviewerActionable && (
             <>
               <button 
@@ -1385,7 +1477,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                 {task.status === 'waiting_reviewer_full_review' ? 'Approve & Send to Final Approvement' : 
                  task.status === 'waiting_reviewer_quick_look' ? 'Quick Look Done & Send to Final Approvement' : 'Send to Final Approvement'}
               </button>
-              {isDetailedReviewType && task.status !== 'draft' && (
+              {task.reviewMode === 'full_review' && task.status !== 'draft' && (
                 <form onSubmit={handleRequestChanges} className="space-y-3 rounded-2xl border border-rose-100 bg-rose-50/40 p-3">
                   <div>
                     <h3 className="text-sm font-black text-rose-900">Request Edits</h3>
@@ -1405,7 +1497,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
             </>
           )}
 
-          {currentUser.role === 'reviewer' && task.status === 'sent_to_art_director' && (
+          {(currentUser.role === 'reviewer' || currentUser.role === 'team_leader') && task.status === 'sent_to_art_director' && (
             <div className="text-sm font-medium text-gray-500 flex items-center gap-2 justify-center py-2">
               <Check className="w-4 h-4" /> Sent to Final Approvement
             </div>

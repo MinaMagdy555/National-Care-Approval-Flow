@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { CalendarDays, Check, Clock3, Edit3, Link2, Plus, RotateCcw, X, Trash2, Settings, Search, Calendar, Clock, HelpCircle } from 'lucide-react';
 import { useAppStore } from '../lib/store';
+import { fetchLinkTitleScraped, parseAssignmentLink, getLinkedFileName } from '../lib/linkAttachments';
 import { Priority, Task, Role, TaskTypeConfig } from '../lib/types';
 import { canCreateWorkAssignment, canManageWorkAssignment, canUploadWorkAssignment, isWorkAssignmentAssignee, sortWorkAssignments } from '../lib/workAssignmentUtils';
 import { getPriorityLabel, getTaskTypeLabel, getStatusInfo } from '../lib/taskUtils';
@@ -11,7 +12,7 @@ import { ThemedDatePicker } from './ThemedDatePicker';
 import { ThemedTimePicker } from './ThemedTimePicker';
 import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
-import { getActivePriorityOptions, getPriorityTone, isDeadlineInsideBusinessHours, getWorkingHoursForUser, priorityToneClasses, MINA_ID, normalizeTaskTypeId, cleanTaskTypeKey, getTaskTypeConfigs } from '../lib/appSettings';
+import { getActivePriorityOptions, getPriorityTone, isDeadlineInsideBusinessHours, getWorkingHoursForUser, priorityToneClasses, MINA_ID, DINA_ID, normalizeTaskTypeId, cleanTaskTypeKey, getTaskTypeConfigs } from '../lib/appSettings';
 import { userCanViewFullWorkspace } from '../lib/workflowUtils';
 
 const CONTROL_CLASS = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10';
@@ -147,6 +148,7 @@ export function AssignedWorkSection({
   const [deadlineTime, setDeadlineTime] = useState('');
   const [isOvertime, setIsOvertime] = useState(false);
   const [needsContentRevision, setNeedsContentRevision] = useState(false);
+  const [contentRevisionAssigneeIds, setContentRevisionAssigneeIds] = useState<string[]>([]);
   const [taskType, setTaskType] = useState<string>('video');
   const [showAllUsers, setShowAllUsers] = useState(false);
   const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
@@ -171,6 +173,7 @@ export function AssignedWorkSection({
   const [editingFinalReviewers, setEditingFinalReviewers] = useState<string[]>([]);
   const [clarificationTaskId, setClarificationTaskId] = useState<string | null>(null);
   const [clarificationQuestion, setClarificationQuestion] = useState('');
+  const [isAddingLinkInput, setIsAddingLinkInput] = useState(false);
 
   const handleSendClarification = (e: React.FormEvent) => {
     e.preventDefault();
@@ -337,6 +340,7 @@ export function AssignedWorkSection({
     setDeadlineTime('');
     setIsOvertime(false);
     setNeedsContentRevision(false);
+    setContentRevisionAssigneeIds([]);
     setTaskType('video');
     setShowAllUsers(false);
     setAssigneeIds([]);
@@ -434,17 +438,35 @@ export function AssignedWorkSection({
     setEditingTaskTypeId(null);
   };
 
-  const addLink = () => {
+  const addLink = async () => {
     const nextLink = linkInput.trim();
-    if (!nextLink || !isValidUrl(nextLink)) return;
+    if (!nextLink || !isValidUrl(nextLink) || isAddingLinkInput) return;
 
     let formattedLink = nextLink;
     if (!/^https?:\/\//i.test(nextLink)) {
       formattedLink = 'https://' + nextLink;
     }
 
-    setLinks(prev => prev.includes(formattedLink) ? prev : [...prev, formattedLink]);
-    setLinkInput('');
+    setIsAddingLinkInput(true);
+    try {
+      const title = await fetchLinkTitleScraped(formattedLink);
+      const name = title || getLinkedFileName(formattedLink);
+      const combined = `${formattedLink}|${name}`;
+      setLinks(prev => {
+        const urls = prev.map(item => parseAssignmentLink(item).url);
+        if (urls.includes(formattedLink)) return prev;
+        return [...prev, combined];
+      });
+    } catch {
+      setLinks(prev => {
+        const urls = prev.map(item => parseAssignmentLink(item).url);
+        if (urls.includes(formattedLink)) return prev;
+        return [...prev, `${formattedLink}|${getLinkedFileName(formattedLink)}`];
+      });
+    } finally {
+      setIsAddingLinkInput(false);
+      setLinkInput('');
+    }
   };
 
   const submitAssignment = (event: React.FormEvent) => {
@@ -469,6 +491,7 @@ export function AssignedWorkSection({
       isOvertime,
       taskType,
       needsContentRevision,
+      contentRevisionAssigneeIds: needsContentRevision ? contentRevisionAssigneeIds : [],
     };
 
     if (editingTaskId) {
@@ -489,6 +512,7 @@ export function AssignedWorkSection({
     setDeadlineTime(deadline.time);
     setIsOvertime(task.isOvertime || false);
     setNeedsContentRevision(task.needsContentRevision || false);
+    setContentRevisionAssigneeIds(task.contentRevisionAssigneeIds || []);
     setTaskType(task.taskType || 'video');
     setAssigneeIds(task.handledBy);
     setLinks(task.assignmentLinks || []);
@@ -958,12 +982,13 @@ export function AssignedWorkSection({
                     <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                     <input
                       type="url"
+                      placeholder="Paste link URL"
                       value={linkInput}
                       onChange={event => setLinkInput(event.target.value)}
                       onKeyDown={event => {
                         if (event.key === 'Enter' && linkInput.trim() && isValidUrl(linkInput)) {
                           event.preventDefault();
-                          addLink();
+                          void addLink();
                         }
                       }}
                       className={`${CONTROL_CLASS} pl-10`}
@@ -971,24 +996,33 @@ export function AssignedWorkSection({
                   </div>
                   <button
                     type="button"
-                    onClick={addLink}
-                    disabled={!linkInput.trim() || !isValidUrl(linkInput)}
+                    onClick={() => { void addLink(); }}
+                    disabled={!linkInput.trim() || !isValidUrl(linkInput) || isAddingLinkInput}
                     className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white transition-colors hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
-                    <Plus className="h-4 w-4" />
-                    Add
+                    {isAddingLinkInput ? (
+                      <span className="animate-pulse">Adding...</span>
+                    ) : (
+                      <>
+                        <Plus className="h-4 w-4" />
+                        Add
+                      </>
+                    )}
                   </button>
                 </div>
                 {links.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {links.map(link => (
-                      <span key={link} className="inline-flex max-w-full items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-bold text-slate-600">
-                        <span className="max-w-[220px] truncate">{link}</span>
-                        <button type="button" onClick={() => setLinks(prev => prev.filter(item => item !== link))} className="text-slate-400 hover:text-rose-600" aria-label={`Remove ${link}`}>
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      </span>
-                    ))}
+                    {links.map(link => {
+                      const { url, name } = parseAssignmentLink(link);
+                      return (
+                        <span key={url} className="inline-flex max-w-full items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-bold text-slate-600">
+                          <span className="max-w-[220px] truncate">{name}</span>
+                          <button type="button" onClick={() => setLinks(prev => prev.filter(item => item !== link))} className="text-slate-400 hover:text-rose-600" aria-label={`Remove ${name}`}>
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1103,6 +1137,9 @@ export function AssignedWorkSection({
                         checked={needsContentRevision}
                         onChange={event => {
                           setNeedsContentRevision(event.target.checked);
+                          if (!event.target.checked) {
+                            setContentRevisionAssigneeIds([]);
+                          }
                         }}
                         className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                       />
@@ -1139,6 +1176,25 @@ export function AssignedWorkSection({
                         />
                       </div>
                     )}
+                  </div>
+                )}
+
+                {needsContentRevision && (
+                  <div className="mt-4 pt-4 border-t border-slate-100 space-y-2">
+                    <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Content Revision Assignees</label>
+                    <UserMultiSelect
+                      users={userList.filter(user => 
+                        user.id !== 'guest' && (
+                          user.jobTitle === 'Content Creator' || 
+                          (user.role === 'team_member' && user.jobTitle === 'Content Creator') || 
+                          user.id === DINA_ID
+                        )
+                      )}
+                      selectedIds={contentRevisionAssigneeIds}
+                      onChange={setContentRevisionAssigneeIds}
+                      emptyText="No content creators available"
+                    />
+                    <p className="text-[11px] text-slate-400 font-medium italic">Leaving this empty defaults to "Decide Later".</p>
                   </div>
                 )}
               </div>
@@ -1427,21 +1483,34 @@ export function AssignedWorkSection({
                   ))}
                 </div>
 
+                {task.needsContentRevision && (
+                  <div className="mb-3 flex items-center gap-1.5 text-xs font-bold text-slate-500">
+                    <span className="rounded-lg bg-amber-50 border border-amber-200 px-2 py-1 text-amber-800">
+                      Content Revision: {task.contentRevisionAssigneeIds && task.contentRevisionAssigneeIds.length > 0 
+                        ? task.contentRevisionAssigneeIds.map(id => users[id]?.name || 'Assigned').join(', ') 
+                        : 'Decide Later'}
+                    </span>
+                  </div>
+                )}
+
                 {(task.assignmentLinks || []).length > 0 && (
                   <div className="mb-3 flex flex-wrap gap-2">
-                    {(task.assignmentLinks || []).map(link => (
-                      <a
-                        key={link}
-                        href={link}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={(event) => event.stopPropagation()}
-                        className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-black text-indigo-600 hover:bg-indigo-50"
-                      >
-                        <Link2 className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{link}</span>
-                      </a>
-                    ))}
+                    {(task.assignmentLinks || []).map(link => {
+                      const { url, name } = parseAssignmentLink(link);
+                      return (
+                        <a
+                          key={url}
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(event) => event.stopPropagation()}
+                          className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-black text-indigo-600 hover:bg-indigo-50"
+                        >
+                          <Link2 className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">{name}</span>
+                        </a>
+                      );
+                    })}
                   </div>
                 )}
 

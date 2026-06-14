@@ -15,7 +15,8 @@ import { isDueThisWeek, isDueToday } from './lib/deadlineUtils';
 import { isTaskArchived } from './lib/archiveUtils';
 import { canUserAccessTask, canUserActAsCurrentOwner, parsePublishDate, userCanViewFullWorkspace } from './lib/workflowUtils';
 import { Task } from './lib/types';
-import { canCreateWorkAssignment, isWorkAssignmentTask } from './lib/workAssignmentUtils';
+import { canCreateWorkAssignment, isWorkAssignmentTask, isLeaderboardUser } from './lib/workAssignmentUtils';
+import { getTaskTypeConfigs } from './lib/appSettings';
 import { Menu } from 'lucide-react';
 
 let notificationAudioContext: AudioContext | null = null;
@@ -345,7 +346,7 @@ function WorkspaceContent() {
   const visibleArchivedTasks = canViewFullWorkspace ? archivedEnvTasks : archivedEnvTasks.filter(t => canUserAccessTask(t, currentUser, appSettings));
   const workflowVisibleEnvTasks = visibleEnvTasks.filter(task => task.status !== 'assigned_work');
   const isScopedToCurrentOwner = (task: typeof visibleEnvTasks[number]) => (
-    !(appSettings.firstReviewerUserIds || []).includes(currentUser.id) && !(appSettings.finalReviewerUserIds || []).includes(currentUser.id)
+    !(appSettings.firstReviewerUserIds || []).includes(currentUser.id) && !(appSettings.finalReviewerUserIds || []).includes(currentUser.id) && currentUser.role !== 'team_leader'
       ? true
       : canUserActAsCurrentOwner(task, currentUser)
   );
@@ -408,7 +409,17 @@ function WorkspaceContent() {
         return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={needsFullReview} title="Waiting for First Rev." />;
       }
       case 'content_revision_queue': {
-        const contentTasks = workflowVisibleEnvTasks.filter(t => t.status === 'waiting_content_revision' && isScopedToCurrentOwner(t));
+        const configs = getTaskTypeConfigs(appSettings);
+        const isFirstRev = (appSettings.firstReviewerUserIds || []).includes(currentUser.id) ||
+          configs.some(c => c.fullReviewerUserIds?.includes(currentUser.id) || c.quickLookUserIds?.includes(currentUser.id)) ||
+          currentUser.role === 'team_leader';
+        const isFinalRev = (appSettings.finalReviewerUserIds || []).includes(currentUser.id) ||
+          configs.some(c => c.finalReviewerUserIds?.includes(currentUser.id));
+        const isHighboard = isFirstRev || isFinalRev || currentUser.role !== 'team_member' || isLeaderboardUser(currentUser.id);
+
+        const contentTasks = workflowVisibleEnvTasks.filter(t => 
+          t.status === 'waiting_content_revision' && (isHighboard || (t.contentRevisionAssigneeIds || []).includes(currentUser.id))
+        );
         return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={contentTasks} title="Waiting for Content Rev." />;
       }
       case 'quick_look_queue': {
@@ -456,11 +467,24 @@ function WorkspaceContent() {
         return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={visibleTasks} title="All Tasks" />;
       }
       case 'my_tasks': {
-        const myTasks = visibleEnvTasks.filter(t => 
-          t.handledBy.includes(currentUser.id) || 
-          (t.currentOwnerUserIds || []).includes(currentUser.id) ||
-          (t.status === 'draft' && t.createdBy === currentUser.id)
-        );
+        const isContentCreator = currentUser.jobTitle === 'Content Creator' || (currentUser.role === 'team_member' && currentUser.jobTitle === 'Content Creator');
+        const myTasks = visibleEnvTasks.filter(t => {
+          if (isContentCreator) {
+            if (t.status === 'assigned_work' || t.status === 'draft') {
+              return t.handledBy.includes(currentUser.id) || t.createdBy === currentUser.id;
+            }
+            if ((t.contentRevisionAssigneeIds || []).includes(currentUser.id)) {
+              return true;
+            }
+            if (t.status === 'changes_requested_by_content') {
+              return t.handledBy.includes(currentUser.id);
+            }
+            return false;
+          }
+          return t.handledBy.includes(currentUser.id) || 
+            (t.currentOwnerUserIds || []).includes(currentUser.id) ||
+            (t.status === 'draft' && t.createdBy === currentUser.id);
+        });
         return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={myTasks} title="My Tasks" />;
       }
       case 'archived_tasks': {

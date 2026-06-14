@@ -174,7 +174,7 @@ export function createLinkedTaskFile(rawUrl: string): UploadedTaskFile {
   };
 }
 
-async function fetchLinkTitleScraped(url: string): Promise<string | null> {
+export async function fetchLinkTitleScraped(url: string): Promise<string | null> {
   try {
     const response = await fetch(`/api/metadata?url=${encodeURIComponent(url)}`);
     if (!response.ok) return null;
@@ -299,5 +299,16 @@ export function getLinkHostLabel(rawUrl?: string) {
 export async function fetchFreshDriveThumbnail(fileId: string): Promise<string | null> {
   const metadata = await fetchDriveLinkMetadata(fileId).catch(() => null);
   return metadata?.thumbnailLink || null;
+}
+
+export function parseAssignmentLink(linkStr: string): { url: string; name: string } {
+  if (!linkStr) return { url: '', name: '' };
+  const delimiterIndex = linkStr.indexOf('|');
+  if (delimiterIndex === -1) {
+    return { url: linkStr, name: linkStr };
+  }
+  const url = linkStr.substring(0, delimiterIndex);
+  const name = linkStr.substring(delimiterIndex + 1);
+  return { url, name: name || url };
 }
 
