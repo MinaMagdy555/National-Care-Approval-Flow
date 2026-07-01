@@ -1,6 +1,6 @@
-import { AppSettings, ReviewMode, Role, Task, TaskStatus, User } from './types';
+import { AppSettings, ReviewMode, Role, Task, TaskStatus, User, WorkflowDefinition, WorkflowPhaseDefinition } from './types';
 import { isTaskArchived } from './archiveUtils';
-import { getTaskTypeConfigs, cleanTaskTypeKey } from './appSettings';
+import { AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID, MARWA_ID, MINA_ID, cleanTaskTypeKey, getDefaultWorkflowIdForTaskType, getResponsibilityForLabel, getTaskTypeConfigs } from './appSettings';
 
 export const REVIEWER_WAITING_STATUSES: TaskStatus[] = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'];
 export const ART_DIRECTOR_WAITING_STATUSES: TaskStatus[] = ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'];
@@ -53,6 +53,17 @@ export function canManageWorkflow(user: Pick<User, 'id' | 'role' | 'isAdmin'>, s
   return false;
 }
 
+export function canManageWorkflowBuilder(user: Pick<User, 'id' | 'role' | 'isAdmin' | 'jobTitle'>, settings?: AppSettings) {
+  if (user.isAdmin || user.role === 'admin') return true;
+  if ([MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID].includes(user.id)) return true;
+  if (['art_director', 'team_leader', 'manager', 'marketing_manager'].includes(user.role)) return true;
+  if (settings && user.jobTitle) {
+    const responsibility = getResponsibilityForLabel(settings, user.jobTitle);
+    if (responsibility?.id === 'hr' || responsibility?.grantsSettingsAccess) return true;
+  }
+  return false;
+}
+
 export function canUserActAsCurrentOwner(task: Task, user: Pick<User, 'id'>) {
   const ownerIds = getCurrentOwnerUserIds(task);
   return ownerIds.length === 0 || ownerIds.includes(user.id);
@@ -68,6 +79,102 @@ export function getReviewRouteTarget(mode: ReviewMode): { status: TaskStatus; ow
   }
 
   return { status: 'waiting_reviewer_full_review', ownerRole: 'reviewer' };
+}
+
+export function getWorkflowById(settings: AppSettings, workflowId?: string | null) {
+  return (settings.workflows || []).find(workflow => workflow.id === workflowId && workflow.active !== false) || null;
+}
+
+export function getWorkflowForTaskType(settings: AppSettings, taskType: string) {
+  const cleanType = cleanTaskTypeKey(taskType);
+  const configWorkflowId = getTaskTypeConfigs(settings).find(c => cleanTaskTypeKey(c.id) === cleanType)?.workflowId;
+  const mappedWorkflowId = settings.taskTypeWorkflowIds?.[cleanType];
+  const workflowId = configWorkflowId || mappedWorkflowId || getDefaultWorkflowIdForTaskType(taskType) || settings.defaultWorkflowId;
+  return getWorkflowById(settings, workflowId) || getWorkflowById(settings, settings.defaultWorkflowId) || (settings.workflows || [])[0] || null;
+}
+
+export function cloneWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {
+  return {
+    ...workflow,
+    phases: workflow.phases.map(phase => ({
+      ...phase,
+      userIds: [...(phase.userIds || [])],
+      roleIds: [...(phase.roleIds || [])],
+      responsibilityIds: [...(phase.responsibilityIds || [])],
+    })),
+  };
+}
+
+export function getWorkflowPhase(task: Pick<Task, 'workflowSnapshot' | 'workflowCurrentPhaseIndex' | 'workflowCurrentPhaseId'>) {
+  const phases = task.workflowSnapshot?.phases || [];
+  if (task.workflowCurrentPhaseId) {
+    const byId = phases.find(phase => phase.id === task.workflowCurrentPhaseId);
+    if (byId) return byId;
+  }
+  const index = task.workflowCurrentPhaseIndex ?? 0;
+  return phases[index] || null;
+}
+
+export function getWorkflowPhaseIndex(workflow: WorkflowDefinition | null | undefined, phaseId?: string | null) {
+  if (!workflow || !phaseId) return -1;
+  return workflow.phases.findIndex(phase => phase.id === phaseId);
+}
+
+function userMatchesResponsibility(user: User, responsibilityId: string, settings: AppSettings) {
+  const responsibility = settings.responsibilities.find(item => item.id === responsibilityId);
+  const label = responsibility?.label || responsibilityId;
+  const normalizedLabel = label.trim().toLowerCase();
+  const normalizedId = responsibilityId.replace(/_/g, ' ').trim().toLowerCase();
+  const jobTitle = (user.jobTitle || '').trim().toLowerCase();
+  return jobTitle === normalizedLabel || jobTitle === normalizedId || jobTitle.includes(normalizedLabel) || jobTitle.includes(normalizedId);
+}
+
+export function resolveWorkflowPhaseReviewerIds(phase: WorkflowPhaseDefinition | null | undefined, settings: AppSettings, users: User[], task?: Task) {
+  if (!phase) return [];
+  const ids = new Set<string>();
+  (phase.userIds || []).forEach(id => id && ids.add(id));
+  users.forEach(user => {
+    if (user.id === 'guest') return;
+    if ((phase.roleIds || []).includes(user.role)) ids.add(user.id);
+    if ((phase.responsibilityIds || []).some(responsibilityId => userMatchesResponsibility(user, responsibilityId, settings))) {
+      ids.add(user.id);
+    }
+  });
+
+  if (task && phase.id === 'content_review' && (task.contentRevisionAssigneeIds || []).length > 0) {
+    task.contentRevisionAssigneeIds?.forEach(id => id && ids.add(id));
+  }
+
+  return Array.from(ids);
+}
+
+export function getPhaseOwnerRole(phase: WorkflowPhaseDefinition | null | undefined): Role | null {
+  if (!phase) return null;
+  if (phase.reviewStyle === 'final_approval' || (phase.roleIds || []).includes('art_director')) return 'art_director';
+  if ((phase.roleIds || []).includes('team_member') || (phase.responsibilityIds || []).includes('content_creator')) return 'team_member';
+  if ((phase.roleIds || []).includes('team_leader')) return 'team_leader';
+  return 'reviewer';
+}
+
+export function getStatusForWorkflowPhase(phase: WorkflowPhaseDefinition | null | undefined): TaskStatus {
+  if (!phase) return 'approved_by_art_director';
+  if (phase.reviewStyle === 'final_approval' || (phase.roleIds || []).includes('art_director')) return 'sent_to_art_director';
+  if ((phase.roleIds || []).includes('team_member') || (phase.responsibilityIds || []).includes('content_creator')) return 'waiting_content_revision';
+  return phase.reviewStyle === 'full_review' ? 'waiting_reviewer_full_review' : 'waiting_reviewer_quick_look';
+}
+
+export function getReviewModeForWorkflowPhase(phase: WorkflowPhaseDefinition | null | undefined): ReviewMode {
+  if (!phase) return 'full_review';
+  if (phase.reviewStyle === 'final_approval') return 'direct_to_ad';
+  return phase.reviewStyle === 'full_review' ? 'full_review' : 'quick_look';
+}
+
+export function getWorkflowApprovalIds(task: Pick<Task, 'workflowPhaseApprovals'>, phaseId: string) {
+  return task.workflowPhaseApprovals?.[phaseId] || [];
+}
+
+export function hasUserApprovedWorkflowPhase(task: Pick<Task, 'workflowPhaseApprovals'>, phaseId: string, userId: string) {
+  return getWorkflowApprovalIds(task, phaseId).includes(userId);
 }
 
 export function canReviewRouteUpdateStatus(task: Task) {

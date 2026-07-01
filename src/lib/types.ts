@@ -1,6 +1,8 @@
 export type Role = 'team_member' | 'reviewer' | 'art_director' | 'team_leader' | 'manager' | 'developer' | 'marketing_manager' | 'admin';
 export type Environment = 'production' | 'demo' | 'archived';
 export type ReviewMode = 'full_review' | 'quick_look' | 'direct_to_ad';
+export type WorkflowReviewStyle = 'full_review' | 'quick_look' | 'final_approval';
+export type WorkflowPhaseMode = 'sequential' | 'parallel';
 export type Priority = string;
 export type AssignmentPeriod = 'day' | 'week' | 'month';
 export type PriorityTone = 'emerald' | 'slate' | 'amber' | 'rose' | 'blue' | 'indigo' | 'purple';
@@ -89,6 +91,37 @@ export interface TaskTypeConfig {
   fullReviewerUserIds?: string[];
   quickLookUserIds?: string[];
   finalReviewerUserIds?: string[];
+  workflowId?: string | null;
+}
+
+export interface WorkflowPhaseDefinition {
+  id: string;
+  name: string;
+  reviewStyle: WorkflowReviewStyle;
+  mode: WorkflowPhaseMode;
+  userIds: string[];
+  roleIds: Role[];
+  responsibilityIds: string[];
+}
+
+export interface WorkflowDefinition {
+  id: string;
+  name: string;
+  description?: string;
+  active: boolean;
+  phases: WorkflowPhaseDefinition[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface WorkflowPhaseHistoryEntry {
+  phaseId: string;
+  phaseName: string;
+  action: 'started' | 'approved' | 'changes_requested' | 'skipped' | 'completed' | 'workflow_changed';
+  actorId: string;
+  targetUserIds?: string[];
+  createdAt: string;
+  note?: string;
 }
 
 export interface AppSettings {
@@ -107,6 +140,9 @@ export interface AppSettings {
   customPermissions?: Array<{ id: string; label: string; userIds: string[] }>;
   customWorkingHours?: CustomWorkingHours[];
   taskTypes?: Array<string | TaskTypeConfig>;
+  workflows?: WorkflowDefinition[];
+  defaultWorkflowId?: string | null;
+  taskTypeWorkflowIds?: Record<string, string>;
   campaignPlatforms?: string[];
   hiddenColumns?: string[];
   firstReviewerUserIds?: string[];
@@ -223,6 +259,12 @@ export interface Task {
   description?: string | null;
   taskType: TaskType;
   reviewMode: ReviewMode;
+  workflowId?: string | null;
+  workflowSnapshot?: WorkflowDefinition | null;
+  workflowCurrentPhaseId?: string | null;
+  workflowCurrentPhaseIndex?: number | null;
+  workflowPhaseApprovals?: Record<string, string[]>;
+  workflowPhaseHistory?: WorkflowPhaseHistoryEntry[];
   environment: Environment;
   createdBy: string; // user id
   handledBy: string[]; // user ids

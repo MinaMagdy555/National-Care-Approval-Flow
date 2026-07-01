@@ -14,7 +14,7 @@ import { UserMultiSelect } from './UserMultiSelect';
 import { CustomSelect } from './CustomSelect';
 import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText } from '../lib/uploadLimits';
 import { createLinkedTaskFileWithMetadata, getLinkHostLabel } from '../lib/linkAttachments';
-import { canManageWorkflow, canUserAccessTask, canUserActAsCurrentOwner, getCurrentOwnerUserIds, userCanViewFullWorkspace } from '../lib/workflowUtils';
+import { canManageWorkflow, canManageWorkflowBuilder, canUserAccessTask, canUserActAsCurrentOwner, getCurrentOwnerUserIds, getWorkflowPhase, hasUserApprovedWorkflowPhase, userCanViewFullWorkspace } from '../lib/workflowUtils';
 import { isLeaderboardUser } from '../lib/workAssignmentUtils';
 import { DINA_ID } from '../lib/appSettings';
 import {
@@ -50,6 +50,8 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     updateTaskPriority,
     updateTaskAssignment,
     updateTaskReviewMode,
+    applyTaskWorkflow,
+    approveWorkflowPhase,
     updateTaskPublishSchedule,
     markCampaignPublished,
     addTaskComment,
@@ -105,6 +107,8 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   const [actionError, setActionError] = useState('');
   const [managedContributorIds, setManagedContributorIds] = useState<string[]>([]);
   const [managedReviewMode, setManagedReviewMode] = useState<ReviewMode>('full_review');
+  const [managedWorkflowId, setManagedWorkflowId] = useState('');
+  const [managedWorkflowPhaseId, setManagedWorkflowPhaseId] = useState('');
   const [managedPublishAt, setManagedPublishAt] = useState('');
   const [managedPublishNote, setManagedPublishNote] = useState('');
   const [managedRevisionAssigneeIds, setManagedRevisionAssigneeIds] = useState<string[]>([]);
@@ -123,10 +127,12 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     if (!task) return;
     setManagedContributorIds(task.handledBy);
     setManagedReviewMode(task.reviewMode);
+    setManagedWorkflowId(task.workflowId || task.workflowSnapshot?.id || '');
+    setManagedWorkflowPhaseId(task.workflowCurrentPhaseId || task.workflowSnapshot?.phases[0]?.id || '');
     setManagedPublishAt(task.scheduledPublishAt || '');
     setManagedPublishNote(task.publishNote || '');
     setManagedRevisionAssigneeIds(task.contentRevisionAssigneeIds || []);
-  }, [taskId, (task?.handledBy || []).join('|'), (task?.currentOwnerUserIds || []).join('|'), task?.currentOwnerUserId, task?.reviewMode, task?.scheduledPublishAt, task?.publishNote, (task?.contentRevisionAssigneeIds || []).join('|')]);
+  }, [taskId, (task?.handledBy || []).join('|'), (task?.currentOwnerUserIds || []).join('|'), task?.currentOwnerUserId, task?.reviewMode, task?.workflowId, task?.workflowCurrentPhaseId, task?.scheduledPublishAt, task?.publishNote, (task?.contentRevisionAssigneeIds || []).join('|')]);
 
   useEffect(() => {
     if (task && selectedVersionIndex > task.versions.length - 1) {
@@ -192,9 +198,21 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   const isSelfCreatedTask = task.createdBy === currentUser.id;
   const isReadOnlyObserver = currentUser.role === 'manager' || currentUser.role === 'developer';
   const isCurrentActiveOwner = canUserActAsCurrentOwner(task, currentUser);
+  const activeWorkflowPhase = getWorkflowPhase(task);
+  const workflowOptions = (appSettings.workflows || [])
+    .filter(workflow => workflow.active !== false)
+    .map(workflow => ({ value: workflow.id, label: workflow.name }));
+  const selectedWorkflow = (appSettings.workflows || []).find(workflow => workflow.id === managedWorkflowId) || task.workflowSnapshot || null;
+  const workflowPhaseOptions = (selectedWorkflow?.phases || []).map(phase => ({ value: phase.id, label: phase.name }));
+  const activeWorkflowPhaseApprovedByMe = activeWorkflowPhase ? hasUserApprovedWorkflowPhase(task, activeWorkflowPhase.id, currentUser.id) : false;
+  const canActAsWorkflowReviewer = Boolean(activeWorkflowPhase) &&
+    isCurrentActiveOwner &&
+    !activeWorkflowPhaseApprovedByMe &&
+    !['approved_by_art_director', 'completed', 'archived', 'on_hold', 'assigned_work'].includes(task.status);
   const canActAsReviewer = (currentUser.role === 'reviewer' || currentUser.role === 'team_leader') && isCurrentActiveOwner;
   const canActAsArtDirector = currentUser.role === 'art_director' && isCurrentActiveOwner;
   const canManageWorkflowSettings = currentUser.role !== 'team_member' && canManageWorkflow(currentUser, appSettings);
+  const canManageWorkflowDefinitions = canManageWorkflowBuilder(currentUser, appSettings);
   const canReassignTask = currentUser.role !== 'team_member' && canAssignContributors(currentUser.id, appSettings);
   const canResubmitTask = !isReadOnlyObserver && task.handledBy.includes(currentUser.id);
   const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
@@ -293,6 +311,11 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
 
   const saveReviewRoute = () => {
     updateTaskReviewMode(task.id, managedReviewMode);
+  };
+
+  const saveWorkflow = () => {
+    if (!managedWorkflowId) return;
+    applyTaskWorkflow(task.id, managedWorkflowId, managedWorkflowPhaseId || undefined);
   };
 
   const saveRevisionAssignees = () => {
@@ -716,7 +739,11 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
       }
 
       updateTaskPriority(task.id, priority, deadline);
-      updateTaskStatus(task.id, 'sent_to_art_director', 'art_director');
+      if (task.workflowSnapshot) {
+        approveWorkflowPhase(task.id, note || `${activeWorkflowPhase?.name || 'Review phase'} approved.`);
+      } else {
+        updateTaskStatus(task.id, 'sent_to_art_director', 'art_director');
+      }
       resetReviewNotes();
       setModal(null);
     } catch (error) {
@@ -790,7 +817,11 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   };
 
   const handleADApprove = () => {
-    updateTaskStatus(task.id, 'approved_by_art_director', null);
+    if (task.workflowSnapshot) {
+      approveWorkflowPhase(task.id, `${activeWorkflowPhase?.name || 'Final review'} approved.`);
+    } else {
+      updateTaskStatus(task.id, 'approved_by_art_director', null);
+    }
   };
 
   const handleContentApprove = async () => {
@@ -798,6 +829,16 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     setIsSavingAction(true);
     setActionError('');
     try {
+      if (task.workflowSnapshot) {
+        addTaskComment(task.id, {
+          authorId: currentUser.id,
+          action: 'content_approved',
+          message: 'Content approved, moving to the next workflow phase.',
+          sections: [],
+        });
+        approveWorkflowPhase(task.id, 'Content approved.');
+        return;
+      }
       const creatorRole = users[task.createdBy]?.role || initialUsers.find(user => user.id === task.createdBy)?.role;
       const isReviewerCreated = creatorRole === 'reviewer' || creatorRole === 'admin';
       const sendToMarwa = isReviewerCreated || task.reviewMode === 'direct_to_ad';
@@ -1142,6 +1183,14 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
               <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Review mode</span>
               <span className="font-semibold text-slate-900">{getReviewModeLabel(task.reviewMode)}</span>
             </div>
+            <div>
+              <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Workflow</span>
+              <span className="font-semibold text-slate-900">{task.workflowSnapshot?.name || 'Default route'}</span>
+            </div>
+            <div>
+              <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Active phase</span>
+              <span className="font-semibold text-slate-900">{activeWorkflowPhase?.name || 'Not started'}</span>
+            </div>
             {task.needsContentRevision && (
               <div>
                 <span className="block text-[11px] font-black uppercase text-slate-400 tracking-wider mb-1">Revision Assignees</span>
@@ -1196,6 +1245,40 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
               </div>
 
               <div className="space-y-3">
+                {canManageWorkflowDefinitions && workflowOptions.length > 0 && (
+                  <div className="grid gap-3 sm:grid-cols-[1fr,1fr,auto]">
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Workflow</label>
+                      <CustomSelect
+                        value={managedWorkflowId}
+                        onChange={value => {
+                          setManagedWorkflowId(value);
+                          const workflow = (appSettings.workflows || []).find(item => item.id === value);
+                          setManagedWorkflowPhaseId(workflow?.phases[0]?.id || '');
+                        }}
+                        options={workflowOptions}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Continue From Phase</label>
+                      <CustomSelect
+                        value={managedWorkflowPhaseId}
+                        onChange={setManagedWorkflowPhaseId}
+                        options={workflowPhaseOptions}
+                        disabled={workflowPhaseOptions.length === 0}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={saveWorkflow}
+                      disabled={!managedWorkflowId || (managedWorkflowId === (task.workflowId || task.workflowSnapshot?.id || '') && managedWorkflowPhaseId === (task.workflowCurrentPhaseId || ''))}
+                      className="self-end rounded-lg bg-slate-900 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300"
+                    >
+                      Apply Workflow
+                    </button>
+                  </div>
+                )}
+
                 {canManageWorkflowSettings && (
                   <div className="grid gap-3 sm:grid-cols-[1fr,auto]">
                     <div>
@@ -1474,10 +1557,12 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                 }}
                 className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-sm transition-all focus:ring-4 focus:ring-indigo-100"
               >
-                {task.status === 'waiting_reviewer_full_review' ? 'Approve & Send to Final Approvement' : 
-                 task.status === 'waiting_reviewer_quick_look' ? 'Quick Look Done & Send to Final Approvement' : 'Send to Final Approvement'}
+                {task.workflowSnapshot
+                  ? `Approve ${activeWorkflowPhase?.name || 'Phase'}`
+                  : task.status === 'waiting_reviewer_full_review' ? 'Approve & Send to Final Approvement' : 
+                    task.status === 'waiting_reviewer_quick_look' ? 'Quick Look Done & Send to Final Approvement' : 'Send to Final Approvement'}
               </button>
-              {task.reviewMode === 'full_review' && task.status !== 'draft' && (
+              {(task.workflowSnapshot || task.reviewMode === 'full_review') && task.status !== 'draft' && (
                 <form onSubmit={handleRequestChanges} className="space-y-3 rounded-2xl border border-rose-100 bg-rose-50/40 p-3">
                   <div>
                     <h3 className="text-sm font-black text-rose-900">Request Edits</h3>
@@ -1976,7 +2061,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
         <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-slate-200">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h3 className="text-lg font-black text-slate-900">Approve & Send to Final Approvement</h3>
+              <h3 className="text-lg font-black text-slate-900">{task.workflowSnapshot ? `Approve ${activeWorkflowPhase?.name || 'Phase'}` : 'Approve & Send to Final Approvement'}</h3>
               <button onClick={() => { setActionError(''); setModal(null); }} className="text-slate-400 hover:text-indigo-600 transition-colors"><X className="w-5 h-5"/></button>
             </div>
             <form onSubmit={handleSendToAD} className="p-6 space-y-5">
@@ -2013,7 +2098,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
               {actionError && <p className="text-sm font-bold text-rose-600">{actionError}</p>}
               <div className="pt-2">
                 <button type="submit" disabled={isSavingAction} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">
-                  {isSavingAction ? 'Saving...' : 'Send to Final Approvement'}
+                  {isSavingAction ? 'Saving...' : task.workflowSnapshot ? 'Approve Phase' : 'Send to Final Approvement'}
                 </button>
               </div>
             </form>

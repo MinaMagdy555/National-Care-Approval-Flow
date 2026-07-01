@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Settings, ShieldCheck, X, Clock } from 'lucide-react';
 import { useAppStore } from '../lib/store';
-import { PriorityTone, Role, TaskTypeConfig } from '../lib/types';
+import { PriorityTone, Role, TaskTypeConfig, WorkflowDefinition, WorkflowPhaseDefinition, WorkflowPhaseMode, WorkflowReviewStyle } from '../lib/types';
 import { normalizeSettingId, priorityToneClasses, normalizeTaskTypeId, cleanTaskTypeKey, getTaskTypeConfigs } from '../lib/appSettings';
 import { CustomSelect } from './CustomSelect';
 import { cn } from '../lib/utils';
@@ -64,6 +64,7 @@ export function SettingsManagement() {
     }
   }, [customHoursTargetType, userList]);
   const [priorityTone, setPriorityTone] = useState<PriorityTone>('blue');
+  const [workflowName, setWorkflowName] = useState('');
 
   
   const [taskTypeName, setTaskTypeName] = useState('');
@@ -82,6 +83,16 @@ export function SettingsManagement() {
   const [editingFinalReviewers, setEditingFinalReviewers] = useState<string[]>([]);
 
   const taskTypeConfigs = getTaskTypeConfigs(appSettings);
+  const workflowOptions = (appSettings.workflows || []).map(workflow => ({ value: workflow.id, label: workflow.name }));
+  const reviewStyleOptions: Array<{ value: WorkflowReviewStyle; label: string }> = [
+    { value: 'quick_look', label: 'Quick Look' },
+    { value: 'full_review', label: 'Full Review' },
+    { value: 'final_approval', label: 'Final Approval' },
+  ];
+  const phaseModeOptions: Array<{ value: WorkflowPhaseMode; label: string }> = [
+    { value: 'parallel', label: 'Parallel' },
+    { value: 'sequential', label: 'Sequential' },
+  ];
 
   const handleAddTaskType = () => {
     const name = taskTypeName.trim();
@@ -167,6 +178,91 @@ export function SettingsManagement() {
       };
     });
     setEditingTaskTypeId(null);
+  };
+
+  const makeWorkflowId = (value: string) => `workflow_${normalizeSettingId(value)}_${Date.now().toString(36)}`;
+  const makePhaseId = (value: string) => `phase_${normalizeSettingId(value)}_${Date.now().toString(36)}`;
+
+  const updateWorkflow = (workflowId: string, updater: (workflow: WorkflowDefinition) => WorkflowDefinition) => {
+    updateAppSettings(settings => ({
+      ...settings,
+      workflows: (settings.workflows || []).map(workflow => workflow.id === workflowId ? updater(workflow) : workflow),
+    }));
+  };
+
+  const updateWorkflowPhase = (workflowId: string, phaseId: string, updater: (phase: WorkflowPhaseDefinition) => WorkflowPhaseDefinition) => {
+    updateWorkflow(workflowId, workflow => ({
+      ...workflow,
+      updatedAt: new Date().toISOString(),
+      phases: workflow.phases.map(phase => phase.id === phaseId ? updater(phase) : phase),
+    }));
+  };
+
+  const addWorkflow = () => {
+    const name = workflowName.trim();
+    if (!name) return;
+    const now = new Date().toISOString();
+    const workflow: WorkflowDefinition = {
+      id: makeWorkflowId(name),
+      name,
+      active: true,
+      createdAt: now,
+      updatedAt: now,
+      phases: [
+        {
+          id: makePhaseId('content_review'),
+          name: 'Content Review',
+          reviewStyle: 'quick_look',
+          mode: 'parallel',
+          userIds: [],
+          roleIds: [],
+          responsibilityIds: ['content_creator'],
+        },
+        {
+          id: makePhaseId('senior_review'),
+          name: 'Senior Branding & Video Editing',
+          reviewStyle: 'quick_look',
+          mode: 'parallel',
+          userIds: [],
+          roleIds: ['reviewer'],
+          responsibilityIds: ['senior_brand_designer_video_editor'],
+        },
+        {
+          id: makePhaseId('art_director'),
+          name: 'Art Director',
+          reviewStyle: 'final_approval',
+          mode: 'parallel',
+          userIds: [],
+          roleIds: ['art_director'],
+          responsibilityIds: ['art_director'],
+        },
+      ],
+    };
+    updateAppSettings(settings => ({
+      ...settings,
+      workflows: [...(settings.workflows || []), workflow],
+      defaultWorkflowId: settings.defaultWorkflowId || workflow.id,
+    }));
+    setWorkflowName('');
+  };
+
+  const addWorkflowPhase = (workflowId: string) => {
+    const name = prompt('Phase name:')?.trim();
+    if (!name) return;
+    const phase: WorkflowPhaseDefinition = {
+      id: makePhaseId(name),
+      name,
+      reviewStyle: 'quick_look',
+      mode: 'parallel',
+      userIds: [],
+      roleIds: [],
+      responsibilityIds: [],
+    };
+    updateWorkflow(workflowId, workflow => ({
+      ...workflow,
+      updatedAt: new Date().toISOString(),
+      phases: [...workflow.phases, phase],
+    }));
   };
 
   if (!canManageSettings) {
@@ -572,6 +668,181 @@ export function SettingsManagement() {
       </section>
 
 
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-black uppercase tracking-wider text-slate-500">Workflow Builder</h2>
+            <p className="mt-0.5 text-xs text-slate-400">Create named review workflows and control each phase, reviewer set, and approval mode.</p>
+          </div>
+          <div className="flex w-full gap-2 sm:w-auto">
+            <input
+              value={workflowName}
+              onChange={event => setWorkflowName(event.target.value)}
+              placeholder="Workflow name"
+              className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 shadow-sm sm:w-64"
+            />
+            <button
+              type="button"
+              onClick={addWorkflow}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white hover:bg-black"
+            >
+              <Plus className="h-4 w-4" /> Add
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {(appSettings.workflows || []).map(workflow => (
+            <div key={workflow.id} className={cn("rounded-xl border p-3", workflow.active === false ? "border-slate-100 bg-slate-50 opacity-70" : "border-slate-200 bg-white")}>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <input
+                    value={workflow.name}
+                    onChange={event => updateWorkflow(workflow.id, item => ({ ...item, name: event.target.value, updatedAt: new Date().toISOString() }))}
+                    className="w-full rounded-lg border border-transparent px-2 py-1 text-base font-black text-slate-900 outline-none hover:border-slate-200 focus:border-indigo-300"
+                  />
+                  <p className="px-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">{workflow.phases.length} phases</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => updateAppSettings(settings => ({ ...settings, defaultWorkflowId: workflow.id }))}
+                    className={cn("rounded-lg border px-3 py-1.5 text-xs font-black", appSettings.defaultWorkflowId === workflow.id ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-600")}
+                  >
+                    {appSettings.defaultWorkflowId === workflow.id ? 'Default' : 'Set Default'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addWorkflowPhase(workflow.id)}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-black text-slate-700 hover:bg-slate-50"
+                  >
+                    Add Phase
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateWorkflow(workflow.id, item => ({ ...item, active: item.active === false, updatedAt: new Date().toISOString() }))}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-black text-slate-700 hover:bg-slate-50"
+                  >
+                    {workflow.active === false ? 'Enable' : 'Disable'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!confirm(`Delete workflow "${workflow.name}"? Existing tasks keep their saved workflow snapshot.`)) return;
+                      updateAppSettings(settings => {
+                        const nextWorkflows = (settings.workflows || []).filter(item => item.id !== workflow.id);
+                        const nextAssignments = Object.fromEntries(Object.entries(settings.taskTypeWorkflowIds || {}).filter(([, value]) => value !== workflow.id));
+                        return {
+                          ...settings,
+                          workflows: nextWorkflows,
+                          defaultWorkflowId: settings.defaultWorkflowId === workflow.id ? (nextWorkflows[0]?.id || null) : settings.defaultWorkflowId,
+                          taskTypeWorkflowIds: nextAssignments,
+                        };
+                      });
+                    }}
+                    className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-black text-rose-600 hover:bg-rose-50"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {workflow.phases.map((phase, phaseIndex) => (
+                  <div key={phase.id} className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
+                    <div className="mb-3 grid gap-2 lg:grid-cols-[2fr,1fr,1fr,auto]">
+                      <input
+                        value={phase.name}
+                        onChange={event => updateWorkflowPhase(workflow.id, phase.id, item => ({ ...item, name: event.target.value }))}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-900"
+                      />
+                      <CustomSelect
+                        value={phase.reviewStyle}
+                        onChange={value => updateWorkflowPhase(workflow.id, phase.id, item => ({ ...item, reviewStyle: value as WorkflowReviewStyle }))}
+                        options={reviewStyleOptions}
+                      />
+                      <CustomSelect
+                        value={phase.mode}
+                        onChange={value => updateWorkflowPhase(workflow.id, phase.id, item => ({ ...item, mode: value as WorkflowPhaseMode }))}
+                        options={phaseModeOptions}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => updateWorkflow(workflow.id, item => ({ ...item, phases: item.phases.filter(p => p.id !== phase.id), updatedAt: new Date().toISOString() }))}
+                        disabled={workflow.phases.length <= 1}
+                        className="rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-black text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Delete
+                      </button>
+                    </div>
+
+                    <div className="grid gap-3 xl:grid-cols-3">
+                      <div>
+                        <span className="mb-1 block text-[9px] font-black uppercase tracking-wider text-slate-400">Users</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {seedUsers.map(user => {
+                            const active = phase.userIds.includes(user.id);
+                            return (
+                              <button
+                                key={user.id}
+                                type="button"
+                                onClick={() => updateWorkflowPhase(workflow.id, phase.id, item => ({ ...item, userIds: toggleValue(item.userIds, user.id) }))}
+                                className={cn("rounded-full border px-2 py-0.5 text-[11px] font-bold", active ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-600")}
+                              >
+                                {user.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="mb-1 block text-[9px] font-black uppercase tracking-wider text-slate-400">Roles</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {ROLE_OPTIONS.map(role => {
+                            const active = phase.roleIds.includes(role.value);
+                            return (
+                              <button
+                                key={role.value}
+                                type="button"
+                                onClick={() => updateWorkflowPhase(workflow.id, phase.id, item => ({ ...item, roleIds: toggleValue(item.roleIds, role.value) as Role[] }))}
+                                className={cn("rounded-full border px-2 py-0.5 text-[11px] font-bold", active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600")}
+                              >
+                                {role.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="mb-1 block text-[9px] font-black uppercase tracking-wider text-slate-400">Responsibilities</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {appSettings.responsibilities.map(responsibility => {
+                            const active = phase.responsibilityIds.includes(responsibility.id);
+                            return (
+                              <button
+                                key={responsibility.id}
+                                type="button"
+                                onClick={() => updateWorkflowPhase(workflow.id, phase.id, item => ({ ...item, responsibilityIds: toggleValue(item.responsibilityIds, responsibility.id) }))}
+                                className={cn("rounded-full border px-2 py-0.5 text-[11px] font-bold", active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600")}
+                              >
+                                {responsibility.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Phase {phaseIndex + 1}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="mb-1 text-sm font-black uppercase tracking-wider text-slate-500">Task Types & Workflows</h2>
@@ -923,6 +1194,22 @@ export function SettingsManagement() {
                               </span>
                             </div>
                           )}
+                        </div>
+                      )}
+                      {workflowOptions.length > 0 && (
+                        <div className="mt-2 max-w-sm">
+                          <label className="mb-1 block text-[9px] font-black uppercase tracking-wider text-slate-400">Default Workflow</label>
+                          <CustomSelect
+                            value={appSettings.taskTypeWorkflowIds?.[cleanTaskTypeKey(config.id)] || config.workflowId || appSettings.defaultWorkflowId || ''}
+                            onChange={value => updateAppSettings(settings => ({
+                              ...settings,
+                              taskTypeWorkflowIds: {
+                                ...(settings.taskTypeWorkflowIds || {}),
+                                [cleanTaskTypeKey(config.id)]: value,
+                              },
+                            }))}
+                            options={workflowOptions}
+                          />
                         </div>
                       )}
                     </div>

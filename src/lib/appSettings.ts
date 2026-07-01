@@ -1,4 +1,4 @@
-import { AppSettings, Priority, PriorityOption, PriorityTone, ResponsibilityOption, Role, TaskType, User, TaskTypeConfig, CustomWorkingHours } from './types';
+import { AppSettings, Priority, PriorityOption, PriorityTone, ResponsibilityOption, Role, TaskType, User, TaskTypeConfig, CustomWorkingHours, WorkflowDefinition } from './types';
 
 export const MINA_ID = '83e02bb4-11f9-41b0-becb-33e6c4c52b2a';
 export const MARWA_ID = 'd65ea68d-1749-45b9-b0f9-1fdaf23b8f94';
@@ -14,6 +14,93 @@ export const HANEEN_ID = 'c4274078-418a-47b9-a2be-98e75ed89aae';
 export const REEM_ID = 'e620c5ca-fd56-45ba-99a1-33b56be69e48';
 
 const now = new Date().toISOString();
+
+export const FULL_REVIEW_WORKFLOW_ID = 'workflow_full_review_default';
+export const QUICK_LOOK_WORKFLOW_ID = 'workflow_quick_look_default';
+
+export const defaultWorkflows: WorkflowDefinition[] = [
+  {
+    id: FULL_REVIEW_WORKFLOW_ID,
+    name: 'Full Review',
+    description: 'Content review, senior full review, then final approval.',
+    active: true,
+    createdAt: now,
+    updatedAt: now,
+    phases: [
+      {
+        id: 'content_review',
+        name: 'Content Review',
+        reviewStyle: 'quick_look',
+        mode: 'parallel',
+        userIds: [],
+        roleIds: [],
+        responsibilityIds: ['content_creator'],
+      },
+      {
+        id: 'senior_full_review',
+        name: 'Senior Branding & Video Editing',
+        reviewStyle: 'full_review',
+        mode: 'parallel',
+        userIds: [],
+        roleIds: ['reviewer'],
+        responsibilityIds: ['senior_brand_designer_video_editor'],
+      },
+      {
+        id: 'art_director_final',
+        name: 'Art Director',
+        reviewStyle: 'final_approval',
+        mode: 'parallel',
+        userIds: [],
+        roleIds: ['art_director'],
+        responsibilityIds: ['art_director'],
+      },
+    ],
+  },
+  {
+    id: QUICK_LOOK_WORKFLOW_ID,
+    name: 'Quick Look',
+    description: 'Content review, senior quick look, then final approval.',
+    active: true,
+    createdAt: now,
+    updatedAt: now,
+    phases: [
+      {
+        id: 'content_review',
+        name: 'Content Review',
+        reviewStyle: 'quick_look',
+        mode: 'parallel',
+        userIds: [],
+        roleIds: [],
+        responsibilityIds: ['content_creator'],
+      },
+      {
+        id: 'senior_quick_look',
+        name: 'Senior Branding & Video Editing',
+        reviewStyle: 'quick_look',
+        mode: 'parallel',
+        userIds: [],
+        roleIds: ['reviewer'],
+        responsibilityIds: ['senior_brand_designer_video_editor'],
+      },
+      {
+        id: 'art_director_final',
+        name: 'Art Director',
+        reviewStyle: 'final_approval',
+        mode: 'parallel',
+        userIds: [],
+        roleIds: ['art_director'],
+        responsibilityIds: ['art_director'],
+      },
+    ],
+  },
+];
+
+export function getDefaultWorkflowIdForTaskType(taskType: string) {
+  const clean = cleanTaskTypeKey(taskType);
+  return ['video', 'ai packet', 'ai packets', 'new product', 'new products', 'new product add', 'new products add'].includes(clean)
+    ? FULL_REVIEW_WORKFLOW_ID
+    : QUICK_LOOK_WORKFLOW_ID;
+}
 
 export const defaultResponsibilities: ResponsibilityOption[] = [
   { id: 'senior_brand_designer_video_editor', label: 'Senior Brand Designer & Video Editor', permissionRole: 'reviewer' },
@@ -66,6 +153,8 @@ export const defaultAppSettings: AppSettings = {
   taskTypes: [
     'video',
     'ai packet',
+    'new product',
+    'new products',
     'sales material',
     'website material',
     'campaign',
@@ -74,6 +163,9 @@ export const defaultAppSettings: AppSettings = {
     'reels voice over script',
     'others'
   ],
+  workflows: defaultWorkflows,
+  defaultWorkflowId: QUICK_LOOK_WORKFLOW_ID,
+  taskTypeWorkflowIds: {},
   campaignPlatforms: ['Instagram', 'LinkedIn', 'TikTok', 'Snapchat'],
   hiddenColumns: [],
   customWorkingHours: [],
@@ -135,6 +227,7 @@ export function getTaskTypeConfigs(settings: AppSettings): TaskTypeConfig[] {
         fullReviewerUserIds: Array.isArray((t as any).fullReviewerUserIds) ? (t as any).fullReviewerUserIds : [],
         quickLookUserIds: Array.isArray((t as any).quickLookUserIds) ? (t as any).quickLookUserIds : [],
         finalReviewerUserIds: Array.isArray((t as any).finalReviewerUserIds) ? (t as any).finalReviewerUserIds : [],
+        workflowId: typeof (t as any).workflowId === 'string' ? (t as any).workflowId : null,
       };
     }
     
@@ -166,6 +259,7 @@ export function getTaskTypeConfigs(settings: AppSettings): TaskTypeConfig[] {
       fullReviewerUserIds: [],
       quickLookUserIds: [],
       finalReviewerUserIds: [],
+      workflowId: null,
     };
   });
 }
@@ -184,6 +278,27 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
   let firstReviewerUserIds = Array.isArray(settings?.firstReviewerUserIds) ? settings.firstReviewerUserIds : defaultAppSettings.firstReviewerUserIds || [];
   let finalReviewerUserIds = Array.isArray(settings?.finalReviewerUserIds) ? settings.finalReviewerUserIds : defaultAppSettings.finalReviewerUserIds || [];
   let viewAllWorkloadUserIds = Array.isArray(settings?.viewAllWorkloadUserIds) ? settings.viewAllWorkloadUserIds : defaultAppSettings.viewAllWorkloadUserIds || [];
+  const incomingWorkflows = Array.isArray(settings?.workflows) ? settings.workflows : [];
+  const workflowsById = new Map<string, WorkflowDefinition>();
+  [...defaultWorkflows, ...incomingWorkflows].forEach(workflow => {
+    if (!workflow?.id) return;
+    workflowsById.set(workflow.id, {
+      ...workflow,
+      active: workflow.active !== false,
+      phases: Array.isArray(workflow.phases) ? workflow.phases.map(phase => ({
+        ...phase,
+        reviewStyle: phase.reviewStyle || 'quick_look',
+        mode: phase.mode || 'parallel',
+        userIds: Array.isArray(phase.userIds) ? phase.userIds : [],
+        roleIds: Array.isArray(phase.roleIds) ? phase.roleIds : [],
+        responsibilityIds: Array.isArray(phase.responsibilityIds) ? phase.responsibilityIds : [],
+      })) : [],
+    });
+  });
+  const workflows = Array.from(workflowsById.values());
+  const taskTypeWorkflowIds = {
+    ...(settings?.taskTypeWorkflowIds || {}),
+  };
 
   // Migration & Dynamic Sync: Always ensure Marwa, Sobeeh, Dina, and Fawzy have correct permissions 
   // and are correctly excluded from handledBy lists, regardless of settings stored in database/localStorage.
@@ -226,6 +341,9 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     customPermissions: Array.isArray(settings?.customPermissions) ? settings.customPermissions : [],
     customWorkingHours: Array.isArray(settings?.customWorkingHours) ? settings.customWorkingHours : [],
     taskTypes: Array.isArray(settings?.taskTypes) ? settings.taskTypes : defaultAppSettings.taskTypes || [],
+    workflows,
+    defaultWorkflowId: settings?.defaultWorkflowId || QUICK_LOOK_WORKFLOW_ID,
+    taskTypeWorkflowIds,
     campaignPlatforms: Array.isArray(settings?.campaignPlatforms) ? settings.campaignPlatforms : defaultAppSettings.campaignPlatforms || [],
     hiddenColumns: Array.isArray(settings?.hiddenColumns) ? settings.hiddenColumns : [],
     updatedAt: settings?.updatedAt || defaultAppSettings.updatedAt,

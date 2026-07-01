@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
-import { AccountProfile, AppSettings, AuthStatus, User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile, ReviewMode } from './types';
+import { AccountProfile, AppSettings, AuthStatus, User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile, ReviewMode, WorkflowDefinition, WorkflowPhaseHistoryEntry } from './types';
 import { initialUsers, initialTasks, userRoleLabels } from './mockData';
 import { supabase } from './supabaseClient';
 import { clearAppState, loadAppState, saveAppState } from './localDb';
@@ -29,9 +29,19 @@ import {
   RETURNED_STATUSES,
   REVIEWER_WAITING_STATUSES,
   canReviewRouteUpdateStatus,
+  canManageWorkflowBuilder,
+  cloneWorkflow,
+  getPhaseOwnerRole,
   getCurrentOwnerUserIds,
   getReviewRouteTarget,
+  getReviewModeForWorkflowPhase,
+  getStatusForWorkflowPhase,
   getTaskParticipantIds,
+  getWorkflowForTaskType,
+  getWorkflowPhase,
+  getWorkflowPhaseIndex,
+  hasUserApprovedWorkflowPhase,
+  resolveWorkflowPhaseReviewerIds,
   uniqueIds,
 } from './workflowUtils';
 import { canCreateWorkAssignment, canManageWorkAssignment, getAssignmentPeriodFromDeadline } from './workAssignmentUtils';
@@ -77,6 +87,7 @@ type WorkAssignmentInput = {
 type WorkAssignmentUploadPayload = {
   taskType: TaskType;
   reviewMode: ReviewMode;
+  workflowId?: string | null;
   scheduledPublishAt: string | null;
   publishNote: string | null;
   version: TaskVersion;
@@ -242,7 +253,7 @@ function isReviewerCreatedTask(task: Task, users: Record<string, User>) {
 }
 
 function normalizeReviewerCreatedTask(task: Task, users: Record<string, User>): Task {
-  if (!isReviewerCreatedTask(task, users) || !REVIEWER_WAITING_STATUSES.includes(task.status)) {
+  if (task.workflowSnapshot || !isReviewerCreatedTask(task, users) || !REVIEWER_WAITING_STATUSES.includes(task.status)) {
     return task;
   }
 
@@ -278,6 +289,12 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
     description: task.description ?? null,
     taskType: task.taskType || 'others',
     reviewMode: task.reviewMode || 'full_review',
+    workflowId: task.workflowId ?? null,
+    workflowSnapshot: task.workflowSnapshot ?? null,
+    workflowCurrentPhaseId: task.workflowCurrentPhaseId ?? null,
+    workflowCurrentPhaseIndex: typeof task.workflowCurrentPhaseIndex === 'number' ? task.workflowCurrentPhaseIndex : null,
+    workflowPhaseApprovals: task.workflowPhaseApprovals && typeof task.workflowPhaseApprovals === 'object' ? task.workflowPhaseApprovals : {},
+    workflowPhaseHistory: Array.isArray(task.workflowPhaseHistory) ? task.workflowPhaseHistory : [],
     environment: task.environment || 'production',
     createdBy: task.createdBy || initialUsers[0]?.id || 'unknown_user',
     handledBy: sanitizeHandledBy(Array.isArray(task.handledBy) ? task.handledBy : [task.createdBy || initialUsers[0]?.id || 'unknown_user']),
@@ -369,6 +386,10 @@ function taskSyncKey(task: Task) {
     task.updatedAt,
     task.status,
     task.reviewMode,
+    task.workflowId || '',
+    task.workflowCurrentPhaseId || '',
+    String(task.workflowCurrentPhaseIndex ?? ''),
+    JSON.stringify(task.workflowPhaseApprovals || {}),
     task.handledBy.join(','),
     getCurrentOwnerUserIds(task).join(','),
     task.description || '',
@@ -528,6 +549,8 @@ interface AppContextType extends AppState {
   updateTaskPriority: (taskId: string, priority: Priority, deadline: string | null) => void;
   updateTaskAssignment: (taskId: string, handledByIds: string[], currentOwnerUserIds: string[]) => void;
   updateTaskReviewMode: (taskId: string, reviewMode: ReviewMode) => void;
+  applyTaskWorkflow: (taskId: string, workflowId: string, phaseId?: string) => void;
+  approveWorkflowPhase: (taskId: string, note?: string) => void;
   updateTaskPublishSchedule: (taskId: string, schedule: { scheduledPublishAt: string | null; publishNote: string | null }) => void;
   markCampaignPublished: (taskId: string) => void;
   markPublishReminderSent: (taskId: string) => void;
@@ -613,9 +636,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const canManageSettings = (() => {
     const isMina = currentUser.email === 'minamagdy5555@gmail.com' || currentUser.id === 'user_1';
     if (isMina) {
-      return isMinaSettingsUnlocked;
+      return isMinaSettingsUnlocked || canManageWorkflowBuilder(currentUser, appSettings);
     }
-    return canManageAppSettings(currentUser, appSettings) || appSettings.workAssignmentCreatorIds.includes(currentUser.id);
+    return canManageAppSettings(currentUser, appSettings) ||
+      appSettings.workAssignmentCreatorIds.includes(currentUser.id) ||
+      canManageWorkflowBuilder(currentUser, appSettings);
   })();
   const isSharedWorkspaceActive = isSharedWorkspaceStatus(authStatus);
   const isDriveWorkspaceReady = isSharedWorkspaceActive && hasDriveToken && Boolean(driveRootFolder);
@@ -1149,6 +1174,163 @@ export function AppProvider({ children }: { children: ReactNode }) {
     role === 'team_member' ? sanitizeHandledByWithSettings(appSettings, ids, assignerId) : uniqueIds(ids)
   );
 
+  const getWorkflowBySelection = (taskType: string, workflowId?: string | null) => {
+    const selected = workflowId ? (appSettings.workflows || []).find(workflow => workflow.id === workflowId && workflow.active !== false) : null;
+    return selected || getWorkflowForTaskType(appSettings, taskType);
+  };
+
+  const getFallbackOwnerIdsForWorkflowPhase = (role: Role | null, task: Task) => {
+    if (role === 'team_member') {
+      return uniqueIds([...(task.contentRevisionAssigneeIds || []), task.createdBy, ...task.handledBy]);
+    }
+    if (role === 'art_director') return getUserIdsByRole(userList, ['art_director']);
+    if (role === 'team_leader') return getUserIdsByRole(userList, ['team_leader']);
+    if (role === 'reviewer') return uniqueIds([...getUserIdsByRole(userList, ['reviewer', 'admin']), ...(appSettings.firstReviewerUserIds || [])]);
+    return [];
+  };
+
+  const getActiveWorkflowOwnerIds = (task: Task, phase = getWorkflowPhase(task), approvals: string[] = []) => {
+    const ownerRole = getPhaseOwnerRole(phase);
+    const configuredReviewerIds = resolveWorkflowPhaseReviewerIds(phase, appSettings, userList, task);
+    const allReviewerIds = configuredReviewerIds.length > 0
+      ? uniqueIds(configuredReviewerIds)
+      : uniqueIds(getFallbackOwnerIdsForWorkflowPhase(ownerRole, task));
+    const pendingReviewerIds = allReviewerIds.filter(userId => !approvals.includes(userId));
+
+    if (!phase) return [];
+    if (phase.mode === 'sequential') {
+      return pendingReviewerIds.length > 0 ? [pendingReviewerIds[0]] : allReviewerIds.slice(0, 1);
+    }
+    return pendingReviewerIds.length > 0 ? pendingReviewerIds : allReviewerIds;
+  };
+
+  const buildTaskWithWorkflowPhase = (task: Task, workflow: WorkflowDefinition, phaseIndex: number, approvals: Record<string, string[]> = {}, history: WorkflowPhaseHistoryEntry[] = [], actorId = currentUser.id, note?: string): Task => {
+    const phase = workflow.phases[phaseIndex] || workflow.phases[0];
+    if (!phase) return task;
+
+    const phaseApprovals = approvals[phase.id] || [];
+    const nextTaskBase: Task = {
+      ...task,
+      workflowId: workflow.id,
+      workflowSnapshot: cloneWorkflow(workflow),
+      workflowCurrentPhaseId: phase.id,
+      workflowCurrentPhaseIndex: phaseIndex,
+      workflowPhaseApprovals: approvals,
+      workflowPhaseHistory: [
+        ...history,
+        {
+          phaseId: phase.id,
+          phaseName: phase.name,
+          action: note === 'workflow_changed' ? 'workflow_changed' : 'started',
+          actorId,
+          createdAt: new Date().toISOString(),
+          note: note === 'workflow_changed' ? `Workflow changed to ${workflow.name}.` : undefined,
+        },
+      ],
+      reviewMode: getReviewModeForWorkflowPhase(phase),
+      status: getStatusForWorkflowPhase(phase),
+      currentOwnerRole: getPhaseOwnerRole(phase),
+    };
+    const ownerIds = getActiveWorkflowOwnerIds(nextTaskBase, phase, phaseApprovals);
+    return {
+      ...nextTaskBase,
+      currentOwnerUserId: ownerIds[0] || null,
+      currentOwnerUserIds: ownerIds,
+    };
+  };
+
+  const initializeTaskWorkflow = (task: Task, workflowId?: string | null, phaseId?: string | null, actorId = currentUser.id) => {
+    const workflow = getWorkflowBySelection(task.taskType, workflowId || task.workflowId);
+    if (!workflow || workflow.phases.length === 0) return task;
+    const selectedPhaseIndex = phaseId ? getWorkflowPhaseIndex(workflow, phaseId) : -1;
+    const phaseIndex = selectedPhaseIndex >= 0 ? selectedPhaseIndex : 0;
+    return buildTaskWithWorkflowPhase(task, workflow, phaseIndex, {}, task.workflowPhaseHistory || [], actorId, task.workflowSnapshot ? 'workflow_changed' : undefined);
+  };
+
+  const advanceWorkflowAfterApproval = (task: Task, actorId: string): Task => {
+    const workflow = task.workflowSnapshot || getWorkflowBySelection(task.taskType, task.workflowId);
+    if (!workflow || workflow.phases.length === 0) {
+      return {
+        ...task,
+        status: 'approved_by_art_director',
+        currentOwnerRole: null,
+        currentOwnerUserId: null,
+        currentOwnerUserIds: [],
+      };
+    }
+
+    const phase = getWorkflowPhase(task) || workflow.phases[0];
+    const phaseIndex = Math.max(0, getWorkflowPhaseIndex(workflow, phase.id));
+    const existingApprovals = task.workflowPhaseApprovals || {};
+    const nextApprovals = {
+      ...existingApprovals,
+      [phase.id]: uniqueIds([...(existingApprovals[phase.id] || []), actorId]),
+    };
+    const configuredReviewerIds = resolveWorkflowPhaseReviewerIds(phase, appSettings, userList, task);
+    const allReviewerIds = configuredReviewerIds.length > 0
+      ? uniqueIds(configuredReviewerIds)
+      : uniqueIds(getFallbackOwnerIdsForWorkflowPhase(getPhaseOwnerRole(phase), task));
+    const approvedIds = nextApprovals[phase.id] || [];
+    const phaseComplete = allReviewerIds.length === 0 || allReviewerIds.every(userId => approvedIds.includes(userId));
+    const now = new Date().toISOString();
+    const approvedHistory: WorkflowPhaseHistoryEntry[] = [
+      ...(task.workflowPhaseHistory || []),
+      {
+        phaseId: phase.id,
+        phaseName: phase.name,
+        action: 'approved',
+        actorId,
+        createdAt: now,
+      },
+    ];
+
+    if (!phaseComplete) {
+      const ownerIds = getActiveWorkflowOwnerIds(task, phase, approvedIds);
+      return {
+        ...task,
+        workflowSnapshot: cloneWorkflow(workflow),
+        workflowId: workflow.id,
+        workflowPhaseApprovals: nextApprovals,
+        workflowPhaseHistory: approvedHistory,
+        currentOwnerRole: getPhaseOwnerRole(phase),
+        currentOwnerUserId: ownerIds[0] || null,
+        currentOwnerUserIds: ownerIds,
+        updatedAt: now,
+      };
+    }
+
+    const completedHistory: WorkflowPhaseHistoryEntry[] = [
+      ...approvedHistory,
+      {
+        phaseId: phase.id,
+        phaseName: phase.name,
+        action: 'completed',
+        actorId,
+        createdAt: now,
+      },
+    ];
+    const nextPhaseIndex = phaseIndex + 1;
+    if (nextPhaseIndex < workflow.phases.length) {
+      return buildTaskWithWorkflowPhase({
+        ...task,
+        workflowPhaseApprovals: nextApprovals,
+      }, workflow, nextPhaseIndex, nextApprovals, completedHistory, actorId);
+    }
+
+    return {
+      ...task,
+      workflowSnapshot: cloneWorkflow(workflow),
+      workflowId: workflow.id,
+      workflowPhaseApprovals: nextApprovals,
+      workflowPhaseHistory: completedHistory,
+      status: 'approved_by_art_director',
+      currentOwnerRole: null,
+      currentOwnerUserId: null,
+      currentOwnerUserIds: [],
+      updatedAt: now,
+    };
+  };
+
   const addAuditComment = (task: Task, authorId: string, action: TaskComment['action'], message: string, createdAt = new Date().toISOString()): Task => ({
     ...task,
     comments: [
@@ -1637,6 +1819,68 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }));
   };
 
+  const applyTaskWorkflow = (taskId: string, workflowId: string, phaseId?: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    const workflow = (appSettings.workflows || []).find(item => item.id === workflowId && item.active !== false);
+    if (!task || !workflow) return;
+
+    const updatedTask = initializeTaskWorkflow({
+      ...task,
+      workflowId,
+      workflowSnapshot: cloneWorkflow(workflow),
+      workflowPhaseApprovals: {},
+    }, workflowId, phaseId, currentUser.id);
+    const phase = getWorkflowPhase(updatedTask);
+    const ownerIds = getCurrentOwnerUserIds(updatedTask);
+    if (ownerIds.length > 0) {
+      addNotifications(ownerIds.filter(userId => userId !== currentUser.id), taskId, `"${task.name}" is now in ${phase?.name || workflow.name}.`);
+    }
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      const now = new Date().toISOString();
+      return addAuditComment({
+        ...updatedTask,
+        updatedAt: now,
+      }, currentUser.id, 'review_route_change', `Workflow changed to ${workflow.name}${phase ? ` at ${phase.name}` : ''}.`, now);
+    }));
+  };
+
+  const approveWorkflowPhase = (taskId: string, note?: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+    const taskWithWorkflow = task.workflowSnapshot ? task : initializeTaskWorkflow(task, task.workflowId, undefined, currentUser.id);
+    const beforePhase = getWorkflowPhase(taskWithWorkflow);
+    if (beforePhase && hasUserApprovedWorkflowPhase(taskWithWorkflow, beforePhase.id, currentUser.id)) return;
+    const updatedTask = advanceWorkflowAfterApproval(taskWithWorkflow, currentUser.id);
+    const afterPhase = getWorkflowPhase(updatedTask);
+    const ownerIds = getCurrentOwnerUserIds(updatedTask);
+
+    if (updatedTask.status === 'approved_by_art_director') {
+      const recipients = uniqueIds([
+        task.createdBy,
+        ...task.handledBy,
+        ...getUserIdsByRole(userList, ['team_leader']),
+        ...getUserIdsByRole(userList, ['reviewer', 'admin']),
+        ...getUserIdsByRole(userList, ['art_director']),
+      ]).filter(userId => userId !== currentUser.id);
+      addNotifications(recipients, taskId, `"${task.name}" was approved.`);
+    } else if (ownerIds.length > 0) {
+      addNotifications(ownerIds.filter(userId => userId !== currentUser.id), taskId, `"${task.name}" is ready for ${afterPhase?.name || 'the next review phase'}.`);
+    }
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      const now = new Date().toISOString();
+      return addAuditComment({
+        ...updatedTask,
+        updatedAt: now,
+      }, currentUser.id, beforePhase?.reviewStyle === 'final_approval' ? 'sent_to_marwa' : 'review_note', note || `${beforePhase?.name || 'Review phase'} approved.`, now);
+    }));
+  };
+
   const updateTaskPublishSchedule = (taskId: string, schedule: { scheduledPublishAt: string | null; publishNote: string | null }) => {
     const task = tasks.find(t => t.id === taskId);
     if (!task || task.taskType !== 'campaign') return;
@@ -1996,6 +2240,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!task || task.status !== 'assigned_work') return;
 
     const isContentCreatorTask = checkIsContentCreatorTask(task);
+    const workflow = getWorkflowBySelection(payload.taskType, payload.workflowId || task.workflowId);
     const effectiveReviewMode = payload.reviewMode || task.reviewMode || 'full_review';
     const target = getReviewRouteTarget(effectiveReviewMode);
     const contentCreatorIds = userList.filter(user => user.jobTitle === 'Content Creator' || (user.role === 'team_member' && user.jobTitle === 'Content Creator')).map(user => user.id);
@@ -2032,10 +2277,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTasks(prev => prev.map(t => {
       if (t.id !== taskId) return t;
       const now = new Date().toISOString();
-      const updatedTask: Task = {
+      const updatedTaskBase: Task = {
         ...t,
         taskType: payload.taskType,
         reviewMode: effectiveReviewMode,
+        workflowId: workflow?.id || payload.workflowId || t.workflowId || null,
         status: nextStatus,
         currentOwnerRole: nextOwnerRole,
         currentOwnerUserId: nextOwnerUserIds[0] || null,
@@ -2051,6 +2297,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         assignmentUploadedAt: now,
         updatedAt: now,
       };
+      const updatedTask = workflow && !isContentRevNeeded
+        ? initializeTaskWorkflow(updatedTaskBase, workflow.id, undefined, payload.version.submittedBy)
+        : updatedTaskBase;
 
       const auditMsg = isContentRevNeeded 
         ? 'Finished work uploaded and sent into the Content Revision flow.' 
@@ -2061,7 +2310,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const addTask = (task: Task) => {
-    const normalizedTaskBase = normalizeReviewerCreatedTask(task, usersObj);
+    const taskWithWorkflow = task.workflowSnapshot ? task : initializeTaskWorkflow(task, task.workflowId, undefined, task.createdBy);
+    const normalizedTaskBase = normalizeReviewerCreatedTask(taskWithWorkflow, usersObj);
     const ownerIds = getCurrentOwnerUserIds(normalizedTaskBase);
     const finalOwnerIds = ownerIds.length > 0 ? ownerIds : getDefaultOwnerIdsForRole(normalizedTaskBase.currentOwnerRole, normalizedTaskBase);
     const normalizedTask = {
@@ -2090,6 +2340,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       nextStatus = 'waiting_content_revision';
       nextOwnerRole = 'team_member';
       auditMsg = 'New version resubmitted for Content Revision.';
+    } else if (task.workflowSnapshot || task.workflowId) {
+      const workflow = task.workflowSnapshot || getWorkflowBySelection(task.taskType, task.workflowId);
+      const phase = getWorkflowPhase(task);
+      const phaseId = phase?.id || workflow?.phases[0]?.id;
+      const routedTask = workflow
+        ? initializeTaskWorkflow({
+            ...task,
+            workflowSnapshot: cloneWorkflow(workflow),
+            workflowId: workflow.id,
+            workflowPhaseApprovals: {
+              ...(task.workflowPhaseApprovals || {}),
+              ...(phaseId ? { [phaseId]: [] } : {}),
+            },
+          }, workflow.id, phaseId, version.submittedBy)
+        : task;
+      nextStatus = routedTask.status;
+      nextOwnerRole = routedTask.currentOwnerRole || 'reviewer';
+      nextOwnerIds = routedTask.currentOwnerUserIds;
+      auditMsg = `New version resubmitted for ${phase?.name || 'review'}.`;
     } else {
       sendToMarwa = isReviewerCreatedTask(task, usersObj) || 
         task.status === 'changes_requested_by_art_director' || 
@@ -2125,7 +2394,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const thumbnailFile = version.files?.find(file => file.type.startsWith('image/'));
       const previewFile = version.files?.find(file => file.previewUrl && file.previewStoragePath);
 
-      const updatedTask: Task = {
+      let updatedTask: Task = {
         ...t,
         versions: [version, ...t.versions],
         handledBy: sanitizeHandledByWithSettings(appSettings, [...t.handledBy, version.submittedBy]),
@@ -2137,6 +2406,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
         thumbnailStoragePath: previewFile?.previewStoragePath || thumbnailFile?.previewStoragePath,
         updatedAt: new Date().toISOString(),
       };
+
+      if (!isContentRevNeeded && (t.workflowSnapshot || t.workflowId)) {
+        const workflow = t.workflowSnapshot || getWorkflowBySelection(t.taskType, t.workflowId);
+        const phase = getWorkflowPhase(t);
+        const phaseId = phase?.id || workflow?.phases[0]?.id;
+        if (workflow) {
+          updatedTask = initializeTaskWorkflow({
+            ...updatedTask,
+            workflowSnapshot: cloneWorkflow(workflow),
+            workflowId: workflow.id,
+            workflowPhaseApprovals: {
+              ...(updatedTask.workflowPhaseApprovals || {}),
+              ...(phaseId ? { [phaseId]: [] } : {}),
+            },
+          }, workflow.id, phaseId, version.submittedBy);
+        }
+      }
 
       return addAuditComment(updatedTask, version.submittedBy, 'version_added', auditMsg, new Date().toISOString());
     }));
@@ -2309,6 +2595,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTaskPriority,
       updateTaskAssignment,
       updateTaskReviewMode,
+      applyTaskWorkflow,
+      approveWorkflowPhase,
       updateTaskPublishSchedule,
       markCampaignPublished,
       markPublishReminderSent,
