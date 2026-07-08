@@ -3,6 +3,7 @@ import { AccountProfile, AppSettings, AuthStatus, User, Role, Environment, Task,
 import { initialUsers, initialTasks, userRoleLabels } from './mockData';
 import { supabase } from './supabaseClient';
 import { clearAppState, loadAppState, saveAppState } from './localDb';
+import { fetchNeonAppState, saveNeonAppState, USE_NEON_DATA } from './neonDb';
 import { shouldAutoArchiveTask } from './archiveUtils';
 import { sanitizeHandledBy } from './handlerUtils';
 import {
@@ -115,7 +116,7 @@ const GUEST_USER: User = {
 };
 
 function isSharedWorkspaceStatus(status: AuthStatus) {
-  return USE_SHARED_DRIVE_DATA && status === 'approved';
+  return (USE_NEON_DATA || USE_SHARED_DRIVE_DATA) && status === 'approved';
 }
 
 type AuthActionResult = {
@@ -137,7 +138,9 @@ function getSharedDataErrorMessage(error: unknown, fallback: string) {
   const isNetworkError = normalizedMessage.includes('failed to fetch') || normalizedMessage.includes('networkerror') || normalizedMessage.includes('network error');
 
   if (isNetworkError) {
-    return 'Google Drive connection failed. Check Google access, Drive permissions, and network access, then refresh.';
+    return USE_NEON_DATA
+      ? 'Neon database connection failed. Check the deployment environment variables and network access, then refresh.'
+      : 'Google Drive connection failed. Check Google access, Drive permissions, and network access, then refresh.';
   }
 
   return message;
@@ -530,7 +533,7 @@ interface AppState {
   users: Record<string, User>;
   userList: User[];
   notifications: Notification[];
-  persistenceMode: 'drive' | 'local';
+  persistenceMode: 'neon' | 'drive' | 'local';
   persistenceError: string | null;
   localMigrationCount: number;
   isMigratingLocalData: boolean;
@@ -643,8 +646,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       canManageWorkflowBuilder(currentUser, appSettings);
   })();
   const isSharedWorkspaceActive = isSharedWorkspaceStatus(authStatus);
-  const isDriveWorkspaceReady = isSharedWorkspaceActive && hasDriveToken && Boolean(driveRootFolder);
-  const driveStatus: DriveAuthStatus = !USE_SHARED_DRIVE_DATA
+  const isNeonWorkspaceActive = USE_NEON_DATA && authStatus === 'approved';
+  const isDriveWorkspaceActive = !USE_NEON_DATA && USE_SHARED_DRIVE_DATA && authStatus === 'approved';
+  const isDriveWorkspaceReady = isDriveWorkspaceActive && hasDriveToken && Boolean(driveRootFolder);
+  const driveStatus: DriveAuthStatus = USE_NEON_DATA || !USE_SHARED_DRIVE_DATA
     ? 'disabled'
     : !isGoogleDriveConfigured
       ? 'needs_auth'
@@ -920,7 +925,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [tasks, authStatus]);
 
   useEffect(() => {
-    if (!isSharedWorkspaceActive) return;
+    if (!isNeonWorkspaceActive) return;
+
+    let isMounted = true;
+    sharedDataLoadFailedRef.current = false;
+    hasLoadedPersistedState.current = false;
+
+    Promise.all([fetchNeonAppState(), loadAppState()])
+      .then(([neonState, localState]) => {
+        if (!isMounted) return;
+
+        const sharedTasks = reviveWorkspaceTasks(
+          Array.isArray(neonState?.tasks) && neonState.tasks.length > 0 ? neonState.tasks : initialTasks,
+          usersObj
+        );
+        const sharedNotifications = removeGuestSeedNotifications(neonState?.notifications || []);
+        const sharedSettings = mergeAppSettings(neonState?.settings || localState?.settings);
+        const localTasks = Array.isArray(localState?.tasks) ? localState.tasks.filter(task => !isGuestSeedTask(task) && !isPlaceholderTask(task)) : [];
+        const localNotifications = Array.isArray(localState?.notifications) ? removeGuestSeedNotifications(localState.notifications) : [];
+
+        sharedDataLoadFailedRef.current = false;
+        setAppSettings(sharedSettings);
+        setTasks(sharedTasks);
+        setNotifications(sharedNotifications);
+        setLocalMigrationState(localTasks.length || localNotifications.length
+          ? { tasks: localTasks, notifications: localNotifications }
+          : null);
+        setPersistenceError(null);
+      })
+      .catch(error => {
+        console.error('Failed to load Neon app state', error);
+        if (!isMounted) return;
+
+        sharedDataLoadFailedRef.current = true;
+        setLocalMigrationState(null);
+        setPersistenceError(getSharedDataErrorMessage(error, 'Failed to load Neon app state.'));
+      })
+      .finally(() => {
+        if (isMounted) hasLoadedPersistedState.current = true;
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isNeonWorkspaceActive, currentUser.id]);
+
+  useEffect(() => {
+    if (!isDriveWorkspaceActive) return;
     if (!isDriveWorkspaceReady) {
       sharedDataLoadFailedRef.current = false;
       hasLoadedPersistedState.current = true;
@@ -969,7 +1020,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       isMounted = false;
     };
-  }, [isSharedWorkspaceActive, isDriveWorkspaceReady, currentUser.id, driveRootFolder?.id]);
+  }, [isDriveWorkspaceActive, isDriveWorkspaceReady, currentUser.id, driveRootFolder?.id]);
+
+  useEffect(() => {
+    if (!isNeonWorkspaceActive || !hasLoadedPersistedState.current || sharedDataLoadFailedRef.current) return;
+
+    saveNeonAppState({ tasks, notifications, settings: appSettings })
+      .then(() => {
+        setPersistenceError(null);
+      })
+      .catch(error => {
+        console.error('Failed to save Neon app state', error);
+        sharedDataLoadFailedRef.current = true;
+        setPersistenceError(getSharedDataErrorMessage(error, 'Failed to save Neon app state.'));
+      });
+  }, [tasks, notifications, appSettings, isNeonWorkspaceActive]);
 
   useEffect(() => {
     if (!isDriveWorkspaceReady || !hasLoadedPersistedState.current || sharedDataLoadFailedRef.current) return;
@@ -1021,6 +1086,58 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setPersistenceError(getErrorMessage(error, 'Failed to save local demo workspace.'));
       });
   }, [tasks, notifications, appSettings, isLocalWorkspaceActive]);
+
+  useEffect(() => {
+    if (!isNeonWorkspaceActive) return;
+
+    let isMounted = true;
+    let isPolling = false;
+
+    const syncLatestSharedData = async () => {
+      if (!hasLoadedPersistedState.current || isPolling) return;
+
+      isPolling = true;
+      try {
+        const latestState = await fetchNeonAppState();
+        if (!isMounted || !latestState) return;
+
+        sharedDataLoadFailedRef.current = false;
+        setTasks(prev => mergeTasksIntoState(prev.filter(task => !isGuestSeedTask(task) && !isPlaceholderTask(task)), reviveWorkspaceTasks(latestState.tasks || [], usersObj)));
+        setNotifications(prev => mergeNotificationsIntoState(removeGuestSeedNotifications(prev), removeGuestSeedNotifications(latestState.notifications || [])));
+        if (latestState.settings) {
+          setAppSettings(mergeAppSettings(latestState.settings));
+        }
+        setPersistenceError(null);
+      } catch (error) {
+        console.error('Failed to sync latest Neon data', error);
+        if (isMounted) {
+          sharedDataLoadFailedRef.current = true;
+          setPersistenceError(getSharedDataErrorMessage(error, 'Failed to sync latest Neon data.'));
+        }
+      } finally {
+        isPolling = false;
+      }
+    };
+
+    const intervalId = window.setInterval(syncLatestSharedData, SHARED_DATA_POLL_INTERVAL_MS);
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        void syncLatestSharedData();
+      }
+    };
+    const handleFocus = () => {
+      void syncLatestSharedData();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [isNeonWorkspaceActive, currentUser.id]);
 
   useEffect(() => {
     if (!isDriveWorkspaceReady) return;
@@ -1625,17 +1742,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const migrateLocalDataToDrive = async () => {
-    if (!isDriveWorkspaceReady || !localMigrationState || isMigratingLocalData) return;
+    if ((!isDriveWorkspaceReady && !isNeonWorkspaceActive) || !localMigrationState || isMigratingLocalData) return;
     setIsMigratingLocalData(true);
     setPersistenceError(null);
 
     try {
-      const uploadedTasks = await Promise.all(localMigrationState.tasks.map(uploadMigratedTaskFiles));
+      const uploadedTasks = isDriveWorkspaceReady
+        ? await Promise.all(localMigrationState.tasks.map(uploadMigratedTaskFiles))
+        : localMigrationState.tasks;
 
-      await Promise.all([
-        ...uploadedTasks.map(task => upsertDriveTask(task)),
-        upsertDriveNotifications(localMigrationState.notifications),
-      ]);
+      if (isDriveWorkspaceReady) {
+        await Promise.all([
+          ...uploadedTasks.map(task => upsertDriveTask(task)),
+          upsertDriveNotifications(localMigrationState.notifications),
+        ]);
+      }
 
       setTasks(prev => {
         const existingIds = new Set(prev.map(task => task.id));
@@ -1648,7 +1769,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLocalMigrationState(null);
       await clearAppState();
     } catch (error) {
-      console.error('Failed to migrate local data to Google Drive', error);
+      console.error('Failed to migrate local data to shared storage', error);
       setPersistenceError(getSharedDataErrorMessage(error, 'Failed to migrate local data.'));
     } finally {
       setIsMigratingLocalData(false);
@@ -2579,7 +2700,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       users: usersObj,
       userList,
       notifications,
-      persistenceMode: isSharedWorkspaceActive ? 'drive' : 'local',
+      persistenceMode: isNeonWorkspaceActive ? 'neon' : isDriveWorkspaceActive ? 'drive' : 'local',
       persistenceError,
       localMigrationCount: (localMigrationState?.tasks.length || 0) + (localMigrationState?.notifications.length || 0),
       isMigratingLocalData,

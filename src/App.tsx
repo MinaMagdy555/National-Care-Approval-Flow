@@ -591,12 +591,17 @@ function WorkspaceContent() {
               </div>
             </div>
           )}
-          {persistenceMode === 'drive' && persistenceError && (
+          {persistenceMode === 'neon' && !persistenceError && (
+            <div className="mx-4 mt-4 flex flex-col gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-900 sm:mx-6 lg:mx-8 lg:flex-row lg:items-center lg:justify-between">
+              <p className="text-sm font-bold">Neon database connected.</p>
+            </div>
+          )}
+          {(persistenceMode === 'drive' || persistenceMode === 'neon') && persistenceError && (
             <div className="mx-4 mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700 sm:mx-6 lg:mx-8">
               Shared data error: {persistenceError}
             </div>
           )}
-          {persistenceMode === 'drive' && driveStatus === 'ready' && !persistenceError && localMigrationCount > 0 && (
+          {((persistenceMode === 'drive' && driveStatus === 'ready') || persistenceMode === 'neon') && !persistenceError && localMigrationCount > 0 && (
             <div className="mx-4 mt-4 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 sm:mx-6 lg:mx-8 lg:flex-row lg:items-center lg:justify-between">
               <p className="text-sm font-bold">
                 {localMigrationCount} local-only item{localMigrationCount === 1 ? '' : 's'} found on this browser.

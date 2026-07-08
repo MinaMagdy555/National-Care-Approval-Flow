@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  readonly VITE_USE_NEON_DATA?: string;
   readonly VITE_USE_SHARED_DRIVE_DATA?: string;
   readonly VITE_GOOGLE_CLIENT_ID?: string;
   readonly VITE_GOOGLE_API_KEY?: string;
