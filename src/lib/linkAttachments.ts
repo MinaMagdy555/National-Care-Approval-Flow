@@ -102,7 +102,7 @@ export function getLinkedFileEmbedUrl(rawUrl?: string) {
 
     const driveFileId = getGoogleDriveFileId(url);
     if (driveFileId && url.hostname.toLowerCase().includes('drive.google.com')) {
-      const previewUrl = new URL(`https://drive.google.com/file/d/${encodeURIComponent(driveFileId)}/preview`);
+      const previewUrl = new URL(`https://drive.google.com/file/d/${encodeURIComponent(driveFileId)}/view`);
       const resourceKey = url.searchParams.get('resourcekey');
       if (resourceKey) previewUrl.searchParams.set('resourcekey', resourceKey);
       return previewUrl.toString();

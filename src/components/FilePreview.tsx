@@ -118,29 +118,6 @@ function LinkedFilePreview({
     );
   }
 
-  if (file.previewUrl && !previewLoadFailed) {
-    return (
-      <div className="flex h-full w-full items-center justify-center overflow-hidden bg-slate-100">
-        <button type="button" onClick={() => onImageClick?.(file.previewUrl!)} className="flex h-full w-full items-center justify-center">
-          <img
-            src={file.previewUrl}
-            alt={file.name}
-            onError={() => setPreviewLoadFailed(true)}
-            className="block h-full w-full object-contain"
-          />
-        </button>
-      </div>
-    );
-  }
-
-  if (kind === 'video' && !embedUrl) {
-    return (
-      <div className="relative flex h-full w-full items-center justify-center bg-black">
-        <video src={file.url} controls className="block max-h-full max-w-full object-contain" />
-      </div>
-    );
-  }
-
   if (embedUrl || kind === 'pdf') {
     return (
       <div className="relative h-full w-full bg-slate-100">
@@ -158,6 +135,29 @@ function LinkedFilePreview({
         >
           <ExternalLink className="h-3.5 w-3.5" /> Open in Drive
         </a>
+      </div>
+    );
+  }
+
+  if (file.previewUrl && !previewLoadFailed) {
+    return (
+      <div className="flex h-full w-full items-center justify-center overflow-hidden bg-slate-100">
+        <button type="button" onClick={() => onImageClick?.(file.previewUrl!)} className="flex h-full w-full items-center justify-center">
+          <img
+            src={file.previewUrl}
+            alt={file.name}
+            onError={() => setPreviewLoadFailed(true)}
+            className="block h-full w-full object-contain"
+          />
+        </button>
+      </div>
+    );
+  }
+
+  if (kind === 'video') {
+    return (
+      <div className="relative flex h-full w-full items-center justify-center bg-black">
+        <video src={file.url} controls className="block max-h-full max-w-full object-contain" />
       </div>
     );
   }
