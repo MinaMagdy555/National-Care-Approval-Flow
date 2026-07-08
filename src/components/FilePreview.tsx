@@ -11,6 +11,7 @@ import {
 } from '../lib/previewUtils';
 import { useAppStore } from '../lib/store';
 import { getLinkedFileEmbedUrl, getLinkHostLabel, isLinkedTaskFile, fetchFreshDriveThumbnail } from '../lib/linkAttachments';
+import { ensureDriveAccessToken, hasUsableDriveToken, isGoogleDriveConfigured, requestDriveAccessToken } from '../lib/driveAuth';
 
 const thumbnailPreviewBackfillAttempts = new Set<string>();
 const thumbnailPreviewBackfillQueue: Array<() => Promise<void>> = [];
@@ -92,6 +93,164 @@ function isDriveFile(file?: Pick<UploadedTaskFile, 'storageProvider' | 'driveFil
   return file?.storageProvider === 'drive' || Boolean(file?.driveFileId || file?.webViewLink);
 }
 
+function DriveOpenButton({ file }: { file: UploadedTaskFile }) {
+  return (
+    <a
+      href={file.webViewLink || file.url}
+      target="_blank"
+      rel="noreferrer"
+      className="absolute right-3 top-3 z-10 inline-flex items-center gap-1 rounded-lg bg-black/75 px-2 py-1 text-[11px] font-black text-white shadow-sm hover:bg-black"
+    >
+      <ExternalLink className="h-3.5 w-3.5" /> Open in Drive
+    </a>
+  );
+}
+
+function DriveAccessPreview({
+  file,
+  onImageClick,
+  fallback,
+}: {
+  file: UploadedTaskFile;
+  onImageClick?: (url: string) => void;
+  fallback: React.ReactNode;
+}) {
+  const driveFileId = file.driveFileId || (file.storageProvider === 'drive' ? file.storagePath : undefined);
+  const [objectUrl, setObjectUrl] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+  const kind = getFileKind(file);
+
+  const loadWithDriveAccess = async (prompt: '' | 'consent' = '') => {
+    if (!driveFileId || isLoading) return;
+
+    setIsLoading(true);
+    setError('');
+    try {
+      const accessToken = prompt === 'consent'
+        ? await requestDriveAccessToken('consent')
+        : await ensureDriveAccessToken();
+      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveFileId)}?alt=media&supportsAllDrives=true`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      if (!response.ok) {
+        let message = response.statusText;
+        try {
+          const body = await response.json() as { error?: { message?: string } };
+          message = body.error?.message || message;
+        } catch {
+          // Keep status text.
+        }
+        throw new Error(message);
+      }
+
+      const blob = await response.blob();
+      const nextUrl = URL.createObjectURL(blob);
+      setObjectUrl(previousUrl => {
+        if (previousUrl) URL.revokeObjectURL(previousUrl);
+        return nextUrl;
+      });
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Could not load this Drive file.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!driveFileId || !isGoogleDriveConfigured || !hasUsableDriveToken()) return;
+    void loadWithDriveAccess('');
+    return undefined;
+  }, [driveFileId]);
+
+  useEffect(() => () => {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+  }, [objectUrl]);
+
+  if (!driveFileId || !isGoogleDriveConfigured) {
+    return (
+      <div className="relative h-full w-full bg-slate-100">
+        <div className="absolute inset-0">
+          {fallback}
+        </div>
+        {driveFileId && (
+          <div className="absolute inset-x-4 bottom-4 z-20 rounded-xl border border-amber-200 bg-amber-50/95 p-4 text-center text-amber-950 shadow-lg backdrop-blur">
+            <p className="text-sm font-black">Drive preview access is not configured.</p>
+            <p className="mt-1 text-xs font-semibold">Add Google Drive OAuth variables so private files can load inside the tool.</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (objectUrl) {
+    const previewFile = { ...file, url: objectUrl };
+    if (kind === 'image') {
+      return (
+        <div className="relative flex h-full w-full items-center justify-center bg-slate-100">
+          <button type="button" onClick={() => onImageClick?.(objectUrl)} className="flex h-full w-full items-center justify-center">
+            <img src={objectUrl} alt={file.name} className="block max-h-full max-w-full object-contain" />
+          </button>
+          <DriveOpenButton file={file} />
+        </div>
+      );
+    }
+    if (kind === 'video') {
+      return (
+        <div className="relative flex h-full w-full items-center justify-center bg-black">
+          <video src={objectUrl} controls className="block max-h-full max-w-full object-contain" />
+          <DriveOpenButton file={file} />
+        </div>
+      );
+    }
+    if (kind === 'pdf') {
+      return (
+        <div className="relative h-full w-full">
+          <PdfCanvasPreview file={previewFile} />
+          <DriveOpenButton file={file} />
+        </div>
+      );
+    }
+  }
+
+  return (
+    <div className="relative h-full w-full bg-slate-100">
+      <div className="absolute inset-0">
+        {fallback}
+      </div>
+      <div className="absolute inset-x-4 bottom-4 z-20 rounded-xl border border-slate-200 bg-white/95 p-4 text-center shadow-lg backdrop-blur">
+        <p className="text-sm font-black text-slate-900">
+          {hasUsableDriveToken() ? 'Load file with Drive access' : 'Connect Drive to preview private files'}
+        </p>
+        <p className="mt-1 text-xs font-semibold text-slate-500">
+          {error || 'Use the Google account that can open this file in Drive.'}
+        </p>
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={() => void loadWithDriveAccess(!hasUsableDriveToken() || error ? 'consent' : '')}
+            disabled={isLoading}
+            className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-black uppercase tracking-wide text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {isLoading ? 'Loading...' : error ? 'Reconnect Drive' : hasUsableDriveToken() ? 'Load Preview' : 'Connect Drive'}
+          </button>
+          <a
+            href={file.webViewLink || file.url}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black uppercase tracking-wide text-slate-700 hover:bg-slate-50"
+          >
+            Open in Drive
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LinkedFilePreview({
   file,
   onImageClick,
@@ -127,14 +286,7 @@ function LinkedFilePreview({
           className="h-full w-full border-0 bg-white"
           allow="autoplay; encrypted-media; fullscreen"
         />
-        <a
-          href={file.webViewLink || file.url}
-          target="_blank"
-          rel="noreferrer"
-          className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-lg bg-black/75 px-2 py-1 text-[11px] font-black text-white shadow-sm hover:bg-black"
-        >
-          <ExternalLink className="h-3.5 w-3.5" /> Open in Drive
-        </a>
+        <DriveOpenButton file={file} />
       </div>
     );
   }
@@ -526,7 +678,8 @@ export function FilePreview({
   }
 
   if (isLinkedTaskFile(file)) {
-    return <LinkedFilePreview file={file} onImageClick={onImageClick} />;
+    const embedFallback = <LinkedFilePreview file={file} onImageClick={onImageClick} />;
+    return <DriveAccessPreview file={file} onImageClick={onImageClick} fallback={embedFallback} />;
   }
 
   if (isDriveFile(file)) {
@@ -534,7 +687,7 @@ export function FilePreview({
     const previewUrl = file.previewUrl;
 
     if (embedUrl) {
-      return (
+      const embedFallback = (
         <div className="relative h-full w-full bg-slate-100">
           <iframe
             src={embedUrl}
@@ -542,16 +695,10 @@ export function FilePreview({
             className="h-full w-full border-0 bg-white"
             allow="autoplay; encrypted-media; fullscreen"
           />
-          <a
-            href={file.webViewLink || file.url}
-            target="_blank"
-            rel="noreferrer"
-            className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-lg bg-black/75 px-2 py-1 text-[11px] font-black text-white shadow-sm hover:bg-black"
-          >
-            <ExternalLink className="h-3.5 w-3.5" /> Open in Drive
-          </a>
+          <DriveOpenButton file={file} />
         </div>
       );
+      return <DriveAccessPreview file={file} onImageClick={onImageClick} fallback={embedFallback} />;
     }
 
     return (

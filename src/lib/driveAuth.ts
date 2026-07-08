@@ -6,7 +6,7 @@ const DRIVE_USER_STORAGE_KEY = 'national-care-drive-user';
 const TOKEN_EXPIRY_SKEW_MS = 60 * 1000;
 
 export const DRIVE_SCOPES = [
-  'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/drive.readonly',
   'https://www.googleapis.com/auth/userinfo.email',
 ].join(' ');
 
