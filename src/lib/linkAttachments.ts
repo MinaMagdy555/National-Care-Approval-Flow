@@ -102,7 +102,10 @@ export function getLinkedFileEmbedUrl(rawUrl?: string) {
 
     const driveFileId = getGoogleDriveFileId(url);
     if (driveFileId && url.hostname.toLowerCase().includes('drive.google.com')) {
-      return `https://drive.google.com/file/d/${encodeURIComponent(driveFileId)}/preview`;
+      const previewUrl = new URL(`https://drive.google.com/file/d/${encodeURIComponent(driveFileId)}/preview`);
+      const resourceKey = url.searchParams.get('resourcekey');
+      if (resourceKey) previewUrl.searchParams.set('resourcekey', resourceKey);
+      return previewUrl.toString();
     }
   } catch {
     return null;
@@ -117,7 +120,13 @@ export function getLinkedFileThumbnailUrl(rawUrl?: string) {
   try {
     const url = normalizeLinkedUrl(rawUrl);
     const driveFileId = getGoogleDriveFileId(url);
-    return driveFileId ? `https://drive.google.com/thumbnail?id=${encodeURIComponent(driveFileId)}&sz=w1000` : null;
+    if (!driveFileId) return null;
+    const thumbnailUrl = new URL('https://drive.google.com/thumbnail');
+    thumbnailUrl.searchParams.set('id', driveFileId);
+    thumbnailUrl.searchParams.set('sz', 'w1000');
+    const resourceKey = url.searchParams.get('resourcekey');
+    if (resourceKey) thumbnailUrl.searchParams.set('resourcekey', resourceKey);
+    return thumbnailUrl.toString();
   } catch {
     return null;
   }

@@ -64,6 +64,18 @@ export function canManageWorkflowBuilder(user: Pick<User, 'id' | 'role' | 'isAdm
   return false;
 }
 
+export function isContentCreatorProfile(user?: Pick<User, 'role' | 'jobTitle'> | null) {
+  if (!user) return false;
+  return user.jobTitle === 'Content Creator' || (user.role === 'team_member' && user.jobTitle === 'Content Creator');
+}
+
+export function isDirectToFinalReviewUploader(user?: Pick<User, 'role' | 'jobTitle' | 'isAdmin'> | null) {
+  if (!user) return false;
+  if (user.isAdmin || user.role === 'admin') return true;
+  if (['reviewer', 'team_leader', 'art_director'].includes(user.role)) return true;
+  return (user.jobTitle || '').trim().toLowerCase().includes('senior');
+}
+
 export function canUserActAsCurrentOwner(task: Task, user: Pick<User, 'id'>) {
   const ownerIds = getCurrentOwnerUserIds(task);
   return ownerIds.length === 0 || ownerIds.includes(user.id);

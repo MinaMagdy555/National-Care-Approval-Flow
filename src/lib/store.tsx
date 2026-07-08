@@ -42,6 +42,7 @@ import {
   getWorkflowPhase,
   getWorkflowPhaseIndex,
   hasUserApprovedWorkflowPhase,
+  isDirectToFinalReviewUploader,
   resolveWorkflowPhaseReviewerIds,
   uniqueIds,
 } from './workflowUtils';
@@ -220,8 +221,34 @@ function removeGuestSeedNotifications(notifications: Notification[]) {
   return notifications.filter(notification => notification?.id && !isGuestSeedNotification(notification));
 }
 
+function normalizeDirectToFinalTask(task: Task, users: Record<string, User>): Task {
+  const latestSubmitterId = task.versions[0]?.submittedBy;
+  const latestSubmitter = latestSubmitterId ? users[latestSubmitterId] || initialUsers.find(user => user.id === latestSubmitterId) : null;
+  const creator = users[task.createdBy] || initialUsers.find(user => user.id === task.createdBy);
+  const shouldRouteDirect =
+    task.reviewMode === 'direct_to_ad' &&
+    task.status === 'waiting_content_revision' &&
+    (isDirectToFinalReviewUploader(latestSubmitter) || isDirectToFinalReviewUploader(creator));
+
+  if (!shouldRouteDirect) return task;
+
+  return {
+    ...task,
+    workflowId: null,
+    workflowSnapshot: null,
+    workflowCurrentPhaseId: null,
+    workflowCurrentPhaseIndex: null,
+    workflowPhaseApprovals: {},
+    status: 'sent_to_art_director',
+    currentOwnerRole: 'art_director',
+    currentOwnerUserId: null,
+    currentOwnerUserIds: getUserIdsByRoleRecord(users, ['art_director']),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 function reviveWorkspaceTasks(tasks: Task[], users: Record<string, User>) {
-  return sortTasksByUpdate(reviveTaskFiles(tasks.filter(task => !isGuestSeedTask(task) && !isPlaceholderTask(task)), users));
+  return sortTasksByUpdate(reviveTaskFiles(tasks.filter(task => !isGuestSeedTask(task) && !isPlaceholderTask(task)), users).map(task => normalizeDirectToFinalTask(task, users)));
 }
 
 function getUserIdsByRole(users: User[], roles: Role[]) {
@@ -251,8 +278,8 @@ function formatDeadlineText(deadlineAt?: string | null) {
 }
 
 function isReviewerCreatedTask(task: Task, users: Record<string, User>) {
-  const creatorRole = users[task.createdBy]?.role || initialUsers.find(user => user.id === task.createdBy)?.role;
-  return creatorRole === 'reviewer' || creatorRole === 'admin';
+  const creator = users[task.createdBy] || initialUsers.find(user => user.id === task.createdBy);
+  return isDirectToFinalReviewUploader(creator);
 }
 
 function normalizeReviewerCreatedTask(task: Task, users: Record<string, User>): Task {

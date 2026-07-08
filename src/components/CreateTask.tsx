@@ -6,7 +6,7 @@ import { CustomSelect } from './CustomSelect';
 import { UserMultiSelect } from './UserMultiSelect';
 import { canAssignContributors, getAssignableContributorsForTask, sanitizeHandledBy } from '../lib/handlerUtils';
 import { createLinkedTaskFileWithMetadata, getLinkHostLabel, parseAssignmentLink } from '../lib/linkAttachments';
-import { canManageWorkflowBuilder, getReviewRouteTarget, getWorkflowForTaskType, uniqueIds } from '../lib/workflowUtils';
+import { canManageWorkflowBuilder, getReviewRouteTarget, getWorkflowForTaskType, isContentCreatorProfile, isDirectToFinalReviewUploader, uniqueIds } from '../lib/workflowUtils';
 import { canUploadWorkAssignment } from '../lib/workAssignmentUtils';
 import { getTaskTypeLabel } from '../lib/taskUtils';
 
@@ -40,9 +40,11 @@ export function CreateTask({
   const workspaceUsers = userList.filter(user => user.id !== 'guest');
   const canChooseCreator = !isAssignmentUploadMode && (currentUser.role === 'reviewer' || currentUser.role === 'admin' || Boolean(currentUser.isAdmin));
   const selectedCreatorId = assignmentTask ? assignmentTask.createdBy : canChooseCreator ? createdBy : currentUser.id;
-  const selectedCreatorRole = users[selectedCreatorId]?.role || currentUser.role;
-  const isReviewerCreatedTask = selectedCreatorRole === 'reviewer' || selectedCreatorRole === 'admin';
-  const effectiveReviewMode = isReviewerCreatedTask ? 'direct_to_ad' : reviewMode;
+  const selectedCreator = users[selectedCreatorId] || (selectedCreatorId === currentUser.id ? currentUser : undefined);
+  const routeActor = isAssignmentUploadMode ? currentUser : selectedCreator;
+  const isDirectToFinalUpload = isDirectToFinalReviewUploader(routeActor);
+  const effectiveReviewMode = isDirectToFinalUpload ? 'direct_to_ad' : reviewMode;
+  const effectiveWorkflowId = isDirectToFinalUpload ? null : workflowId || null;
   const routeTarget = getReviewRouteTarget(effectiveReviewMode);
   const canChooseWorkflow = canManageWorkflowBuilder(currentUser, appSettings);
   const canManageAssignedContributors = !isAssignmentUploadMode && canAssignContributors(currentUser.id, appSettings);
@@ -108,7 +110,7 @@ export function CreateTask({
       return;
     }
     const creator = users[selectedCreatorId] || (selectedCreatorId === currentUser.id ? currentUser : undefined);
-    const isContentCreator = creator ? (creator.jobTitle === 'Content Creator' || (creator.role === 'team_member' && creator.jobTitle === 'Content Creator')) : false;
+    const isContentCreator = isContentCreatorProfile(isAssignmentUploadMode ? currentUser : creator);
     const defaultMode = getEffectiveReviewMode(taskType, isContentCreator, 'full_review');
     setReviewMode(defaultMode);
     const workflow = getWorkflowForTaskType(appSettings, taskType);
@@ -154,7 +156,7 @@ export function CreateTask({
       return;
     }
 
-    const creator = users[selectedCreatorId] || (selectedCreatorId === currentUser.id ? currentUser : undefined);
+    const creator = selectedCreator;
     const newTaskId = assignmentTask?.id || Math.random().toString(36).substring(7);
     const newTaskCode = assignmentTask?.code || `TSK-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
     const thumbnailFile = taskFiles.find(file => file.previewUrl && file.previewStoragePath);
@@ -164,7 +166,7 @@ export function CreateTask({
       submitWorkAssignmentUpload(assignmentTask.id, {
         taskType,
         reviewMode: effectiveReviewMode,
-        workflowId: workflowId || null,
+        workflowId: effectiveWorkflowId,
         scheduledPublishAt: taskType === 'campaign' ? scheduledPublishAt || null : null,
         publishNote: taskType === 'campaign' ? publishNote.trim() || null : null,
         version: {
@@ -206,7 +208,7 @@ export function CreateTask({
       name: taskName,
       taskType,
       reviewMode: effectiveReviewMode,
-      workflowId: workflowId || null,
+      workflowId: effectiveWorkflowId,
       environment,
       createdBy: selectedCreatorId,
       handledBy: handledByIds,
@@ -399,13 +401,13 @@ export function CreateTask({
                     onChange={value => setReviewMode(value as ReviewMode)}
                     options={reviewModeOptions}
                     buttonClassName={FORM_SELECT_BUTTON_CLASS}
-                      disabled={currentUser.role === 'team_member'}
+                    disabled={currentUser.role === 'team_member' || isDirectToFinalUpload || isAssignmentUploadMode}
                   />
-                  {isReviewerCreatedTask && (
-                    <p className="mt-2 text-xs font-bold text-slate-500">Reviewer-created tasks go directly to the Final Approvement.</p>
+                  {isDirectToFinalUpload && (
+                    <p className="mt-2 text-xs font-bold text-slate-500">Senior and reviewer uploads go directly to the Final Approvement.</p>
                   )}
                 </div>
-                {canChooseWorkflow && workflowOptions.length > 0 && (
+                {canChooseWorkflow && !isDirectToFinalUpload && workflowOptions.length > 0 && (
                   <div className="col-span-2">
                     <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Workflow</label>
                     <CustomSelect

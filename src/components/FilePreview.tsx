@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FileText, FileWarning, Film, Image as ImageIcon, Link2 } from 'lucide-react';
+import { ExternalLink, FileText, FileWarning, Film, Image as ImageIcon, Link2 } from 'lucide-react';
 import { Task, UploadedTaskFile } from '../lib/types';
 import {
   getExpectedFilePreview,
@@ -150,6 +150,14 @@ function LinkedFilePreview({
           className="h-full w-full border-0 bg-white"
           allow="autoplay; encrypted-media; fullscreen"
         />
+        <a
+          href={file.webViewLink || file.url}
+          target="_blank"
+          rel="noreferrer"
+          className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-lg bg-black/75 px-2 py-1 text-[11px] font-black text-white shadow-sm hover:bg-black"
+        >
+          <ExternalLink className="h-3.5 w-3.5" /> Open in Drive
+        </a>
       </div>
     );
   }
@@ -527,13 +535,21 @@ export function FilePreview({
 
     if (embedUrl) {
       return (
-        <div className="h-full w-full bg-slate-100">
+        <div className="relative h-full w-full bg-slate-100">
           <iframe
             src={embedUrl}
             title={file.name}
             className="h-full w-full border-0 bg-white"
             allow="autoplay; encrypted-media; fullscreen"
           />
+          <a
+            href={file.webViewLink || file.url}
+            target="_blank"
+            rel="noreferrer"
+            className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-lg bg-black/75 px-2 py-1 text-[11px] font-black text-white shadow-sm hover:bg-black"
+          >
+            <ExternalLink className="h-3.5 w-3.5" /> Open in Drive
+          </a>
         </div>
       );
     }

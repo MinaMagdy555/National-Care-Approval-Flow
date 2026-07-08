@@ -14,7 +14,7 @@ import { UserMultiSelect } from './UserMultiSelect';
 import { CustomSelect } from './CustomSelect';
 import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText } from '../lib/uploadLimits';
 import { createLinkedTaskFileWithMetadata, getLinkHostLabel } from '../lib/linkAttachments';
-import { canManageWorkflow, canManageWorkflowBuilder, canUserAccessTask, canUserActAsCurrentOwner, getCurrentOwnerUserIds, getWorkflowPhase, hasUserApprovedWorkflowPhase, userCanViewFullWorkspace } from '../lib/workflowUtils';
+import { canManageWorkflow, canManageWorkflowBuilder, canUserAccessTask, canUserActAsCurrentOwner, getCurrentOwnerUserIds, getWorkflowPhase, hasUserApprovedWorkflowPhase, isContentCreatorProfile, userCanViewFullWorkspace } from '../lib/workflowUtils';
 import { isLeaderboardUser } from '../lib/workAssignmentUtils';
 import { DINA_ID } from '../lib/appSettings';
 import {
@@ -190,12 +190,16 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     .join(' + ');
 
   const currentVersion = task.versions[selectedVersionIndex] || task.versions[0];
+  const latestVersion = task.versions[0];
   const files = getTaskFiles(currentVersion);
   const selectedFile = files[selectedFileIndex] || files[0];
   const currentVersionHasLocalOnlyFiles = files.some(file => isLocalOnlyFileUrl(file.url));
   const isArchived = isTaskArchived(task);
 
   const isSelfCreatedTask = task.createdBy === currentUser.id;
+  const currentVersionSubmittedByMe = currentVersion?.submittedBy === currentUser.id;
+  const latestVersionSubmittedByMe = latestVersion?.submittedBy === currentUser.id;
+  const canApproveCurrentSubmission = !isSelfCreatedTask && !currentVersionSubmittedByMe && !latestVersionSubmittedByMe;
   const isReadOnlyObserver = currentUser.role === 'manager' || currentUser.role === 'developer';
   const isCurrentActiveOwner = canUserActAsCurrentOwner(task, currentUser);
   const activeWorkflowPhase = getWorkflowPhase(task);
@@ -207,10 +211,11 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   const activeWorkflowPhaseApprovedByMe = activeWorkflowPhase ? hasUserApprovedWorkflowPhase(task, activeWorkflowPhase.id, currentUser.id) : false;
   const canActAsWorkflowReviewer = Boolean(activeWorkflowPhase) &&
     isCurrentActiveOwner &&
+    canApproveCurrentSubmission &&
     !activeWorkflowPhaseApprovedByMe &&
     !['approved_by_art_director', 'completed', 'archived', 'on_hold', 'assigned_work'].includes(task.status);
-  const canActAsReviewer = (currentUser.role === 'reviewer' || currentUser.role === 'team_leader') && isCurrentActiveOwner;
-  const canActAsArtDirector = currentUser.role === 'art_director' && isCurrentActiveOwner;
+  const canActAsReviewer = (currentUser.role === 'reviewer' || currentUser.role === 'team_leader') && isCurrentActiveOwner && canApproveCurrentSubmission;
+  const canActAsArtDirector = currentUser.role === 'art_director' && isCurrentActiveOwner && canApproveCurrentSubmission;
   const canManageWorkflowSettings = currentUser.role !== 'team_member' && canManageWorkflow(currentUser, appSettings);
   const canManageWorkflowDefinitions = canManageWorkflowBuilder(currentUser, appSettings);
   const canReassignTask = currentUser.role !== 'team_member' && canAssignContributors(currentUser.id, appSettings);
@@ -222,8 +227,10 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   const isInternalReviewTask = !isDetailedReviewType;
   const canViewInternalReviewNotes = canViewFullWorkspace;
   const isAdminUser = Boolean(currentUser.isAdmin) || currentUser.role === 'admin';
-  const isContentCreatorUser = currentUser.jobTitle === 'Content Creator' || (currentUser.role === 'team_member' && currentUser.jobTitle === 'Content Creator') || currentUser.role === 'admin' || Boolean(currentUser.isAdmin);
-  const canActAsContentCreator = (isContentCreatorUser && task.status === 'waiting_content_revision' && (task.currentOwnerUserIds || []).includes(currentUser.id)) || (isAdminUser && task.status === 'waiting_content_revision');
+  const isContentCreatorUser = isContentCreatorProfile(currentUser);
+  const canActAsContentCreator = task.status === 'waiting_content_revision' &&
+    canApproveCurrentSubmission &&
+    ((isContentCreatorUser && (task.currentOwnerUserIds || []).includes(currentUser.id)) || (isAdminUser && (task.currentOwnerUserIds || []).includes(currentUser.id)));
   const jobTitleLower = (currentUser.jobTitle || '').toLowerCase();
   const isInGraphicOrVideoDept = jobTitleLower.includes('designer') || 
                                  jobTitleLower.includes('video') || 
