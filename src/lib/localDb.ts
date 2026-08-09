@@ -1,4 +1,4 @@
-import { AppSettings, Notification, Task } from './types';
+import { AppSettings, DailyReport, Notification, Task } from './types';
 
 const DB_NAME = 'national-care-approval-flow';
 const DB_VERSION = 1;
@@ -9,6 +9,7 @@ export interface PersistedAppState {
   tasks: Task[];
   notifications: Notification[];
   settings?: AppSettings;
+  dailyReports?: DailyReport[];
 }
 
 function openDatabase(): Promise<IDBDatabase> {

@@ -11,6 +11,8 @@ import { AuthScreen } from './components/AuthScreen';
 import { UserManagement } from './components/UserManagement';
 import { AssignedWorkSection } from './components/AssignedWorkSection';
 import { SettingsManagement } from './components/SettingsManagement';
+import { WorkflowBuilderPage } from './components/WorkflowBuilderPage';
+import { DailyReports } from './components/DailyReports';
 import { isDueThisWeek, isDueToday } from './lib/deadlineUtils';
 import { isTaskArchived } from './lib/archiveUtils';
 import { canUserAccessTask, canUserActAsCurrentOwner, parsePublishDate, userCanViewFullWorkspace } from './lib/workflowUtils';
@@ -172,8 +174,8 @@ function WorkspaceContent() {
   const unreadNotificationIdsRef = useRef<Set<string>>(new Set());
   const unreadNotificationUserIdRef = useRef(currentUser.id);
   const mainRef = useRef<HTMLElement>(null);
-  const canManageUsers = Boolean(currentUser.isAdmin) || currentUser.role === 'admin';
-  const canShowUserManagement = canManageUsers && isUserManagementUnlocked;
+  const canManageUsers = Boolean(currentUser.isAdmin) || currentUser.role === 'admin' || isLeaderboardUser(currentUser.id);
+  const canShowUserManagement = canManageUsers;
 
   useEffect(() => {
     writeRouteToUrl({ view: currentView, taskId: activeTaskId, assignmentId: activeAssignmentId }, 'replace');
@@ -314,7 +316,7 @@ function WorkspaceContent() {
     if (currentView === 'users' && !canShowUserManagement) {
       navigateTo({ view: 'dashboard', taskId: null, assignmentId: null }, 'replace');
     }
-    if (currentView === 'settings' && !canManageSettings) {
+    if ((currentView === 'settings' || currentView === 'workflow_builder') && !canManageSettings) {
       navigateTo({ view: 'dashboard', taskId: null, assignmentId: null }, 'replace');
     }
   }, [currentView, canShowUserManagement, canManageSettings]);
@@ -362,13 +364,15 @@ function WorkspaceContent() {
       case 'performance':
         return <Dashboard viewMode="performance" onOpenTask={handleOpenTask} onNavigate={handleNavigate} />;
       case 'notifications':
-        return <NotificationsList onOpenTask={handleOpenTask} />;
+        return <NotificationsList onOpenTask={handleOpenTask} onOpenDailyReports={() => handleNavigate('daily_reports')} />;
       case 'sign_in':
         return <AuthScreen onContinueAsGuest={() => handleNavigate('dashboard')} />;
       case 'create_task':
         return <CreateTask assignmentTaskId={activeAssignmentId} onAssignmentUploaded={handleOpenTask} />;
       case 'campaign_scheduler':
         return <CampaignScheduler onOpenTask={handleOpenTask} />;
+      case 'daily_reports':
+        return <DailyReports onOpenTask={handleOpenTask} />;
       case 'assigned_work': {
         const assignedWorkTasks = visibleEnvTasks.filter(isWorkAssignmentTask);
         const canCreate = canCreateWorkAssignment(currentUser, appSettings);
@@ -403,6 +407,10 @@ function WorkspaceContent() {
       case 'settings':
         return canManageSettings
           ? <SettingsManagement />
+          : <Dashboard viewMode="overview" onOpenTask={handleOpenTask} onNavigate={handleNavigate} />;
+      case 'workflow_builder':
+        return canManageSettings
+          ? <WorkflowBuilderPage />
           : <Dashboard viewMode="overview" onOpenTask={handleOpenTask} onNavigate={handleNavigate} />;
       case 'review_queue': {
         const needsFullReview = workflowVisibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status) && isScopedToCurrentOwner(t));
@@ -589,11 +597,6 @@ function WorkspaceContent() {
                   Change Folder
                 </button>
               </div>
-            </div>
-          )}
-          {persistenceMode === 'neon' && !persistenceError && (
-            <div className="mx-4 mt-4 flex flex-col gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-900 sm:mx-6 lg:mx-8 lg:flex-row lg:items-center lg:justify-between">
-              <p className="text-sm font-bold">Neon database connected.</p>
             </div>
           )}
           {(persistenceMode === 'drive' || persistenceMode === 'neon') && persistenceError && (

@@ -5,10 +5,10 @@ import { getStatusInfo, getTaskTypeLabel, getPriorityLabel } from '../lib/taskUt
 import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
 import { getCurrentOwnerUserIds } from '../lib/workflowUtils';
-import { CalendarDays, Search, X, Calendar, Clock } from 'lucide-react';
+import { getCurrentReviewPhaseName } from '../lib/workflowUtils';
+import { CalendarDays, Search, X, Calendar, Clock, Play, CheckCircle2 } from 'lucide-react';
 import { CustomSelect } from './CustomSelect';
-import { TaskThumbnail } from './FilePreview';
-import { MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID, getPriorityTone, priorityToneClasses } from '../lib/appSettings';
+import { MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID, cleanTaskTypeKey, getPriorityTone, getTaskTypeConfigs, priorityToneClasses } from '../lib/appSettings';
 
 type DateFilterMode = 'all' | 'single' | 'range';
 
@@ -22,6 +22,10 @@ function getDateInputValue(date: string) {
   return `${year}-${month}-${day}`;
 }
 
+function cleanRoleLabel(label: string) {
+  return label.split('·')[0].trim();
+}
+
 export function ReviewQueue({
   onOpenTask,
   onOpenUploadTask,
@@ -33,18 +37,21 @@ export function ReviewQueue({
   tasks: Task[];
   title: string;
 }) {
-  const { currentUser, users, appSettings, toggleTaskHold } = useAppStore();
+  const { currentUser, users, appSettings, toggleTaskHold, updateTaskActiveWork } = useAppStore();
   const isHighboard = [MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID].includes(currentUser.id);
-  
+
   // Advanced filters state
   const [creatorFilter, setCreatorFilter] = useState('all');
+  const [teamModeFilter, setTeamModeFilter] = useState('all');
   const [assigneeFilter, setAssigneeFilter] = useState('all');
+  const [reviewerFilter, setReviewerFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [roleFilter, setRoleFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
-  
-  // Assignment Date
+
+  // Work Date
   const [dateFilterMode, setDateFilterMode] = useState<DateFilterMode>('all');
   const [singleDate, setSingleDate] = useState('');
   const [rangeStartDate, setRangeStartDate] = useState('');
@@ -56,19 +63,81 @@ export function ReviewQueue({
   const [deadlineStartDate, setDeadlineStartDate] = useState('');
   const [deadlineEndDate, setDeadlineEndDate] = useState('');
 
+  const getUserById = (id: string) => users[id] || (id === currentUser.id ? currentUser : undefined) || initialUsers.find(user => user.id === id);
+
+  const getReviewerIdsForTask = (task: Task) => {
+    const taskTypeConfig = getTaskTypeConfigs(appSettings).find(config => cleanTaskTypeKey(config.id) === cleanTaskTypeKey(task.taskType));
+    const ownerIds = getCurrentOwnerUserIds(task);
+    const configuredFirstReviewerIds = task.reviewMode === 'quick_look'
+      ? (taskTypeConfig?.quickLookUserIds?.length ? taskTypeConfig.quickLookUserIds : appSettings.firstReviewerUserIds || [])
+      : (taskTypeConfig?.fullReviewerUserIds?.length ? taskTypeConfig.fullReviewerUserIds : appSettings.firstReviewerUserIds || []);
+    const configuredFinalReviewerIds = taskTypeConfig?.finalReviewerUserIds?.length ? taskTypeConfig.finalReviewerUserIds : appSettings.finalReviewerUserIds || [];
+
+    if (task.status === 'waiting_content_revision') {
+      return Array.from(new Set([...(task.contentRevisionAssigneeIds || []), ...ownerIds]));
+    }
+
+    if (['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'changes_requested_by_reviewer'].includes(task.status)) {
+      return Array.from(new Set([...configuredFirstReviewerIds, ...ownerIds]));
+    }
+
+    if (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval', 'changes_requested_by_art_director'].includes(task.status)) {
+      return Array.from(new Set([...configuredFinalReviewerIds, ...ownerIds]));
+    }
+
+    return ownerIds;
+  };
+
+  const getUserNames = (ids: string[]) => {
+    const names = Array.from(new Set(ids.map(getUserById).filter(Boolean).map(user => user!.name)));
+    return names.length > 0 ? names.join(', ') : 'Not set';
+  };
+
+  const getTaskRoleForUser = (task: Task, userId: string) => {
+    const roles: string[] = [];
+    if (task.createdBy === userId) roles.push('Assigner');
+    if (task.handledBy.includes(userId) || (task.submittedOnBehalfOfIds || []).includes(userId)) roles.push('Working task');
+    if ((task.contentRevisionAssigneeIds || []).includes(userId)) roles.push('Content revision');
+    if (getReviewerIdsForTask(task).includes(userId)) {
+      const phaseName = getCurrentReviewPhaseName(task);
+      roles.push(phaseName ? `Reviewer · ${phaseName}` : 'Reviewer');
+    }
+    if (getCurrentOwnerUserIds(task).includes(userId)) {
+      const phaseName = getCurrentReviewPhaseName(task);
+      roles.push(phaseName ? `Phase owner · ${phaseName}` : 'Current phase owner');
+    }
+    return Array.from(new Set(roles));
+  };
+
   const filteredTasks = tasks.filter(task => {
     if (creatorFilter !== 'all' && task.createdBy !== creatorFilter) return false;
     if (typeFilter !== 'all' && task.taskType !== typeFilter) return false;
+    if (teamModeFilter !== 'all') {
+      if (teamModeFilter === 'solo' && task.handledBy.length !== 1) return false;
+      if (teamModeFilter === 'cooperation' && task.handledBy.length <= 1) return false;
+    }
     if (assigneeFilter !== 'all') {
-      if (assigneeFilter === 'solo' && task.handledBy.length !== 1) return false;
-      if (assigneeFilter === 'cooperation' && task.handledBy.length <= 1) return false;
+      const involvedIds = new Set([
+        ...task.handledBy,
+        ...(task.contentRevisionAssigneeIds || []),
+        ...getCurrentOwnerUserIds(task),
+      ]);
+      if (!involvedIds.has(assigneeFilter)) return false;
+    }
+    if (reviewerFilter !== 'all' && !getReviewerIdsForTask(task).includes(reviewerFilter)) return false;
+    if (roleFilter !== 'all') {
+      const targetUserId = assigneeFilter !== 'all' ? assigneeFilter : currentUser.id;
+      const roles = getTaskRoleForUser(task, targetUserId);
+      if (roleFilter === 'working' && !roles.includes('Working task')) return false;
+      if (roleFilter === 'reviewing' && !roles.some(role => role.startsWith('Reviewer') || role === 'Content revision' || role.startsWith('Phase owner'))) return false;
+      if (roleFilter === 'assigner' && !roles.includes('Assigner')) return false;
     }
     if (priorityFilter !== 'all' && task.priority !== priorityFilter) return false;
-    
+
     const statusInfo = getStatusInfo(task, currentUser.role, users);
     if (statusFilter !== 'all' && statusInfo.label !== statusFilter) return false;
 
-    const taskDate = getDateInputValue(task.createdAt);
+    const taskDate = task.assignmentDate || '';
     if (dateFilterMode === 'single' && singleDate && taskDate !== singleDate) return false;
     if (dateFilterMode === 'range' && (rangeStartDate || rangeEndDate)) {
       const [startDate, endDate] = rangeStartDate && rangeEndDate && rangeStartDate > rangeEndDate
@@ -92,32 +161,77 @@ export function ReviewQueue({
         if (endDate && dlDate > endDate) return false;
       }
     }
-    
+
     if (searchQuery) {
       const lowerQuery = searchQuery.toLowerCase();
       const matchesName = task.name.toLowerCase().includes(lowerQuery);
       const matchesCode = task.code.toLowerCase().includes(lowerQuery);
       const matchesId = task.id.toLowerCase().includes(lowerQuery);
-      const matchesDate = new Date(task.createdAt).toLocaleDateString().includes(lowerQuery);
+      const matchesDate = task.assignmentDate
+        ? new Date(`${task.assignmentDate}T00:00`).toLocaleDateString().includes(lowerQuery)
+        : false;
       if (!matchesName && !matchesCode && !matchesId && !matchesDate) return false;
     }
 
     return true;
   });
 
-  const getUserById = (id: string) => users[id] || (id === currentUser.id ? currentUser : undefined) || initialUsers.find(user => user.id === id);
   const uniqueCreators = Array.from(new Set(tasks.map(t => t.createdBy))).map(getUserById).filter(Boolean) as Array<NonNullable<ReturnType<typeof getUserById>>>;
+  const uniqueAssignees = Array.from(new Set(tasks.flatMap(t => [
+    ...t.handledBy,
+    ...(t.contentRevisionAssigneeIds || []),
+    ...getCurrentOwnerUserIds(t),
+  ]))).map(getUserById).filter(Boolean) as Array<NonNullable<ReturnType<typeof getUserById>>>;
+  const uniqueReviewers = Array.from(new Set(tasks.flatMap(getReviewerIdsForTask))).map(getUserById).filter(Boolean) as Array<NonNullable<ReturnType<typeof getUserById>>>;
   const uniqueTypes = Array.from(new Set(tasks.map(t => t.taskType)));
+
+  const memberSummary = (() => {
+    if (assigneeFilter === 'all') return null;
+    const memberTasks = tasks.filter(task => {
+      const involvedIds = new Set([
+        ...task.handledBy,
+        ...(task.contentRevisionAssigneeIds || []),
+        ...getCurrentOwnerUserIds(task),
+      ]);
+      return involvedIds.has(assigneeFilter);
+    });
+    return {
+      memberName: getUserById(assigneeFilter)?.name || 'Selected member',
+      working: memberTasks.filter(task => task.handledBy.includes(assigneeFilter) || (task.submittedOnBehalfOfIds || []).includes(assigneeFilter)).length,
+      reviewing: memberTasks.filter(task => {
+        const roles = getTaskRoleForUser(task, assigneeFilter);
+        return roles.some(role => role.startsWith('Reviewer') || role === 'Content revision' || role.startsWith('Phase owner'));
+      }).length,
+      assigning: memberTasks.filter(task => task.createdBy === assigneeFilter).length,
+    };
+  })();
 
   const creatorOptions = [
     { value: 'all', label: 'All Assigners' },
     ...uniqueCreators.map(u => ({ value: u.id, label: u.name }))
   ];
 
-  const assigneeOptions = [
+  const teamModeOptions = [
     { value: 'all', label: 'All (Solo/Coop)' },
     { value: 'solo', label: 'Solo Task' },
     { value: 'cooperation', label: 'Cooperation' }
+  ];
+
+  const assigneeOptions = [
+    { value: 'all', label: 'All Members' },
+    ...uniqueAssignees.map(user => ({ value: user.id, label: user.name })),
+  ];
+
+  const reviewerOptions = [
+    { value: 'all', label: 'All Reviewers' },
+    ...uniqueReviewers.map(user => ({ value: user.id, label: user.name })),
+  ];
+
+  const roleOptions = [
+    { value: 'all', label: 'All Roles' },
+    { value: 'working', label: 'Working Task' },
+    { value: 'reviewing', label: 'Reviewing / Phase Owner' },
+    { value: 'assigner', label: 'Assigned By Them' },
   ];
 
   const priorityOptions = [
@@ -162,20 +276,20 @@ export function ReviewQueue({
   } as Record<string, string>;
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+    <div className="mx-auto w-full max-w-none space-y-6 px-4 py-6 sm:px-6 lg:px-8">
       <div className="mb-4">
         <h2 className="text-2xl font-black tracking-tight text-slate-900 sm:text-3xl">{title}</h2>
       </div>
 
-      <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-12">
           {/* Search */}
-          <div className="flex flex-col gap-1.5 sm:col-span-2">
+          <div className="flex flex-col gap-1.5 sm:col-span-2 xl:col-span-3">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Search</label>
             <div className="relative">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input 
-                type="text" 
+              <input
+                type="text"
                 placeholder="Search by name or ID..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
@@ -185,61 +299,92 @@ export function ReviewQueue({
           </div>
 
           {/* Assigner */}
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-1.5 xl:col-span-2">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Assigner</label>
-            <CustomSelect 
-              value={creatorFilter} 
+            <CustomSelect
+              value={creatorFilter}
               onChange={setCreatorFilter}
               options={creatorOptions}
             />
           </div>
 
           {/* Solo / Cooperation */}
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-1.5 xl:col-span-2">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Solo / Cooperation</label>
-            <CustomSelect 
-              value={assigneeFilter} 
+            <CustomSelect
+              value={teamModeFilter}
+              onChange={setTeamModeFilter}
+              options={teamModeOptions}
+            />
+          </div>
+
+          {/* Assignee */}
+          <div className="flex flex-col gap-1.5 xl:col-span-2">
+            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Assignee</label>
+            <CustomSelect
+              value={assigneeFilter}
               onChange={setAssigneeFilter}
               options={assigneeOptions}
             />
           </div>
 
           {/* Task Type */}
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-1.5 xl:col-span-2">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Task Type</label>
-            <CustomSelect 
-              value={typeFilter} 
+            <CustomSelect
+              value={typeFilter}
               onChange={setTypeFilter}
               options={typeOptions}
             />
           </div>
 
           {/* Priority */}
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-1.5 xl:col-span-1">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Priority</label>
-            <CustomSelect 
-              value={priorityFilter} 
+            <CustomSelect
+              value={priorityFilter}
               onChange={setPriorityFilter}
               options={priorityOptions}
             />
           </div>
-        </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {/* Status */}
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-1.5 xl:col-span-2">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Status</label>
-            <CustomSelect 
-              value={statusFilter} 
+            <CustomSelect
+              value={statusFilter}
               onChange={setStatusFilter}
               options={statusOptions}
             />
           </div>
 
-          {/* Assignment Date */}
-          <div className="flex flex-col gap-1.5">
+          {/* Reviewer */}
+          <div className="flex flex-col gap-1.5 xl:col-span-2">
+            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Reviewer</label>
+            <CustomSelect
+              value={reviewerFilter}
+              onChange={setReviewerFilter}
+              options={reviewerOptions}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5 xl:col-span-2">
+            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Person Role</label>
+            <CustomSelect
+              value={roleFilter}
+              onChange={setRoleFilter}
+              options={roleOptions}
+              disabled={assigneeFilter === 'all'}
+            />
+            {assigneeFilter === 'all' && (
+              <p className="text-[10px] font-bold text-slate-400">Select a member first</p>
+            )}
+          </div>
+
+          {/* Work Date */}
+          <div className="flex flex-col gap-1.5 xl:col-span-3">
             <div className="flex items-center justify-between gap-3">
-              <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Assignment Date</label>
+              <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Work Date</label>
               {hasDateFilter && (
                 <button
                   type="button"
@@ -274,7 +419,7 @@ export function ReviewQueue({
                       <CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                       <input
                         type="date"
-                        aria-label="Start assignment date"
+                        aria-label="Start work date"
                         value={rangeStartDate}
                         onChange={event => setRangeStartDate(event.target.value)}
                         className="h-10 w-full rounded-lg border border-slate-300 pl-10 pr-3 text-xs font-bold text-slate-700 outline-none transition-all focus:ring-2 focus:ring-indigo-500"
@@ -285,7 +430,7 @@ export function ReviewQueue({
                       <CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                       <input
                         type="date"
-                        aria-label="End assignment date"
+                        aria-label="End work date"
                         value={rangeEndDate}
                         onChange={event => setRangeEndDate(event.target.value)}
                         className="h-10 w-full rounded-lg border border-slate-300 pl-10 pr-3 text-xs font-bold text-slate-700 outline-none transition-all focus:ring-2 focus:ring-indigo-500"
@@ -295,7 +440,7 @@ export function ReviewQueue({
                 )}
                 {dateFilterMode === 'all' && (
                   <div className="w-full h-10 border border-slate-200 bg-slate-50 rounded-lg flex items-center px-3 text-xs font-semibold text-slate-400">
-                    Showing all assignment dates
+                    Showing all work dates
                   </div>
                 )}
               </div>
@@ -303,7 +448,7 @@ export function ReviewQueue({
           </div>
 
           {/* Deadline Date */}
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-1.5 xl:col-span-3">
             <div className="flex items-center justify-between gap-3">
               <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Deadline Date</label>
               {(deadlineFilterMode !== 'all' || deadlineSingleDate || deadlineStartDate || deadlineEndDate) && (
@@ -371,28 +516,37 @@ export function ReviewQueue({
                 )}
               </div>
             </div>
-          </div>
         </div>
+        {memberSummary && (
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Member summary - {memberSummary.memberName}</span>
+            <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-indigo-700">Working: {memberSummary.working}</span>
+            <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-blue-700">Reviewing: {memberSummary.reviewing}</span>
+            <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-violet-700">Assigning: {memberSummary.assigning}</span>
+          </div>
+        )}
+      </div>
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="overflow-x-auto">
-        <table className="min-w-[760px] w-full text-left border-collapse">
+        <div className="max-w-full overflow-x-auto">
+        <table className="min-w-[1180px] w-full text-left border-collapse">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200 text-[10px] uppercase tracking-wider font-black text-slate-400">
-              <th className="p-4 w-32">Asset</th>
-              <th className="p-4">Details</th>
-              <th className="p-4">Assigner</th>
-              <th className="p-4">Priority</th>
-              <th className="p-4">Deadline</th>
-              <th className="p-4">Status</th>
-              <th className="p-4 text-right">Action</th>
+              <th className="w-[260px] p-4">Details</th>
+              <th className="w-[100px] p-4">Assigner</th>
+              <th className="w-[150px] p-4">Reviewer</th>
+              <th className="w-[170px] p-4">Role</th>
+              <th className="w-[105px] p-4">Priority</th>
+              <th className="w-[130px] p-4">Deadline</th>
+              <th className="w-[210px] p-4">Status</th>
+              <th className="sticky right-0 z-10 w-[170px] bg-slate-50 p-4 text-right shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.45)]">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filteredTasks.length === 0 && (
               <tr>
-                <td colSpan={7} className="p-8 text-center text-slate-500 font-medium">No tasks match your filters.</td>
+                <td colSpan={8} className="p-8 text-center text-slate-500 font-medium">No tasks match your filters.</td>
               </tr>
             )}
             {filteredTasks.map(task => {
@@ -400,16 +554,15 @@ export function ReviewQueue({
               const creator = getUserById(task.createdBy);
               const version = task.versions.length > 0 ? task.versions[0].versionNumber : 1;
               const isDemo = task.environment === 'demo';
-              const assignedNames = task.handledBy.map(getUserById).filter(Boolean).map(user => user!.name.split(' ')[0]).join(', ');
+              const reviewerNames = getUserNames(getReviewerIdsForTask(task));
+              const roleTargetId = assigneeFilter !== 'all' ? assigneeFilter : currentUser.id;
+              const roleLabels = getTaskRoleForUser(task, roleTargetId);
+              const isActiveWork = Boolean(task.activeWorkStartedAt && !task.activeWorkFinishedAt);
+              const canToggleActiveWork = task.handledBy.includes(currentUser.id) || isHighboard || currentUser.role === 'team_leader';
 
               return (
                 <tr key={task.id} className="hover:bg-slate-50/50 transition-colors group cursor-pointer border-b border-slate-100 last:border-0" onClick={() => onOpenTask(task.id)}>
-                  <td className="p-4 align-top">
-                    <div className="w-24 h-16 bg-slate-100 rounded-lg overflow-hidden border border-slate-200 relative">
-                      <TaskThumbnail task={task} />
-                    </div>
-                  </td>
-                  <td className="p-4 align-top">
+                  <td className="w-[260px] p-4 align-top">
                     <div className="font-bold text-slate-900 mb-1 leading-tight">{task.name}</div>
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-bold text-slate-400 font-mono mb-2">
                       <span>{task.code}</span>
@@ -428,7 +581,7 @@ export function ReviewQueue({
                       </div>
                     )}
                   </td>
-                  <td className="p-4 align-top">
+                  <td className="w-[100px] p-4 align-top">
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs">
                         {creator?.avatar ? <img src={creator.avatar} className="w-full h-full rounded-full object-cover"/> : creator?.name.charAt(0)}
@@ -436,16 +589,30 @@ export function ReviewQueue({
                       <span className="font-semibold text-sm text-slate-700">{creator?.name.split(' ')[0]}</span>
                     </div>
                   </td>
-                  <td className="p-4 align-top">
+                  <td className="w-[150px] p-4 align-top">
+                    <div className="text-sm font-bold leading-snug text-slate-700">
+                      {reviewerNames}
+                    </div>
+                  </td>
+                  <td className="w-[170px] p-4 align-top">
+                    <div className="flex flex-wrap gap-1">
+                      {roleLabels.length > 0 ? roleLabels.map(label => (
+                        <span key={label} className="rounded-full border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-indigo-700">{cleanRoleLabel(label)}</span>
+                      )) : (
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-slate-500">Not involved</span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="w-[105px] p-4 align-top">
                     {task.priority !== 'not_set' ? (
                       <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide', priorityToneClasses(getPriorityTone(appSettings, task.priority)))}>
                         {getPriorityLabel(task.priority, appSettings)}
                       </span>
                     ) : (
-                      <span className="text-xs font-bold text-slate-400">—</span>
+                      <span className="text-xs font-bold text-slate-400">-</span>
                     )}
                   </td>
-                  <td className="p-4 align-top">
+                  <td className="w-[130px] p-4 align-top">
                     {task.deadlineAt ? (
                       <div className="flex flex-col gap-1 text-xs font-bold text-slate-700 whitespace-nowrap">
                         <div className="flex items-center gap-1.5">
@@ -458,19 +625,55 @@ export function ReviewQueue({
                         </div>
                       </div>
                     ) : (
-                      <span className="text-xs font-bold text-slate-400">—</span>
+                      <span className="text-xs font-bold text-slate-400">-</span>
                     )}
                   </td>
-                  <td className="p-4 align-top">
-                    <div className={cn("inline-flex items-center px-2 py-1 rounded-full text-xs font-bold gap-1.5", colorStyles[statusInfo.color] || colorStyles.gray)}>
-                       <span className={cn("w-1.5 h-1.5 rounded-full", `bg-${statusInfo.color === 'gray' ? 'slate' : statusInfo.color}-500`)}></span>
-                       {statusInfo.label}
+                  <td className="w-[210px] p-4 align-top">
+                    <div className={cn("inline-flex max-w-[190px] items-center px-3 py-1 rounded-full text-xs font-bold gap-1.5 leading-tight", colorStyles[statusInfo.color] || colorStyles.gray)}>
+                       <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", `bg-${statusInfo.color === 'gray' ? 'slate' : statusInfo.color}-500`)}></span>
+                       <span>{statusInfo.label}</span>
                     </div>
+                    {isActiveWork && (
+                      <div className="mt-1 w-fit rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-emerald-700">Active work</div>
+                    )}
                   </td>
-                  <td className="p-4 text-right align-top">
+                  <td className="sticky right-0 z-10 w-[170px] bg-white p-4 text-right align-top shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.45)] group-hover:bg-slate-50">
                     {(() => {
                       const isAssignedToMe = task.handledBy.includes(currentUser.id);
                       const isTaskActiveForUpload = task.status === 'assigned_work';
+
+                      if (canToggleActiveWork && !['approved', 'completed', 'archived', 'approved_by_art_director'].includes(task.status)) {
+                        return (
+                          <div className="flex flex-col items-end gap-2">
+                            {isAssignedToMe && isTaskActiveForUpload && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (onOpenUploadTask) {
+                                    onOpenUploadTask(task.id);
+                                  }
+                                }}
+                                className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-lg transition-colors shadow-sm whitespace-nowrap"
+                              >
+                                Upload the Task
+                              </button>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                updateTaskActiveWork(task.id, !isActiveWork);
+                              }}
+                              className={cn(
+                                "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-black transition-colors shadow-sm whitespace-nowrap",
+                                isActiveWork ? "bg-emerald-600 text-white hover:bg-emerald-700" : "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                              )}
+                            >
+                              {isActiveWork ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                              {isActiveWork ? 'Finish Active Work' : 'Start Active Work'}
+                            </button>
+                          </div>
+                        );
+                      }
 
                       if (isAssignedToMe && isTaskActiveForUpload) {
                         return (
@@ -517,7 +720,7 @@ export function ReviewQueue({
                           );
                         }
                       }
-                      
+
                       const isReviewerOrLeader = currentUser.role === 'reviewer' || leaderboardIds.includes(currentUser.id);
                       if (isReviewerOrLeader) {
                         return (

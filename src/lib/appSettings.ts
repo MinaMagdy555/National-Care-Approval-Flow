@@ -17,8 +17,428 @@ const now = new Date().toISOString();
 
 export const FULL_REVIEW_WORKFLOW_ID = 'workflow_full_review_default';
 export const QUICK_LOOK_WORKFLOW_ID = 'workflow_quick_look_default';
+export const SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID = 'workflow_social_media_campaigns_default';
+
+function campaignPhase(
+  id: string,
+  name: string,
+  parentPhaseId: string | null,
+  parentPhaseIds: string[],
+  nodeX: number,
+  nodeY: number,
+  responsibilityIds: string[],
+  instructions: string,
+  mode: 'sequential' | 'parallel' = 'sequential',
+  reviewStyle: 'quick_look' | 'full_review' | 'final_approval' = 'quick_look',
+  roleIds: Role[] = [],
+  returnToPhaseId: string | null = null,
+  subPhases: WorkflowDefinition['phases'][number]['subPhases'] = [],
+): WorkflowDefinition['phases'][number] {
+  return {
+    id,
+    name,
+    reviewStyle,
+    mode,
+    userIds: [],
+    roleIds,
+    responsibilityIds,
+    instructions,
+    deliverables: [],
+    delayDays: null,
+    maxRevisionRounds: null,
+    skipCondition: '',
+    returnToPhaseId,
+    requiredApprovals: null,
+    parentPhaseId,
+    parentPhaseIds,
+    nodeX,
+    nodeY,
+    nodeType: 'step',
+    disabled: false,
+    nodeNote: instructions,
+    subPhases,
+  };
+}
+
+function campaignSection(
+  id: string,
+  name: string,
+  nodeX: number,
+  nodeY: number,
+  nodeWidth: number,
+  nodeHeight: number,
+  sectionColor: string,
+  note: string,
+): WorkflowDefinition['phases'][number] {
+  return {
+    id,
+    name,
+    reviewStyle: 'quick_look',
+    mode: 'sequential',
+    userIds: [],
+    roleIds: [],
+    responsibilityIds: [],
+    instructions: note,
+    deliverables: [],
+    delayDays: null,
+    maxRevisionRounds: null,
+    skipCondition: '',
+    returnToPhaseId: null,
+    requiredApprovals: null,
+    parentPhaseId: null,
+    parentPhaseIds: [],
+    nodeX,
+    nodeY,
+    nodeWidth,
+    nodeHeight,
+    nodeType: 'section',
+    disabled: false,
+    nodeNote: note,
+    sectionColor,
+    subPhases: [],
+  };
+}
+
+function campaignNote(
+  id: string,
+  name: string,
+  nodeX: number,
+  nodeY: number,
+  nodeWidth: number,
+  nodeHeight: number,
+  note: string,
+): WorkflowDefinition['phases'][number] {
+  return {
+    ...campaignSection(id, name, nodeX, nodeY, nodeWidth, nodeHeight, '#f97316', note),
+    nodeType: 'note',
+    sectionColor: '#f97316',
+  };
+}
 
 export const defaultWorkflows: WorkflowDefinition[] = [
+  {
+    id: SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID,
+    name: 'Social Media Campaigns',
+    description: 'Campaign structure, parallel video/design production, internal review, art director approval, and ready-for-posting status.',
+    active: true,
+    createdAt: now,
+    updatedAt: now,
+    rootNodeX: 520,
+    rootNodeY: 30,
+    phases: [
+      campaignPhase(
+        'campaign_structure',
+        'Campaign Structure',
+        'workflow-root',
+        ['workflow-root'],
+        520,
+        180,
+        ['content_creator'],
+        'Content team builds the campaign structure: posts, reels, stories, covers, mockups, platforms, timing, and duration.',
+      ),
+      campaignPhase(
+        'final_structure_meeting',
+        'Final Structure Meeting',
+        'campaign_structure',
+        ['campaign_structure'],
+        520,
+        330,
+        ['content_creator', 'team_leader'],
+        'Content team and team leader review the structure together and agree what moves forward.',
+      ),
+      campaignPhase(
+        'write_content',
+        'Write Content',
+        'final_structure_meeting',
+        ['final_structure_meeting'],
+        520,
+        480,
+        ['content_creator'],
+        'Write captions, TOV, shooting list, scripts, and campaign content notes.',
+        'sequential',
+        'quick_look',
+        [],
+        null,
+        [
+          { id: 'write_content_captions', title: 'Content', note: 'Captions, post copy, stories, and campaign text.', responsibilityIds: ['content_creator'] },
+          { id: 'write_content_shooting_list', title: 'Shooting List', note: 'Define what should be shot for reels, stories, and product material.', responsibilityIds: ['content_creator'] },
+          { id: 'write_content_scripts', title: 'Scripts', note: 'Scripts and TOV for reels and voice over when needed.', responsibilityIds: ['content_creator'] },
+        ],
+      ),
+      campaignPhase(
+        'shooting',
+        'Shooting',
+        'write_content',
+        ['write_content'],
+        170,
+        760,
+        ['content_creator'],
+        'Video production starts with shooting the required campaign material.',
+        'parallel',
+      ),
+      campaignPhase(
+        'brief_reels_scripts_tov',
+        'Brief Reels, Scripts and Tone of Voice',
+        'shooting',
+        ['shooting'],
+        170,
+        910,
+        ['content_creator'],
+        'Content team prepares reel briefs, voice-over scripts, and tone of voice notes for production.',
+        'sequential',
+      ),
+      campaignPhase(
+        'voice_over_optional',
+        'Voice Over',
+        'brief_reels_scripts_tov',
+        ['brief_reels_scripts_tov'],
+        170,
+        1060,
+        ['voice_over'],
+        'Optional voice-over step for Shaza when campaign reels need VO.',
+        'sequential',
+      ),
+      campaignPhase(
+        'montage',
+        'Montage',
+        'voice_over_optional',
+        ['voice_over_optional'],
+        170,
+        1210,
+        ['video_editor'],
+        'Video editors create the campaign reel/video montage.',
+        'sequential',
+      ),
+      campaignPhase(
+        'final_creative',
+        'Final Creative',
+        'montage',
+        ['montage'],
+        170,
+        1360,
+        ['content_creator'],
+        'Content team collects final creative assets into the final creative sheet.',
+        'sequential',
+      ),
+      campaignPhase(
+        'design',
+        'Design',
+        'write_content',
+        ['write_content'],
+        920,
+        760,
+        ['graphic_designer'],
+        'Graphic designers create campaign posts, stories, reel covers, carousel covers, thumbnails, and related designs.',
+        'parallel',
+      ),
+      campaignPhase(
+        'mockups',
+        'Mockups',
+        'design',
+        ['design'],
+        920,
+        910,
+        ['graphic_designer'],
+        'Create mockups when needed for posts, stories, reel covers, carousels, thumbnails, and full campaign previews.',
+        'sequential',
+      ),
+      campaignPhase(
+        'content_team_review',
+        'Content Team Review',
+        'final_creative',
+        ['final_creative', 'mockups', 'content_team_review_loop'],
+        450,
+        1240,
+        ['content_creator'],
+        'Content team reviews all assets and can request modifications.',
+        'parallel',
+        'quick_look',
+      ),
+      campaignPhase(
+        'senior_video_editor_review',
+        'Senior Video Editor Review',
+        'final_creative',
+        ['final_creative', 'mockups', 'content_team_review_loop'],
+        750,
+        1240,
+        ['senior_brand_designer_video_editor'],
+        'Senior video editor fully reviews reels and gives quick comments on graphics.',
+        'parallel',
+        'full_review',
+        ['reviewer'],
+      ),
+      campaignPhase(
+        'any_internal_edits',
+        'Any Internal Edits?',
+        'content_team_review',
+        ['content_team_review', 'senior_video_editor_review'],
+        600,
+        1460,
+        ['content_creator', 'senior_brand_designer_video_editor'],
+        'Decision point: if internal comments exist, route edits to the correct creative owner; if not, notify senior video editor.',
+        'sequential',
+        'quick_look',
+        [],
+        'making_internal_edits',
+      ),
+      campaignPhase(
+        'making_internal_edits',
+        'Making Edits',
+        'any_internal_edits',
+        ['any_internal_edits'],
+        260,
+        1580,
+        ['graphic_designer', 'video_editor'],
+        'Graphic designers and video editors make requested internal edits, then the work loops back for content/senior review.',
+        'sequential',
+        'quick_look',
+        [],
+        'content_team_review',
+      ),
+      campaignPhase(
+        'content_team_review_loop',
+        'Content Team Review Loop',
+        'making_internal_edits',
+        ['making_internal_edits'],
+        260,
+        1760,
+        ['content_creator'],
+        'Loop until both content team and senior video editor approve the internal edits.',
+        'sequential',
+        'quick_look',
+        [],
+        'content_team_review',
+      ),
+      campaignPhase(
+        'notify_senior_video_editor',
+        'Notify Senior Video Editor',
+        'any_internal_edits',
+        ['any_internal_edits'],
+        940,
+        1560,
+        ['senior_brand_designer_video_editor'],
+        'Notify senior video editor with campaign name, platform, date/month, and pending approval scope: reels, posts, stories, reel covers, mockups, or all deliverables.',
+        'sequential',
+        'quick_look',
+        ['reviewer'],
+      ),
+      campaignPhase(
+        'submit_to_art_director',
+        'Senior Video Editor Submits to Art Director',
+        'notify_senior_video_editor',
+        ['notify_senior_video_editor'],
+        940,
+        1710,
+        ['senior_brand_designer_video_editor'],
+        'Senior video editor submits the campaign to the art director for final approval.',
+        'sequential',
+        'final_approval',
+        ['reviewer'],
+      ),
+      campaignPhase(
+        'art_director_review',
+        'Art Director Review',
+        'submit_to_art_director',
+        ['submit_to_art_director', 'making_art_director_edits'],
+        940,
+        1860,
+        ['art_director'],
+        'Art director performs the final campaign review before posting readiness.',
+        'sequential',
+        'final_approval',
+        ['art_director'],
+      ),
+      campaignPhase(
+        'approved',
+        'Approved?',
+        'art_director_review',
+        ['art_director_review'],
+        940,
+        2010,
+        ['art_director'],
+        'Decision point: approved campaigns move to ready for posting; rejected campaigns go back for edits.',
+        'sequential',
+        'final_approval',
+        ['art_director'],
+        'making_art_director_edits',
+      ),
+      campaignPhase(
+        'making_art_director_edits',
+        'Making Edits',
+        'approved',
+        ['approved'],
+        620,
+        2140,
+        ['graphic_designer', 'video_editor'],
+        'Apply art director comments. Design comments return to graphic designers; video comments return to video editors.',
+        'sequential',
+        'quick_look',
+        [],
+        'art_director_review',
+      ),
+      campaignPhase(
+        'ready_for_posting',
+        'Ready For Posting',
+        'approved',
+        ['approved'],
+        1260,
+        2140,
+        ['art_director', 'team_leader'],
+        'Status only: update art director and team leader that the campaign is ready for posting.',
+        'sequential',
+        'final_approval',
+        ['art_director', 'team_leader'],
+      ),
+      campaignSection(
+        'section_video_production',
+        'Video Production',
+        135,
+        710,
+        340,
+        785,
+        '#16a34a',
+        'Parallel production lane for shooting, reel briefs, voice-over, montage, and final creative.',
+      ),
+      campaignSection(
+        'section_design_production',
+        'Design Production',
+        890,
+        710,
+        400,
+        390,
+        '#d946ef',
+        'Parallel production lane for designs and optional mockups including posts, stories, reel covers, carousels, thumbnails, and mockups.',
+      ),
+      campaignSection(
+        'section_internal_review',
+        'Internal Review Stage',
+        420,
+        1200,
+        650,
+        200,
+        '#f59e0b',
+        'Content team and senior video editor review in parallel before the internal edits decision.',
+      ),
+      campaignNote(
+        'note_legend',
+        'Legend',
+        40,
+        1540,
+        230,
+        230,
+        'Content Team | Graphic Designers | Video Editors | Senior Video Editor | Art Director | Voice Over (Shaza) | Decision Point | Optional / Includes | Loop / Revision',
+      ),
+      campaignNote(
+        'note_key_notes',
+        'Key Notes',
+        40,
+        1810,
+        300,
+        245,
+        'Voice Over is only if needed. Senior Video Editor reviews in parallel with Content Team. Internal loop continues until both approve. Art Director review is the final approval before Ready For Posting.',
+      ),
+    ],
+  },
   {
     id: FULL_REVIEW_WORKFLOW_ID,
     name: 'Full Review',
@@ -97,6 +517,9 @@ export const defaultWorkflows: WorkflowDefinition[] = [
 
 export function getDefaultWorkflowIdForTaskType(taskType: string) {
   const clean = cleanTaskTypeKey(taskType);
+  if (clean === 'campaign' || clean === 'social media campaign' || clean === 'social media campaigns') {
+    return SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
+  }
   return ['video', 'ai packet', 'ai packets', 'new product', 'new products', 'new product add', 'new products add'].includes(clean)
     ? FULL_REVIEW_WORKFLOW_ID
     : QUICK_LOOK_WORKFLOW_ID;
@@ -104,14 +527,16 @@ export function getDefaultWorkflowIdForTaskType(taskType: string) {
 
 export const defaultResponsibilities: ResponsibilityOption[] = [
   { id: 'senior_brand_designer_video_editor', label: 'Senior Brand Designer & Video Editor', permissionRole: 'reviewer' },
-  { id: 'art_director', label: 'Final Approvement', permissionRole: 'art_director' },
+  { id: 'art_director', label: 'Art Director', permissionRole: 'art_director' },
   { id: 'team_leader', label: 'Team Leader', permissionRole: 'team_leader' },
   { id: 'manager', label: 'Manager', permissionRole: 'manager' },
   { id: 'developer', label: 'Developer', permissionRole: 'developer' },
   { id: 'marketing_manager', label: 'Marketing Manager', permissionRole: 'marketing_manager' },
   { id: 'graphic_designer', label: 'Graphic Designer', permissionRole: 'team_member' },
   { id: 'video_editor', label: 'Video Editor', permissionRole: 'team_member' },
+  { id: 'senior_content_creator', label: 'Senior Content Creator', permissionRole: 'team_member' },
   { id: 'content_creator', label: 'Content Creator', permissionRole: 'team_member' },
+  { id: 'voice_over', label: 'Voice Over', permissionRole: 'team_member' },
   { id: 'hr', label: 'HR', permissionRole: 'team_member', grantsSettingsAccess: true },
   { id: 'admin', label: 'Admin', permissionRole: 'admin', grantsSettingsAccess: true },
 ];
@@ -125,6 +550,7 @@ export const defaultPriorities: PriorityOption[] = [
 
 export const defaultAppSettings: AppSettings = {
   responsibilities: defaultResponsibilities,
+  manualUsers: [],
   priorities: defaultPriorities,
   businessCalendar: {
     timezone: 'Africa/Cairo',
@@ -147,7 +573,7 @@ export const defaultAppSettings: AppSettings = {
     reviewerQueue: 'Waiting for First Rev.',
     artDirectorQueue: 'Waiting for Final Rev.',
     uploadTask: 'Upload Task',
-    assignedWork: 'Assigned Work',
+    assignedWork: 'Assign a Task',
   },
   customPermissions: [],
   taskTypes: [
@@ -165,7 +591,9 @@ export const defaultAppSettings: AppSettings = {
   ],
   workflows: defaultWorkflows,
   defaultWorkflowId: QUICK_LOOK_WORKFLOW_ID,
-  taskTypeWorkflowIds: {},
+  taskTypeWorkflowIds: {
+    campaign: SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID,
+  },
   campaignPlatforms: ['Instagram', 'LinkedIn', 'TikTok', 'Snapchat'],
   hiddenColumns: [],
   customWorkingHours: [],
@@ -268,9 +696,21 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
   const priorities = Array.isArray(settings?.priorities) && settings.priorities.length > 0
     ? settings.priorities
     : defaultAppSettings.priorities;
-  const responsibilities = Array.isArray(settings?.responsibilities) && settings.responsibilities.length > 0
-    ? settings.responsibilities
-    : defaultAppSettings.responsibilities;
+  const responsibilityById = new Map<string, ResponsibilityOption>();
+  defaultAppSettings.responsibilities.forEach(responsibility => responsibilityById.set(responsibility.id, responsibility));
+  if (Array.isArray(settings?.responsibilities)) {
+    settings.responsibilities.forEach(responsibility => {
+      if (!responsibility?.id) return;
+      responsibilityById.set(responsibility.id, {
+        ...responsibility,
+        label: responsibility.id === 'art_director' || responsibility.label === 'Final Approvement' || responsibility.label === 'Art Director' ? 'Art Director' : responsibility.label,
+      });
+    });
+  }
+  const responsibilities = Array.from(responsibilityById.values());
+  const manualUsers = Array.isArray(settings?.manualUsers)
+    ? settings.manualUsers.filter((user): user is User => Boolean(user?.id && user?.name))
+    : [];
 
   let workAssignmentCreatorIds = Array.isArray(settings?.workAssignmentCreatorIds) ? settings.workAssignmentCreatorIds : defaultAppSettings.workAssignmentCreatorIds;
   let neverHandlerIds = Array.isArray(settings?.neverHandlerIds) ? settings.neverHandlerIds : defaultAppSettings.neverHandlerIds;
@@ -292,12 +732,49 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
         userIds: Array.isArray(phase.userIds) ? phase.userIds : [],
         roleIds: Array.isArray(phase.roleIds) ? phase.roleIds : [],
         responsibilityIds: Array.isArray(phase.responsibilityIds) ? phase.responsibilityIds : [],
+        instructions: phase.instructions || '',
+        deliverables: Array.isArray(phase.deliverables) ? phase.deliverables : [],
+        delayDays: typeof phase.delayDays === 'number' ? phase.delayDays : null,
+        maxRevisionRounds: typeof phase.maxRevisionRounds === 'number' ? phase.maxRevisionRounds : null,
+        skipCondition: phase.skipCondition || '',
+        skipRule: ['none', 'manual', 'if_no_task_links', 'if_no_files_in_previous_version'].includes(phase.skipRule as string)
+          ? phase.skipRule
+          : 'none',
+        isReviewDecision: Boolean(phase.isReviewDecision),
+        passToPhaseId: phase.passToPhaseId || null,
+        failToPhaseId: phase.failToPhaseId || null,
+        returnToPhaseId: phase.returnToPhaseId || null,
+        requiredApprovals: typeof phase.requiredApprovals === 'number' ? phase.requiredApprovals : null,
+        parentPhaseId: phase.parentPhaseId || null,
+        parentPhaseIds: Array.isArray(phase.parentPhaseIds) ? phase.parentPhaseIds : [],
+        nodeX: typeof phase.nodeX === 'number' ? phase.nodeX : null,
+        nodeY: typeof phase.nodeY === 'number' ? phase.nodeY : null,
+        nodeWidth: typeof phase.nodeWidth === 'number' ? phase.nodeWidth : null,
+        nodeHeight: typeof phase.nodeHeight === 'number' ? phase.nodeHeight : null,
+        nodeType: phase.nodeType === 'note' || phase.nodeType === 'section' ? phase.nodeType : 'step',
+        disabled: Boolean(phase.disabled),
+        nodeNote: phase.nodeNote || '',
+        groupId: phase.groupId || null,
+        sectionColor: phase.sectionColor || null,
+        subPhases: Array.isArray(phase.subPhases) ? phase.subPhases.map(subPhase => ({
+          id: subPhase.id || normalizeSettingId(subPhase.title || 'sub_phase'),
+          title: subPhase.title || 'Untitled phase',
+          note: subPhase.note || '',
+          responsibilityIds: Array.isArray(subPhase.responsibilityIds) ? subPhase.responsibilityIds : [],
+        })) : [],
       })) : [],
     });
   });
+  const defaultCampaignWorkflow = defaultWorkflows.find(workflow => workflow.id === SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID);
+  if (defaultCampaignWorkflow) {
+    workflowsById.set(SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID, defaultCampaignWorkflow);
+  }
   const workflows = Array.from(workflowsById.values());
   const taskTypeWorkflowIds = {
     ...(settings?.taskTypeWorkflowIds || {}),
+    campaign: SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID,
+    'social media campaign': SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID,
+    'social media campaigns': SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID,
   };
 
   // Migration & Dynamic Sync: Always ensure Marwa, Sobeeh, Dina, and Fawzy have correct permissions 
@@ -314,10 +791,24 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     finalReviewerUserIds = [MARWA_ID];
   }
 
+  const seniorReviewerUserIds = Array.isArray((settings as any)?.seniorReviewerUserIds)
+    ? (settings as any).seniorReviewerUserIds.filter((id: unknown) => typeof id === 'string' && id)
+    : [MINA_ID];
+  const dailyReportReceiverUserIds = Array.isArray((settings as any)?.dailyReportReceiverUserIds)
+    ? (settings as any).dailyReportReceiverUserIds.filter((id: unknown) => typeof id === 'string' && id)
+    : [];
+  const dailyReportAutoSendEnabled = typeof (settings as any)?.dailyReportAutoSendEnabled === 'boolean'
+    ? (settings as any).dailyReportAutoSendEnabled
+    : true;
+  const dailyReportAutoSendTime = typeof (settings as any)?.dailyReportAutoSendTime === 'string'
+    ? (settings as any).dailyReportAutoSendTime
+    : '17:29';
+
   return {
     ...defaultAppSettings,
     ...settings,
     responsibilities,
+    manualUsers,
     priorities,
     businessCalendar: {
       ...defaultAppSettings.businessCalendar,
@@ -345,7 +836,11 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     defaultWorkflowId: settings?.defaultWorkflowId || QUICK_LOOK_WORKFLOW_ID,
     taskTypeWorkflowIds,
     campaignPlatforms: Array.isArray(settings?.campaignPlatforms) ? settings.campaignPlatforms : defaultAppSettings.campaignPlatforms || [],
-    hiddenColumns: Array.isArray(settings?.hiddenColumns) ? settings.hiddenColumns : [],
+    hiddenColumns: Array.isArray(settings?.hiddenColumns) ? settings?.hiddenColumns : [],
+    seniorReviewerUserIds,
+    dailyReportAutoSendEnabled,
+    dailyReportAutoSendTime,
+    dailyReportReceiverUserIds,
     updatedAt: settings?.updatedAt || defaultAppSettings.updatedAt,
   };
 }

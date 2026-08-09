@@ -265,7 +265,7 @@ export function AuthScreen({ onContinueAsGuest }: { onContinueAsGuest?: () => vo
           )}
           <p className="flex items-start gap-2 text-xs font-semibold text-slate-400">
             <UserRound className="mt-0.5 h-4 w-4 shrink-0" />
-            New accounts start as content creators. Admins can change responsibilities and positions from Users & Roles.
+            New accounts start as content creators. Admins can change responsibilities and positions from Members Roles and Positions.
           </p>
         </div>
       </div>

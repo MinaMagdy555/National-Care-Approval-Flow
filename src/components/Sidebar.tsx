@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   LogIn,
   LogOut,
+  NotebookText,
   Send,
   BriefcaseBusiness,
   Settings,
@@ -26,7 +27,7 @@ import {
 import { cn } from '../lib/utils';
 import { userRoleLabels } from '../lib/mockData';
 import { getTaskTypeConfigs } from '../lib/appSettings';
-import { isLeaderboardUser } from '../lib/workAssignmentUtils';
+import { canCreateWorkAssignment, isLeaderboardUser } from '../lib/workAssignmentUtils';
 
 type MenuItem = {
   id: string;
@@ -64,12 +65,13 @@ export function Sidebar({
   }, [currentUser, appSettings]);
 
   const unreadCount = notifications ? notifications.filter(n => n.userId === currentUser.id && !n.read).length : 0;
-  const canManageUsers = Boolean(currentUser.isAdmin) || currentUser.role === 'admin';
+  const canManageUsers = Boolean(currentUser.isAdmin) || currentUser.role === 'admin' || isLeaderboardUser(currentUser.id);
 
   useEffect(() => {
-    if (
+  if (
       currentView === 'all_tasks' ||
       currentView === 'campaign_scheduler' ||
+      currentView === 'daily_reports' ||
       currentView === 'assigned_work' ||
       currentView === 'assigned_tasks' ||
       currentView === 'my_tasks' ||
@@ -85,6 +87,9 @@ export function Sidebar({
       currentView === 'archived_tasks'
     ) {
       setExpandedGroups(prev => (prev.includes('task_center') ? prev : [...prev, 'task_center']));
+    }
+    if (currentView === 'settings' || currentView === 'workflow_builder' || currentView === 'users') {
+      setExpandedGroups(prev => (prev.includes('settings_center') ? prev : [...prev, 'settings_center']));
     }
   }, [currentView]);
 
@@ -111,12 +116,19 @@ export function Sidebar({
     const commonTop = [
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
       ...(isLoaderOrMina ? [{ id: 'performance', label: 'Team Performance', icon: UsersRound }] : []),
+      { id: 'daily_reports', label: 'Daily Reports', icon: NotebookText },
       { id: 'campaign_scheduler', label: 'Campaign Scheduler', icon: CalendarClock },
-      ...(isLeaderboardUser(currentUser.id) ? [{ id: 'assigned_work', label: 'Assigned Work', icon: BriefcaseBusiness }] : []),
+      ...(canCreateWorkAssignment(currentUser, appSettings) ? [{ id: 'assigned_work', label: 'Assign a Task', icon: BriefcaseBusiness }] : []),
       { id: 'notifications', label: `Notifications${unreadCount > 0 ? ` (${unreadCount})` : ''}`, icon: Bell },
     ];
-    const adminItems = canManageUsers && showUserManagement ? [{ id: 'users', label: 'Users & Roles', icon: UsersRound }] : [];
-    const settingsItems = showSettings ? [{ id: 'settings', label: 'Tool Settings', icon: Settings }] : [];
+    const settingsChildren: MenuItem[] = [
+      ...(canManageUsers && showUserManagement ? [{ id: 'users', label: 'Members Roles and Positions', icon: UsersRound }] : []),
+      ...(showSettings ? [
+        { id: 'settings', label: 'Tool Settings', icon: Settings },
+        { id: 'workflow_builder', label: 'Workflow Builder', icon: FilePenLine },
+      ] : []),
+    ];
+    const settingsItems = settingsChildren.length > 0 ? [{ id: 'settings_center', label: 'Settings', icon: Settings, children: settingsChildren }] : [];
 
     const taskCenterChildren: MenuItem[] = [];
 
@@ -151,7 +163,7 @@ export function Sidebar({
       taskCenterChildren.push({ id: 'ad_queue', label: 'Waiting for Final Rev.', icon: FilePenLine });
     }
 
-    taskCenterChildren.push({ id: 'assigned_tasks', label: 'Assigned Tasks', icon: BriefcaseBusiness });
+    taskCenterChildren.push({ id: 'assigned_tasks', label: 'Task List', icon: BriefcaseBusiness });
 
     if (!isFirstRev && !isFinalRev && !isContentCreator) {
       taskCenterChildren.push({ id: 'waiting_for_mina', label: 'Waiting for First Rev.', icon: Clock });
@@ -166,7 +178,6 @@ export function Sidebar({
 
     return [
       ...commonTop,
-      ...adminItems,
       ...settingsItems,
       ...(showUploadTask ? [{ id: 'create_task', label: 'Upload Task', icon: Upload }] : []),
       {
@@ -182,6 +193,7 @@ export function Sidebar({
   const taskViews = new Set([
     'all_tasks',
     'campaign_scheduler',
+    'daily_reports',
     'assigned_work',
     'assigned_tasks',
     'my_tasks',
@@ -197,7 +209,9 @@ export function Sidebar({
     'rejected_reopened',
     'archived_tasks',
     'users'
-    ,'settings'
+    ,'settings',
+    'workflow_builder',
+    'settings_center'
   ]);
 
   const renderMenuItem = (item: MenuItem, depth = 0) => {

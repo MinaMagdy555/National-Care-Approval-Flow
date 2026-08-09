@@ -3,6 +3,7 @@ export type Environment = 'production' | 'demo' | 'archived';
 export type ReviewMode = 'full_review' | 'quick_look' | 'direct_to_ad';
 export type WorkflowReviewStyle = 'full_review' | 'quick_look' | 'final_approval';
 export type WorkflowPhaseMode = 'sequential' | 'parallel';
+export type WorkflowNodeType = 'step' | 'note' | 'section';
 export type Priority = string;
 export type AssignmentPeriod = 'day' | 'week' | 'month';
 export type PriorityTone = 'emerald' | 'slate' | 'amber' | 'rose' | 'blue' | 'indigo' | 'purple';
@@ -41,6 +42,8 @@ export interface User {
   approvalStatus?: AccountApprovalStatus;
   isAdmin?: boolean;
   legacyId?: string | null;
+  passwordHash?: string;
+  passwordUpdatedAt?: string;
 }
 
 export type AccountApprovalStatus = 'pending' | 'approved' | 'rejected';
@@ -94,6 +97,13 @@ export interface TaskTypeConfig {
   workflowId?: string | null;
 }
 
+export interface WorkflowNodeSubPhase {
+  id: string;
+  title: string;
+  note: string;
+  responsibilityIds: string[];
+}
+
 export interface WorkflowPhaseDefinition {
   id: string;
   name: string;
@@ -102,6 +112,29 @@ export interface WorkflowPhaseDefinition {
   userIds: string[];
   roleIds: Role[];
   responsibilityIds: string[];
+  instructions?: string;
+  deliverables?: string[];
+  delayDays?: number | null;
+  maxRevisionRounds?: number | null;
+  skipCondition?: string;
+  skipRule?: 'none' | 'manual' | 'if_no_task_links' | 'if_no_files_in_previous_version';
+  isReviewDecision?: boolean;
+  passToPhaseId?: string | null;
+  failToPhaseId?: string | null;
+  returnToPhaseId?: string | null;
+  requiredApprovals?: number | null;
+  parentPhaseId?: string | null;
+  parentPhaseIds?: string[];
+  nodeX?: number | null;
+  nodeY?: number | null;
+  nodeWidth?: number | null;
+  nodeHeight?: number | null;
+  nodeType?: WorkflowNodeType;
+  disabled?: boolean | null;
+  nodeNote?: string;
+  groupId?: string | null;
+  sectionColor?: string | null;
+  subPhases?: WorkflowNodeSubPhase[];
 }
 
 export interface WorkflowDefinition {
@@ -112,6 +145,8 @@ export interface WorkflowDefinition {
   phases: WorkflowPhaseDefinition[];
   createdAt?: string;
   updatedAt?: string;
+  rootNodeX?: number | null;
+  rootNodeY?: number | null;
 }
 
 export interface WorkflowPhaseHistoryEntry {
@@ -126,6 +161,7 @@ export interface WorkflowPhaseHistoryEntry {
 
 export interface AppSettings {
   responsibilities: ResponsibilityOption[];
+  manualUsers?: User[];
   priorities: PriorityOption[];
   businessCalendar: BusinessCalendarSettings;
   settingsManagerUserIds: string[];
@@ -148,6 +184,10 @@ export interface AppSettings {
   firstReviewerUserIds?: string[];
   finalReviewerUserIds?: string[];
   viewAllWorkloadUserIds?: string[];
+  seniorReviewerUserIds?: string[];
+  dailyReportAutoSendEnabled?: boolean;
+  dailyReportAutoSendTime?: string | null;
+  dailyReportReceiverUserIds?: string[];
   updatedAt: string;
 }
 
@@ -222,6 +262,8 @@ export interface TaskCommentEditVersion {
 export interface TaskComment {
   id: string;
   authorId: string;
+  versionId?: string;
+  versionNumber?: number;
   action:
     | 'review_note'
     | 'request_edits'
@@ -230,6 +272,7 @@ export interface TaskComment {
     | 'content_approved'
     | 'content_rejected'
     | 'content_approval_undone'
+    | 'manual_approval'
     | 'clarification_needed'
     | 'assignment_change'
     | 'review_route_change'
@@ -238,7 +281,11 @@ export interface TaskComment {
     | 'work_assignment_created'
     | 'work_assignment_updated'
     | 'work_assignment_uploaded'
-    | 'version_added';
+    | 'version_added'
+    | 'active_work_started'
+    | 'active_work_finished'
+    | 'daily_report_sent'
+    | 'daily_report_updated';
   message?: string;
   sections: TaskCommentSection[];
   createdAt: string;
@@ -276,6 +323,8 @@ export interface Task {
   deadlineText: string | null;
   assignmentPeriod?: AssignmentPeriod | null;
   assignmentLinks?: string[];
+  assignmentDate?: string | null;
+  workflowNodeAssigneeIds?: Record<string, string[]>;
   deadlineAt?: string | null;
   assignmentUploadedAt?: string | null;
   scheduledPublishAt?: string | null;
@@ -297,7 +346,56 @@ export interface Task {
   isOvertime?: boolean | null;
   needsContentRevision?: boolean | null;
   contentRevisionAssigneeIds?: string[];
+  activeWorkBy?: string | null;
+  activeWorkStartedAt?: string | null;
+  activeWorkFinishedAt?: string | null;
+  activeWorkNote?: string | null;
+  isTemporarySelfTask?: boolean | null;
+  selfAssignedBy?: string | null;
+  submittedOnBehalfOfIds?: string[];
   previousStatusBeforeHold?: TaskStatus | null;
+  activeWorkSetById?: string | null;
+  activeWorkSetAt?: string | null;
+  activeWorkFinishedById?: string | null;
+  workflowPhaseAvailableAt?: string | null;
+  workflowPhaseRevisionCounts?: Record<string, number>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DailyReportEntry {
+  taskId: string;
+  startTime?: string | null;
+  endTime?: string | null;
+  durationMinutes?: number | null;
+  note?: string;
+}
+
+export interface DailyReportEditVersion {
+  id: string;
+  editedBy: string;
+  editedAt: string;
+  previousNote?: string | null;
+  nextNote?: string | null;
+  changedEntries: Array<{
+    taskId: string;
+    field: 'startTime' | 'endTime' | 'note';
+    oldValue: string | null;
+    newValue: string | null;
+  }>;
+  autoSent?: boolean;
+}
+
+export interface DailyReport {
+  id: string;
+  date: string;
+  userId: string;
+  note: string;
+  entries: DailyReportEntry[];
+  sentAt?: string | null;
+  sentBy?: string | null;
+  autoSent?: boolean;
+  editHistory: DailyReportEditVersion[];
   createdAt: string;
   updatedAt: string;
 }

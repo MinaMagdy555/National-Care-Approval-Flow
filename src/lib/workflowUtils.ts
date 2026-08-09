@@ -1,4 +1,4 @@
-import { AppSettings, ReviewMode, Role, Task, TaskStatus, User, WorkflowDefinition, WorkflowPhaseDefinition } from './types';
+import { AppSettings, BusinessCalendarSettings, ReviewMode, Role, Task, TaskStatus, User, WorkflowDefinition, WorkflowPhaseDefinition } from './types';
 import { isTaskArchived } from './archiveUtils';
 import { AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID, MARWA_ID, MINA_ID, cleanTaskTypeKey, getDefaultWorkflowIdForTaskType, getResponsibilityForLabel, getTaskTypeConfigs } from './appSettings';
 
@@ -108,11 +108,16 @@ export function getWorkflowForTaskType(settings: AppSettings, taskType: string) 
 export function cloneWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {
   return {
     ...workflow,
-    phases: workflow.phases.map(phase => ({
+    phases: workflow.phases.filter(phase => (phase.nodeType || 'step') === 'step' && !phase.disabled).map(phase => ({
       ...phase,
+      groupId: null,
       userIds: [...(phase.userIds || [])],
       roleIds: [...(phase.roleIds || [])],
       responsibilityIds: [...(phase.responsibilityIds || [])],
+      subPhases: (phase.subPhases || []).map(subPhase => ({
+        ...subPhase,
+        responsibilityIds: [...(subPhase.responsibilityIds || [])],
+      })),
     })),
   };
 }
@@ -210,4 +215,81 @@ export function parsePublishDate(value?: string | null) {
 
 export function isScheduledCampaign(task: Task) {
   return task.taskType === 'campaign' && Boolean(task.scheduledPublishAt);
+}
+
+export function getCurrentReviewPhaseName(task: Pick<Task, 'workflowSnapshot' | 'workflowCurrentPhaseId' | 'workflowCurrentPhaseIndex' | 'status' | 'reviewMode'>): string | null {
+  const phase = getWorkflowPhase(task);
+  if (phase) return phase.name;
+  if (task.status === 'reviewer_approved' || task.status === 'sent_to_art_director' || task.status === 'waiting_art_director_approval' || task.status === 'changes_requested_by_art_director' || task.status === 'approved_by_art_director') {
+    return 'Final approval';
+  }
+  if (task.status === 'waiting_reviewer_full_review') return 'First review';
+  if (task.status === 'waiting_reviewer_quick_look') return 'Quick look';
+  if (task.status === 'waiting_content_revision') return 'Content revision';
+  return null;
+}
+
+export function evaluateSkipRule(rule: WorkflowPhaseDefinition['skipRule'] | undefined, task: Task): boolean {
+  if (!rule || rule === 'none') return false;
+  if (rule === 'manual') return false;
+  if (rule === 'if_no_task_links') {
+    return !Array.isArray(task.assignmentLinks) || task.assignmentLinks.length === 0;
+  }
+  if (rule === 'if_no_files_in_previous_version') {
+    const previousVersion = task.versions[1];
+    if (!previousVersion) return true;
+    return !previousVersion.files || previousVersion.files.length === 0;
+  }
+  return false;
+}
+
+function startOfDay(date: Date) {
+  const normalized = new Date(date);
+  normalized.setHours(0, 0, 0, 0);
+  return normalized;
+}
+
+function addBusinessDays(start: Date, days: number, workdays: number[]): Date {
+  const cursor = new Date(start);
+  let added = 0;
+  while (added < days) {
+    cursor.setDate(cursor.getDate() + 1);
+    if (workdays.includes(cursor.getDay())) {
+      added += 1;
+    }
+  }
+  return cursor;
+}
+
+export function computePhaseAvailableAt(startIso: string, delayDays: number | null | undefined, calendar?: BusinessCalendarSettings | null): string | null {
+  if (!delayDays || delayDays <= 0) return null;
+  const start = new Date(startIso);
+  if (Number.isNaN(start.getTime())) return null;
+  const useBusinessDays = Boolean(calendar?.workdays && calendar.workdays.length > 0);
+  const next = useBusinessDays
+    ? addBusinessDays(start, delayDays, calendar!.workdays)
+    : (() => { const d = new Date(start); d.setDate(d.getDate() + delayDays); return d; })();
+  return next.toISOString();
+}
+
+export function isPhaseAvailable(task: Pick<Task, 'workflowPhaseAvailableAt'>, now = new Date()): boolean {
+  if (!task.workflowPhaseAvailableAt) return true;
+  return new Date(task.workflowPhaseAvailableAt).getTime() <= now.getTime();
+}
+
+export function getNextPhaseIndex(workflow: WorkflowDefinition, fromIndex: number, task: Task): number {
+  let index = fromIndex + 1;
+  while (index < workflow.phases.length) {
+    const candidate = workflow.phases[index];
+    if (candidate && candidate.nodeType !== 'step') {
+      index += 1;
+      continue;
+    }
+    if (candidate && evaluateSkipRule(candidate.skipRule, task)) {
+      index += 1;
+      continue;
+    }
+    return index;
+  }
+  return workflow.phases.length;
 }

@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig, loadEnv} from 'vite';
 import https from 'https';
+import { neon } from '@neondatabase/serverless';
 
 function fetchUrlTitle(targetUrl: string): Promise<string | null> {
   return new Promise((resolve) => {
@@ -89,6 +90,82 @@ export default defineConfig(({mode}) => {
       {
         name: 'metadata-scraper',
         configureServer(server) {
+          server.middlewares.use('/api/app-state', async (req, res) => {
+            const databaseUrl = env.DATABASE_URL;
+            if (!databaseUrl) {
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: 'DATABASE_URL is not configured.' }));
+              return;
+            }
+
+            try {
+              const sql = neon(databaseUrl);
+              await sql`
+                CREATE TABLE IF NOT EXISTS app_state (
+                  id text PRIMARY KEY,
+                  state jsonb NOT NULL,
+                  updated_at timestamptz NOT NULL DEFAULT now()
+                )
+              `;
+
+              if (req.method === 'GET') {
+                const rows = await sql`
+                  SELECT state, updated_at
+                  FROM app_state
+                  WHERE id = 'current'
+                  LIMIT 1
+                `;
+                res.statusCode = 200;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ state: rows[0]?.state || null, updatedAt: rows[0]?.updated_at || null }));
+                return;
+              }
+
+              if (req.method === 'PUT') {
+                let rawBody = '';
+                req.on('data', chunk => {
+                  rawBody += chunk;
+                });
+                req.on('end', async () => {
+                  try {
+                    const body = rawBody ? JSON.parse(rawBody) : null;
+                    if (!body || typeof body !== 'object' || !('state' in body)) {
+                      res.statusCode = 400;
+                      res.setHeader('Content-Type', 'application/json');
+                      res.end(JSON.stringify({ error: 'state is required' }));
+                      return;
+                    }
+
+                    await sql`
+                      INSERT INTO app_state (id, state, updated_at)
+                      VALUES ('current', ${JSON.stringify(body.state)}::jsonb, now())
+                      ON CONFLICT (id)
+                      DO UPDATE SET state = EXCLUDED.state, updated_at = now()
+                    `;
+                    res.statusCode = 200;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ ok: true }));
+                  } catch (error) {
+                    res.statusCode = 500;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown Neon error' }));
+                  }
+                });
+                return;
+              }
+
+              res.statusCode = 405;
+              res.setHeader('Allow', 'GET, PUT');
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: 'Method not allowed' }));
+            } catch (error) {
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown Neon error' }));
+            }
+          });
+
           server.middlewares.use('/api/metadata', async (req, res) => {
             const urlObj = new URL(req.url || '', 'http://localhost');
             const targetUrl = urlObj.searchParams.get('url');

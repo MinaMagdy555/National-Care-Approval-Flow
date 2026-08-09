@@ -64,7 +64,7 @@ export function CreateTask({
   const reviewModeOptions = [
     { value: 'full_review', label: 'Full Review' },
     { value: 'quick_look', label: 'Quick Look' },
-    { value: 'direct_to_ad', label: 'Direct to Final Approvement' },
+    { value: 'direct_to_ad', label: 'Direct to Art Director' },
   ];
   const workflowOptions = (appSettings.workflows || [])
     .filter(workflow => workflow.active !== false)
@@ -404,7 +404,7 @@ export function CreateTask({
                     disabled={currentUser.role === 'team_member' || isDirectToFinalUpload || isAssignmentUploadMode}
                   />
                   {isDirectToFinalUpload && (
-                    <p className="mt-2 text-xs font-bold text-slate-500">Senior and reviewer uploads go directly to the Final Approvement.</p>
+                    <p className="mt-2 text-xs font-bold text-slate-500">Senior and reviewer uploads go directly to the Art Director.</p>
                   )}
                 </div>
                 {canChooseWorkflow && !isDirectToFinalUpload && workflowOptions.length > 0 && (

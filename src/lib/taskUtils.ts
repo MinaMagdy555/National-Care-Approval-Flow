@@ -37,7 +37,7 @@ export function getReviewModeLabel(mode: ReviewMode): string {
   switch (mode) {
     case 'full_review': return 'Full Review';
     case 'quick_look': return 'Quick Look';
-    case 'direct_to_ad': return 'Direct to Final Approvement';
+    case 'direct_to_ad': return 'Direct to Art Director';
     default: return 'Review';
   }
 }
@@ -113,7 +113,7 @@ export function getStatusInfo(task: Task, viewerRole: Role, users?: Record<strin
       case 'reviewer_approved': return { label: 'Waiting for Final Review', color: 'blue' };
       case 'sent_to_art_director': return { label: 'Waiting for Final Review', color: 'blue' };
       case 'waiting_art_director_approval': return { label: 'Waiting for Final Review', color: 'blue' };
-      case 'changes_requested_by_art_director': return { label: 'Changes requested in Final Approvement', color: 'red' };
+      case 'changes_requested_by_art_director': return { label: 'Changes requested in Art Director', color: 'red' };
       case 'waiting_content_revision': return { label: 'Waiting for content rev.', color: 'amber' };
       case 'changes_requested_by_content': return { label: 'Content changes requested', color: 'red' };
       case 'approved_by_art_director': return { label: 'Approved', color: 'green' };
@@ -133,10 +133,10 @@ export function getStatusInfo(task: Task, viewerRole: Role, users?: Record<strin
       case 'reviewer_approved': return { label: 'Waiting for Final Review', color: 'blue' };
       case 'sent_to_art_director': return { label: 'Waiting for Final Review', color: 'blue' };
       case 'waiting_art_director_approval': return { label: 'Waiting for Final Review', color: 'blue' };
-      case 'changes_requested_by_art_director': return { label: 'Final Approvement requested changes', color: 'red' };
+      case 'changes_requested_by_art_director': return { label: 'Art Director requested changes', color: 'red' };
       case 'waiting_content_revision': return { label: 'Waiting for content rev.', color: 'gray' };
       case 'changes_requested_by_content': return { label: 'Returned for content changes', color: 'red' };
-      case 'approved_by_art_director': return { label: 'Approved by Final Approvement', color: 'green' };
+      case 'approved_by_art_director': return { label: 'Approved by Art Director', color: 'green' };
       case 'completed': return { label: 'Completed', color: 'green' };
       case 'archived': return { label: 'Archived', color: 'gray' };
       default: return { label: status, color: 'gray' };
@@ -149,8 +149,8 @@ export function getStatusInfo(task: Task, viewerRole: Role, users?: Record<strin
       case 'assigned_work': return { label: 'Active', color: 'purple' };
       case 'sent_to_art_director': return { label: 'Waiting for Final Review', color: 'amber' };
       case 'waiting_art_director_approval': return { label: 'Waiting for Final Review', color: 'amber' };
-      case 'approved_by_art_director': return { label: 'Approved by Final Approvement', color: 'green' };
-      case 'changes_requested_by_art_director': return { label: 'Changes requested by Final Approvement', color: 'red' };
+      case 'approved_by_art_director': return { label: 'Approved by Art Director', color: 'green' };
+      case 'changes_requested_by_art_director': return { label: 'Changes requested by Art Director', color: 'red' };
       case 'waiting_reviewer_full_review': return { label: 'Waiting for First Review', color: 'gray' };
       case 'submitted': return { label: 'Waiting for First Review', color: 'gray' };
       case 'waiting_reviewer_quick_look': return { label: 'Waiting for First Review', color: 'gray' };
@@ -169,13 +169,13 @@ export function getStatusInfo(task: Task, viewerRole: Role, users?: Record<strin
     case 'waiting_reviewer_full_review':
     case 'waiting_reviewer_quick_look': return { label: 'Waiting for First Review', color: 'blue' };
     case 'changes_requested_by_reviewer': return { label: 'First Review Changes Requested', color: 'red' };
-    case 'changes_requested_by_art_director': return { label: 'Final Approvement Changes Requested', color: 'red' };
+    case 'changes_requested_by_art_director': return { label: 'Art Director Changes Requested', color: 'red' };
     case 'changes_requested_by_content': return { label: 'Content Changes Requested', color: 'red' };
     case 'waiting_content_revision': return { label: 'Waiting for content rev.', color: 'amber' };
     case 'sent_to_art_director':
     case 'waiting_art_director_approval':
     case 'reviewer_approved': return { label: 'Waiting for Final Review', color: 'blue' };
-    case 'approved_by_art_director': return { label: 'Approved by Final Approvement', color: 'green' };
+    case 'approved_by_art_director': return { label: 'Approved by Art Director', color: 'green' };
     case 'completed': return { label: 'Completed', color: 'green' };
     default: return { label: status, color: 'gray' };
   }

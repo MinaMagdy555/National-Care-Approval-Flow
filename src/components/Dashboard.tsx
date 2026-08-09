@@ -5,7 +5,7 @@ import { AlertCircle, Clock, CheckCircle2, History, LucideIcon, XCircle, Search,
 import { initialUsers } from '../lib/mockData';
 import { isDueThisWeek, isDueToday } from '../lib/deadlineUtils';
 import { isTaskArchived } from '../lib/archiveUtils';
-import { canUserAccessTask, canUserActAsCurrentOwner, userCanViewFullWorkspace } from '../lib/workflowUtils';
+import { canUserAccessTask, canUserActAsCurrentOwner, getCurrentOwnerUserIds, getWorkflowPhase, resolveWorkflowPhaseReviewerIds, userCanViewFullWorkspace } from '../lib/workflowUtils';
 import { cn } from '../lib/utils';
 import { getResponsibilityForLabel, MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID, getTaskTypeConfigs } from '../lib/appSettings';
 import { Task } from '../lib/types';
@@ -162,6 +162,26 @@ export function Dashboard({
     });
   }, [userList, appSettings]);
 
+  const getRevisionStatusLabel = (task: Task) => {
+    if (task.status === 'waiting_content_revision') return 'Content Revision';
+    if (task.status === 'submitted' || task.status === 'waiting_reviewer_full_review') return 'First Review';
+    if (task.status === 'waiting_reviewer_quick_look') return 'First Review (Quick Look)';
+    if (task.status === 'reviewer_approved' || task.status === 'sent_to_art_director' || task.status === 'waiting_art_director_approval') return 'Final Approval';
+    if (task.status === 'changes_requested_by_reviewer') return 'First Review Changes';
+    if (task.status === 'changes_requested_by_art_director') return 'Final Approval Changes';
+    if (task.status === 'changes_requested_by_content') return 'Content Changes';
+    return task.status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  };
+
+  const getRevisionStatusCounts = (items: Task[]) => {
+    const counts = new Map<string, number>();
+    items.forEach(task => {
+      const label = getRevisionStatusLabel(task);
+      counts.set(label, (counts.get(label) || 0) + 1);
+    });
+    return Array.from(counts.entries()).map(([label, count]) => ({ label, count }));
+  };
+
   const creatorsWithStats = React.useMemo(() => {
     return graphicAndVideoUsers.map(creator => {
       const creatorTasks = tasks.filter(t => {
@@ -186,7 +206,15 @@ export function Dashboard({
         t.status === 'draft' ||
         (t.status === 'waiting_content_revision' && (t.contentRevisionAssigneeIds || []).includes(creator.id))
       ).length;
-      const reviewCount = activeCount - workingCount;
+      const reviewTasks = creatorTasks.filter(t => {
+        const isFinished = t.status === 'approved' || t.status === 'completed' || t.status === 'approved_by_art_director' || isTaskArchived(t);
+        const isWorking = t.status === 'assigned_work' ||
+          t.status === 'draft' ||
+          (t.status === 'waiting_content_revision' && (t.contentRevisionAssigneeIds || []).includes(creator.id));
+        return !isFinished && t.status !== 'on_hold' && !isWorking;
+      });
+      const reviewCount = reviewTasks.length;
+      const reviewStatusCounts = getRevisionStatusCounts(reviewTasks);
 
       const creatorIsFirstRev = (appSettings.firstReviewerUserIds || []).includes(creator.id) ||
         configs.some(c => c.fullReviewerUserIds?.includes(creator.id) || c.quickLookUserIds?.includes(creator.id));
@@ -225,6 +253,7 @@ export function Dashboard({
         onHoldCount,
         workingCount,
         reviewCount,
+        reviewStatusCounts,
         toReviewCount,
         creatorIsFirstRev,
         creatorIsFinalRev,
@@ -374,6 +403,29 @@ export function Dashboard({
       return true;
     });
   }, [tasks, popupCreatorId, popupState, environment, userList, appSettings, configs]);
+
+  const getReviewOwnerNames = (task: Task) => {
+    const explicitOwnerIds = getCurrentOwnerUserIds(task);
+    const workflowPhase = getWorkflowPhase(task);
+    const workflowOwnerIds = workflowPhase ? resolveWorkflowPhaseReviewerIds(workflowPhase, appSettings, userList, task) : [];
+    const fallbackIds = (() => {
+      if (task.status === 'waiting_content_revision') return task.contentRevisionAssigneeIds || [];
+      if (['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(task.status)) return appSettings.firstReviewerUserIds || [];
+      if (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(task.status)) return appSettings.finalReviewerUserIds || [];
+      return [];
+    })();
+
+    const ids = Array.from(new Set([
+      ...(explicitOwnerIds.length > 0 ? explicitOwnerIds : []),
+      ...(explicitOwnerIds.length === 0 && workflowOwnerIds.length > 0 ? workflowOwnerIds : []),
+      ...(explicitOwnerIds.length === 0 && workflowOwnerIds.length === 0 ? fallbackIds : []),
+    ])).filter(id => id && id !== 'guest');
+
+    return ids
+      .map(id => userList.find(user => user.id === id)?.name)
+      .filter((name): name is string => Boolean(name))
+      .join(', ') || 'Not assigned';
+  };
 
   const needsFullReviewCount = workflowTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status) && isScopedToCurrentOwner(t)).length;
   const needsQuickLookCount = workflowTasks.filter(t => t.status === 'waiting_reviewer_quick_look' && isScopedToCurrentOwner(t)).length;
@@ -680,7 +732,7 @@ export function Dashboard({
           </div>
 
           <div className="flex flex-col gap-4 w-full">
-            {filteredCreators.map(({ creator, finishedCount, activeCount, onHoldCount, totalCount, workingCount, reviewCount, toReviewCount, creatorIsFirstRev, creatorIsFinalRev, creatorIsContentCreator }) => {
+            {filteredCreators.map(({ creator, finishedCount, activeCount, onHoldCount, totalCount, workingCount, reviewCount, reviewStatusCounts, toReviewCount, creatorIsFirstRev, creatorIsFinalRev, creatorIsContentCreator }) => {
               const handleCreatorSelect = () => {
                 setPopupCreatorId(creator.id);
                 setPopupState('total');
@@ -764,6 +816,15 @@ export function Dashboard({
                     >
                       <span className="block text-[9px] font-black text-indigo-600/80 uppercase tracking-wide">Waiting Review</span>
                       <span className="mt-0.5 block text-sm font-black text-indigo-600 sm:text-base">{reviewCount}</span>
+                      {reviewStatusCounts.length > 0 && (
+                        <span className="mt-1 flex flex-wrap justify-center gap-1">
+                          {reviewStatusCounts.slice(0, 3).map(item => (
+                            <span key={item.label} className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[8px] font-black uppercase text-indigo-600">
+                              {item.label}: {item.count}
+                            </span>
+                          ))}
+                        </span>
+                      )}
                     </button>
                     {isReviewer && (
                       <button
@@ -896,7 +957,7 @@ export function Dashboard({
           }}
         >
           <div 
-            className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200"
+            className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-3xl w-full max-h-[80vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
@@ -968,8 +1029,8 @@ export function Dashboard({
                     const getReadableStatus = (status: string) => {
                       if (status === 'submitted' || status === 'waiting_reviewer_full_review') return 'Waiting for First Review';
                       if (status === 'waiting_reviewer_quick_look') return 'Waiting for First Review (Quick Look)';
-                      if (status === 'reviewer_approved' || status === 'sent_to_art_director' || status === 'waiting_art_director_approval') return 'Waiting for Final Approvement';
-                      if (status === 'changes_requested_by_art_director') return 'Final Approvement Requested Changes';
+                      if (status === 'reviewer_approved' || status === 'sent_to_art_director' || status === 'waiting_art_director_approval') return 'Waiting for Art Director';
+                      if (status === 'changes_requested_by_art_director') return 'Art Director Requested Changes';
                       return status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
                     };
 
@@ -982,32 +1043,40 @@ export function Dashboard({
                           setPopupCreatorId(null);
                           setPopupState(null);
                         }}
-                        className="w-full text-left p-4 rounded-xl border border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/5 transition-all flex items-center justify-between gap-4 group"
+                        className="w-full text-left p-4 rounded-xl border border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/5 transition-all group"
                       >
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-[10px] font-black text-indigo-600 font-mono tracking-wider bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 uppercase">
-                              {task.code || 'TSK'}
-                            </span>
-                            <h4 className="font-bold text-slate-900 group-hover:text-indigo-900 transition-colors truncate">
-                              {task.name}
-                            </h4>
+                        <div className="space-y-3">
+                          <div className="flex min-w-0 items-start justify-between gap-4">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="shrink-0 text-[10px] font-black text-indigo-600 font-mono tracking-wider bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 uppercase">
+                                  {task.code || 'TSK'}
+                                </span>
+                                <h4 className="min-w-0 font-bold text-slate-900 group-hover:text-indigo-900 transition-colors truncate">
+                                  {task.name}
+                                </h4>
+                              </div>
+                              <p className="text-xs text-slate-500 mt-1 line-clamp-1">
+                                {task.description || 'No description provided.'}
+                              </p>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <span className={`inline-flex w-max max-w-[240px] items-center rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wider leading-tight ${getStatusBadge(task.status)}`}>
+                                {getReadableStatus(task.status)}
+                              </span>
+                              {task.deadlineAt && (
+                                <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+                                  <Clock className="h-3 w-3" />
+                                  {new Date(task.deadlineAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                                </span>
+                              )}
+                            </div>
                           </div>
-                          <p className="text-xs text-slate-500 mt-1 line-clamp-1">
-                            {task.description || 'No description provided.'}
-                          </p>
-                        </div>
-                        
-                        <div className="flex items-center gap-2.5 shrink-0">
-                          <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider ${getStatusBadge(task.status)}`}>
-                            {getReadableStatus(task.status)}
-                          </span>
-                          {task.deadlineAt && (
-                            <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
-                              <Clock className="h-3 w-3" />
-                              {new Date(task.deadlineAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                            </span>
-                          )}
+
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <div className="text-[9px] font-black uppercase tracking-wider text-slate-400">Reviewer</div>
+                            <div className="mt-0.5 text-xs font-bold text-slate-700">{getReviewOwnerNames(task)}</div>
+                          </div>
                         </div>
                       </button>
                     );
@@ -1045,7 +1114,25 @@ export function Dashboard({
                   );
                 })()
               ) : (
-                popupTasks.map(task => {
+                (() => {
+                  const taskGroups = popupState === 'waiting_review'
+                    ? getRevisionStatusCounts(popupTasks).map(group => ({
+                        ...group,
+                        tasks: popupTasks.filter(task => getRevisionStatusLabel(task) === group.label),
+                      }))
+                    : [{ label: '', count: popupTasks.length, tasks: popupTasks }];
+
+                  return (
+                    <div className="space-y-5">
+                      {taskGroups.map(group => (
+                        <div key={group.label || 'all'} className="space-y-2">
+                          {popupState === 'waiting_review' && (
+                            <div className="flex items-center justify-between px-1">
+                              <div className="text-[11px] font-black tracking-wider text-slate-400 uppercase">{group.label}</div>
+                              <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-black text-indigo-600">{group.count}</span>
+                            </div>
+                          )}
+                          {group.tasks.map(task => {
                   const getStatusBadge = (status: string) => {
                     switch (status) {
                       case 'approved':
@@ -1065,8 +1152,8 @@ export function Dashboard({
                   const getReadableStatus = (status: string) => {
                     if (status === 'submitted' || status === 'waiting_reviewer_full_review') return 'Waiting for First Review';
                     if (status === 'waiting_reviewer_quick_look') return 'Waiting for First Review (Quick Look)';
-                    if (status === 'reviewer_approved' || status === 'sent_to_art_director' || status === 'waiting_art_director_approval') return 'Waiting for Final Approvement';
-                    if (status === 'changes_requested_by_art_director') return 'Final Approvement Requested Changes';
+                    if (status === 'reviewer_approved' || status === 'sent_to_art_director' || status === 'waiting_art_director_approval') return 'Waiting for Art Director';
+                    if (status === 'changes_requested_by_art_director') return 'Art Director Requested Changes';
                     return status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
                   };
 
@@ -1079,36 +1166,49 @@ export function Dashboard({
                         setPopupCreatorId(null);
                         setPopupState(null);
                       }}
-                      className="w-full text-left p-4 rounded-xl border border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/5 transition-all flex items-center justify-between gap-4 group"
+                      className="w-full text-left p-4 rounded-xl border border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/5 transition-all group"
                     >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-[10px] font-black text-indigo-600 font-mono tracking-wider bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 uppercase">
-                            {task.code || 'TSK'}
-                          </span>
-                          <h4 className="font-bold text-slate-900 group-hover:text-indigo-900 transition-colors truncate">
-                            {task.name}
-                          </h4>
+                      <div className="space-y-3">
+                        <div className="flex min-w-0 items-start justify-between gap-4">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="shrink-0 text-[10px] font-black text-indigo-600 font-mono tracking-wider bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 uppercase">
+                                {task.code || 'TSK'}
+                              </span>
+                              <h4 className="min-w-0 font-bold text-slate-900 group-hover:text-indigo-900 transition-colors truncate">
+                                {task.name}
+                              </h4>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1 line-clamp-1">
+                              {task.description || 'No description provided.'}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <span className={`inline-flex w-max max-w-[240px] items-center rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wider leading-tight ${getStatusBadge(task.status)}`}>
+                              {getReadableStatus(task.status)}
+                            </span>
+                            {task.deadlineAt && (
+                              <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+                                <Clock className="h-3 w-3" />
+                                {new Date(task.deadlineAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <p className="text-xs text-slate-500 mt-1 line-clamp-1">
-                          {task.description || 'No description provided.'}
-                        </p>
-                      </div>
-                      
-                      <div className="flex items-center gap-2.5 shrink-0">
-                        <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider ${getStatusBadge(task.status)}`}>
-                          {getReadableStatus(task.status)}
-                        </span>
-                        {task.deadlineAt && (
-                          <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
-                            <Clock className="h-3 w-3" />
-                            {new Date(task.deadlineAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                          </span>
-                        )}
+
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                          <div className="text-[9px] font-black uppercase tracking-wider text-slate-400">Reviewer</div>
+                          <div className="mt-0.5 text-xs font-bold text-slate-700">{getReviewOwnerNames(task)}</div>
+                        </div>
                       </div>
                     </button>
+                          );
+                        })}
+                        </div>
+                      ))}
+                    </div>
                   );
-                })
+                })()
               )}
             </div>
           </div>
