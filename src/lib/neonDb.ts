@@ -1,4 +1,4 @@
-import { AppSettings, Notification, Task } from './types';
+import { AppSettings, DailyReport, Notification, Task } from './types';
 
 const NEON_FLAG = String(import.meta.env.VITE_USE_NEON_DATA ?? '').trim().toLowerCase();
 
@@ -8,6 +8,7 @@ export interface NeonAppState {
   tasks: Task[];
   notifications: Notification[];
   settings?: AppSettings;
+  dailyReports?: DailyReport[];
 }
 
 async function appStateFetch(path: string, init: RequestInit = {}) {
@@ -36,7 +37,17 @@ async function appStateFetch(path: string, init: RequestInit = {}) {
 export async function fetchNeonAppState(): Promise<NeonAppState | null> {
   if (!USE_NEON_DATA) return null;
   const response = await appStateFetch('/api/app-state');
-  const data = await response.json() as { state?: NeonAppState | null };
+  const responseText = await response.text();
+  let data: { state?: NeonAppState | null };
+  try {
+    data = JSON.parse(responseText) as { state?: NeonAppState | null };
+  } catch {
+    if (import.meta.env.DEV) {
+      console.warn('Neon app-state endpoint did not return JSON. Falling back to local app state.');
+      return null;
+    }
+    throw new Error('Neon app-state endpoint did not return JSON.');
+  }
   return data.state || null;
 }
 

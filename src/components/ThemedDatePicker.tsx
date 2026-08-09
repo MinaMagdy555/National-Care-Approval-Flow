@@ -6,6 +6,7 @@ interface ThemedDatePickerProps {
   value: string;
   onChange: (val: string) => void;
   className?: string;
+  minDate?: string;
 }
 
 const MONTH_NAMES = [
@@ -29,11 +30,11 @@ const formatDatePickerInput = (val: string, prevVal: string) => {
   return digits;
 };
 
-export function ThemedDatePicker({ value, onChange, className }: ThemedDatePickerProps) {
+export function ThemedDatePicker({ value, onChange, className, minDate }: ThemedDatePickerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [popoverLeft, setPopoverLeft] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
-  
+
   const initialDate = value && !isNaN(Date.parse(value)) ? new Date(value) : new Date();
   const [navYear, setNavYear] = useState(initialDate.getFullYear());
   const [navMonth, setNavMonth] = useState(initialDate.getMonth());
@@ -95,6 +96,7 @@ export function ThemedDatePicker({ value, onChange, className }: ThemedDatePicke
     const monthStr = String(navMonth + 1).padStart(2, '0');
     const dayStr = String(day).padStart(2, '0');
     const selectedDateStr = `${navYear}-${monthStr}-${dayStr}`;
+    if (minDate && selectedDateStr < minDate) return;
     setInputText(selectedDateStr);
     onChange(selectedDateStr);
     setIsOpen(false);
@@ -104,7 +106,7 @@ export function ThemedDatePicker({ value, onChange, className }: ThemedDatePicke
   const firstDayIndex = new Date(navYear, navMonth, 1).getDay();
 
   const days: Array<{ day: number | null; isCurrent: boolean }> = [];
-  
+
   for (let i = 0; i < firstDayIndex; i++) {
     days.push({ day: null, isCurrent: false });
   }
@@ -144,7 +146,7 @@ export function ThemedDatePicker({ value, onChange, className }: ThemedDatePicke
       </div>
 
       {isOpen && (
-        <div 
+        <div
           style={{ left: `${popoverLeft}px` }}
           className="absolute z-50 mt-2 w-72 rounded-2xl border border-slate-150 bg-white p-4 shadow-xl ring-1 ring-slate-900/5 animate-in fade-in slide-in-from-top-1 duration-150"
         >
@@ -179,6 +181,10 @@ export function ThemedDatePicker({ value, onChange, className }: ThemedDatePicke
               if (item.day === null) {
                 return <div key={`empty-${idx}`} />;
               }
+              const dayStr = String(item.day).padStart(2, '0');
+              const monthStr = String(navMonth + 1).padStart(2, '0');
+              const dateStr = `${navYear}-${monthStr}-${dayStr}`;
+              const isDisabled = Boolean(minDate && dateStr < minDate);
               const isSel = selectedDay === item.day;
               const isTd = isToday(item.day);
               return (
@@ -186,10 +192,13 @@ export function ThemedDatePicker({ value, onChange, className }: ThemedDatePicke
                   key={`day-${item.day}`}
                   type="button"
                   onClick={() => handleSelectDay(item.day!)}
+                  disabled={isDisabled}
                   className={cn(
                     "flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold transition-all",
-                    isSel 
-                      ? "bg-indigo-600 text-white font-black shadow-md shadow-indigo-150" 
+                    isDisabled
+                      ? "cursor-not-allowed text-slate-300"
+                      : isSel
+                      ? "bg-indigo-600 text-white font-black shadow-md shadow-indigo-150"
                       : isTd
                         ? "bg-slate-100 text-indigo-600 border border-indigo-200 font-black"
                         : "text-slate-700 hover:bg-slate-50"

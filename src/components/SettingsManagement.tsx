@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Settings, ShieldCheck, X, Clock } from 'lucide-react';
 import { useAppStore } from '../lib/store';
-import { PriorityTone, Role, TaskTypeConfig, WorkflowDefinition, WorkflowPhaseDefinition, WorkflowPhaseMode, WorkflowReviewStyle } from '../lib/types';
+import { PriorityTone, TaskTypeConfig } from '../lib/types';
 import { normalizeSettingId, priorityToneClasses, normalizeTaskTypeId, cleanTaskTypeKey, getTaskTypeConfigs } from '../lib/appSettings';
 import { CustomSelect } from './CustomSelect';
+import { UserMultiSelect } from './UserMultiSelect';
 import { cn } from '../lib/utils';
 import { Trash2 } from 'lucide-react';
 
@@ -15,17 +16,6 @@ const TONES: Array<{ value: PriorityTone; label: string; tone: PriorityTone }> =
   { value: 'blue', label: 'Blue', tone: 'blue' },
   { value: 'indigo', label: 'Indigo', tone: 'indigo' },
   { value: 'purple', label: 'Purple', tone: 'purple' },
-];
-
-const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
-  { value: 'team_member', label: 'Team Member' },
-  { value: 'reviewer', label: 'Reviewer' },
-  { value: 'art_director', label: 'Final Approvement' },
-  { value: 'team_leader', label: 'Team Leader' },
-  { value: 'manager', label: 'Manager' },
-  { value: 'developer', label: 'Developer' },
-  { value: 'marketing_manager', label: 'Marketing Manager' },
-  { value: 'admin', label: 'Admin' },
 ];
 
 const WEEKDAYS = [
@@ -64,9 +54,6 @@ export function SettingsManagement() {
     }
   }, [customHoursTargetType, userList]);
   const [priorityTone, setPriorityTone] = useState<PriorityTone>('blue');
-  const [workflowName, setWorkflowName] = useState('');
-
-  
   const [taskTypeName, setTaskTypeName] = useState('');
   const [taskTypeJobTitles, setTaskTypeJobTitles] = useState<string[]>([]);
   const [taskTypeDetailed, setTaskTypeDetailed] = useState(false);
@@ -84,16 +71,6 @@ export function SettingsManagement() {
 
   const taskTypeConfigs = getTaskTypeConfigs(appSettings);
   const workflowOptions = (appSettings.workflows || []).map(workflow => ({ value: workflow.id, label: workflow.name }));
-  const reviewStyleOptions: Array<{ value: WorkflowReviewStyle; label: string }> = [
-    { value: 'quick_look', label: 'Quick Look' },
-    { value: 'full_review', label: 'Full Review' },
-    { value: 'final_approval', label: 'Final Approval' },
-  ];
-  const phaseModeOptions: Array<{ value: WorkflowPhaseMode; label: string }> = [
-    { value: 'parallel', label: 'Parallel' },
-    { value: 'sequential', label: 'Sequential' },
-  ];
-
   const handleAddTaskType = () => {
     const name = taskTypeName.trim();
     if (!name) return;
@@ -178,91 +155,6 @@ export function SettingsManagement() {
       };
     });
     setEditingTaskTypeId(null);
-  };
-
-  const makeWorkflowId = (value: string) => `workflow_${normalizeSettingId(value)}_${Date.now().toString(36)}`;
-  const makePhaseId = (value: string) => `phase_${normalizeSettingId(value)}_${Date.now().toString(36)}`;
-
-  const updateWorkflow = (workflowId: string, updater: (workflow: WorkflowDefinition) => WorkflowDefinition) => {
-    updateAppSettings(settings => ({
-      ...settings,
-      workflows: (settings.workflows || []).map(workflow => workflow.id === workflowId ? updater(workflow) : workflow),
-    }));
-  };
-
-  const updateWorkflowPhase = (workflowId: string, phaseId: string, updater: (phase: WorkflowPhaseDefinition) => WorkflowPhaseDefinition) => {
-    updateWorkflow(workflowId, workflow => ({
-      ...workflow,
-      updatedAt: new Date().toISOString(),
-      phases: workflow.phases.map(phase => phase.id === phaseId ? updater(phase) : phase),
-    }));
-  };
-
-  const addWorkflow = () => {
-    const name = workflowName.trim();
-    if (!name) return;
-    const now = new Date().toISOString();
-    const workflow: WorkflowDefinition = {
-      id: makeWorkflowId(name),
-      name,
-      active: true,
-      createdAt: now,
-      updatedAt: now,
-      phases: [
-        {
-          id: makePhaseId('content_review'),
-          name: 'Content Review',
-          reviewStyle: 'quick_look',
-          mode: 'parallel',
-          userIds: [],
-          roleIds: [],
-          responsibilityIds: ['content_creator'],
-        },
-        {
-          id: makePhaseId('senior_review'),
-          name: 'Senior Branding & Video Editing',
-          reviewStyle: 'quick_look',
-          mode: 'parallel',
-          userIds: [],
-          roleIds: ['reviewer'],
-          responsibilityIds: ['senior_brand_designer_video_editor'],
-        },
-        {
-          id: makePhaseId('art_director'),
-          name: 'Art Director',
-          reviewStyle: 'final_approval',
-          mode: 'parallel',
-          userIds: [],
-          roleIds: ['art_director'],
-          responsibilityIds: ['art_director'],
-        },
-      ],
-    };
-    updateAppSettings(settings => ({
-      ...settings,
-      workflows: [...(settings.workflows || []), workflow],
-      defaultWorkflowId: settings.defaultWorkflowId || workflow.id,
-    }));
-    setWorkflowName('');
-  };
-
-  const addWorkflowPhase = (workflowId: string) => {
-    const name = prompt('Phase name:')?.trim();
-    if (!name) return;
-    const phase: WorkflowPhaseDefinition = {
-      id: makePhaseId(name),
-      name,
-      reviewStyle: 'quick_look',
-      mode: 'parallel',
-      userIds: [],
-      roleIds: [],
-      responsibilityIds: [],
-    };
-    updateWorkflow(workflowId, workflow => ({
-      ...workflow,
-      updatedAt: new Date().toISOString(),
-      phases: [...workflow.phases, phase],
-    }));
   };
 
   if (!canManageSettings) {
@@ -669,577 +561,6 @@ export function SettingsManagement() {
 
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-black uppercase tracking-wider text-slate-500">Workflow Builder</h2>
-            <p className="mt-0.5 text-xs text-slate-400">Create named review workflows and control each phase, reviewer set, and approval mode.</p>
-          </div>
-          <div className="flex w-full gap-2 sm:w-auto">
-            <input
-              value={workflowName}
-              onChange={event => setWorkflowName(event.target.value)}
-              placeholder="Workflow name"
-              className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 shadow-sm sm:w-64"
-            />
-            <button
-              type="button"
-              onClick={addWorkflow}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white hover:bg-black"
-            >
-              <Plus className="h-4 w-4" /> Add
-            </button>
-          </div>
-        </div>
-
-        <div className="space-y-3">
-          {(appSettings.workflows || []).map(workflow => (
-            <div key={workflow.id} className={cn("rounded-xl border p-3", workflow.active === false ? "border-slate-100 bg-slate-50 opacity-70" : "border-slate-200 bg-white")}>
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <input
-                    value={workflow.name}
-                    onChange={event => updateWorkflow(workflow.id, item => ({ ...item, name: event.target.value, updatedAt: new Date().toISOString() }))}
-                    className="w-full rounded-lg border border-transparent px-2 py-1 text-base font-black text-slate-900 outline-none hover:border-slate-200 focus:border-indigo-300"
-                  />
-                  <p className="px-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">{workflow.phases.length} phases</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => updateAppSettings(settings => ({ ...settings, defaultWorkflowId: workflow.id }))}
-                    className={cn("rounded-lg border px-3 py-1.5 text-xs font-black", appSettings.defaultWorkflowId === workflow.id ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-600")}
-                  >
-                    {appSettings.defaultWorkflowId === workflow.id ? 'Default' : 'Set Default'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => addWorkflowPhase(workflow.id)}
-                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-black text-slate-700 hover:bg-slate-50"
-                  >
-                    Add Phase
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => updateWorkflow(workflow.id, item => ({ ...item, active: item.active === false, updatedAt: new Date().toISOString() }))}
-                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-black text-slate-700 hover:bg-slate-50"
-                  >
-                    {workflow.active === false ? 'Enable' : 'Disable'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!confirm(`Delete workflow "${workflow.name}"? Existing tasks keep their saved workflow snapshot.`)) return;
-                      updateAppSettings(settings => {
-                        const nextWorkflows = (settings.workflows || []).filter(item => item.id !== workflow.id);
-                        const nextAssignments = Object.fromEntries(Object.entries(settings.taskTypeWorkflowIds || {}).filter(([, value]) => value !== workflow.id));
-                        return {
-                          ...settings,
-                          workflows: nextWorkflows,
-                          defaultWorkflowId: settings.defaultWorkflowId === workflow.id ? (nextWorkflows[0]?.id || null) : settings.defaultWorkflowId,
-                          taskTypeWorkflowIds: nextAssignments,
-                        };
-                      });
-                    }}
-                    className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-black text-rose-600 hover:bg-rose-50"
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                {workflow.phases.map((phase, phaseIndex) => (
-                  <div key={phase.id} className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
-                    <div className="mb-3 grid gap-2 lg:grid-cols-[2fr,1fr,1fr,auto]">
-                      <input
-                        value={phase.name}
-                        onChange={event => updateWorkflowPhase(workflow.id, phase.id, item => ({ ...item, name: event.target.value }))}
-                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-900"
-                      />
-                      <CustomSelect
-                        value={phase.reviewStyle}
-                        onChange={value => updateWorkflowPhase(workflow.id, phase.id, item => ({ ...item, reviewStyle: value as WorkflowReviewStyle }))}
-                        options={reviewStyleOptions}
-                      />
-                      <CustomSelect
-                        value={phase.mode}
-                        onChange={value => updateWorkflowPhase(workflow.id, phase.id, item => ({ ...item, mode: value as WorkflowPhaseMode }))}
-                        options={phaseModeOptions}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => updateWorkflow(workflow.id, item => ({ ...item, phases: item.phases.filter(p => p.id !== phase.id), updatedAt: new Date().toISOString() }))}
-                        disabled={workflow.phases.length <= 1}
-                        className="rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-black text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        Delete
-                      </button>
-                    </div>
-
-                    <div className="grid gap-3 xl:grid-cols-3">
-                      <div>
-                        <span className="mb-1 block text-[9px] font-black uppercase tracking-wider text-slate-400">Users</span>
-                        <div className="flex flex-wrap gap-1.5">
-                          {seedUsers.map(user => {
-                            const active = phase.userIds.includes(user.id);
-                            return (
-                              <button
-                                key={user.id}
-                                type="button"
-                                onClick={() => updateWorkflowPhase(workflow.id, phase.id, item => ({ ...item, userIds: toggleValue(item.userIds, user.id) }))}
-                                className={cn("rounded-full border px-2 py-0.5 text-[11px] font-bold", active ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-600")}
-                              >
-                                {user.name}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                      <div>
-                        <span className="mb-1 block text-[9px] font-black uppercase tracking-wider text-slate-400">Roles</span>
-                        <div className="flex flex-wrap gap-1.5">
-                          {ROLE_OPTIONS.map(role => {
-                            const active = phase.roleIds.includes(role.value);
-                            return (
-                              <button
-                                key={role.value}
-                                type="button"
-                                onClick={() => updateWorkflowPhase(workflow.id, phase.id, item => ({ ...item, roleIds: toggleValue(item.roleIds, role.value) as Role[] }))}
-                                className={cn("rounded-full border px-2 py-0.5 text-[11px] font-bold", active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600")}
-                              >
-                                {role.label}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                      <div>
-                        <span className="mb-1 block text-[9px] font-black uppercase tracking-wider text-slate-400">Responsibilities</span>
-                        <div className="flex flex-wrap gap-1.5">
-                          {appSettings.responsibilities.map(responsibility => {
-                            const active = phase.responsibilityIds.includes(responsibility.id);
-                            return (
-                              <button
-                                key={responsibility.id}
-                                type="button"
-                                onClick={() => updateWorkflowPhase(workflow.id, phase.id, item => ({ ...item, responsibilityIds: toggleValue(item.responsibilityIds, responsibility.id) }))}
-                                className={cn("rounded-full border px-2 py-0.5 text-[11px] font-bold", active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600")}
-                              >
-                                {responsibility.label}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Phase {phaseIndex + 1}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-
-
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="mb-1 text-sm font-black uppercase tracking-wider text-slate-500">Task Types & Workflows</h2>
-        <p className="text-xs text-slate-400 mb-3">Add and configure custom task types, assign recommended job titles, and toggle the detailed revision flow.</p>
-
-        {/* Add Form */}
-        <div className="mb-4 rounded-xl border border-slate-100 bg-slate-50/50 p-3 space-y-3">
-          <h3 className="text-xs font-black uppercase tracking-wider text-slate-500">Create Task Type</h3>
-          <div className="grid gap-3 sm:grid-cols-[1fr,auto]">
-            <input
-              value={taskTypeName}
-              onChange={event => setTaskTypeName(event.target.value)}
-              placeholder="Task Type Name (e.g. Video, Content Revision)"
-              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 shadow-sm"
-            />
-            <button
-              type="button"
-              onClick={handleAddTaskType}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-black text-white hover:bg-indigo-700 transition-colors"
-            >
-              <Plus className="h-4 w-4" /> Add Type
-            </button>
-          </div>
-
-          <div className="space-y-2">
-            <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Suggested Roles / Job Titles</label>
-            <div className="flex flex-wrap gap-2">
-              {appSettings.responsibilities.map(r => {
-                const active = taskTypeJobTitles.includes(r.label);
-                return (
-                  <button
-                    key={r.id}
-                    type="button"
-                    onClick={() => {
-                      setTaskTypeJobTitles(prev =>
-                        prev.includes(r.label) ? prev.filter(l => l !== r.label) : [...prev, r.label]
-                      );
-                    }}
-                    className={cn(
-                      "rounded-full border px-3 py-1 text-xs font-bold transition-all",
-                      active
-                        ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-black"
-                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                    )}
-                  >
-                    {r.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-3 pt-2">
-            <div className="space-y-1.5">
-              <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Full Reviewers (Custom)</label>
-              <div className="flex flex-wrap gap-1.5">
-                {seedUsers.map(user => {
-                  const active = taskTypeFullReviewers.includes(user.id);
-                  return (
-                    <button
-                      key={user.id}
-                      type="button"
-                      onClick={() => {
-                        setTaskTypeFullReviewers(prev => toggleValue(prev, user.id));
-                      }}
-                      className={cn(
-                        "rounded-full border px-2.5 py-0.5 text-xs font-bold transition-all",
-                        active
-                          ? "bg-blue-50 border-blue-200 text-blue-700 font-black"
-                          : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                      )}
-                    >
-                      {user.name}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Quick Look Reviewers (Custom)</label>
-              <div className="flex flex-wrap gap-1.5">
-                {seedUsers.map(user => {
-                  const active = taskTypeQuickLookReviewers.includes(user.id);
-                  return (
-                    <button
-                      key={user.id}
-                      type="button"
-                      onClick={() => {
-                        setTaskTypeQuickLookReviewers(prev => toggleValue(prev, user.id));
-                      }}
-                      className={cn(
-                        "rounded-full border px-2.5 py-0.5 text-xs font-bold transition-all",
-                        active
-                          ? "bg-amber-50 border-amber-200 text-amber-700 font-black"
-                          : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                      )}
-                    >
-                      {user.name}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Final Reviewers (Custom)</label>
-              <div className="flex flex-wrap gap-1.5">
-                {seedUsers.map(user => {
-                  const active = taskTypeFinalReviewers.includes(user.id);
-                  return (
-                    <button
-                      key={user.id}
-                      type="button"
-                      onClick={() => {
-                        setTaskTypeFinalReviewers(prev => toggleValue(prev, user.id));
-                      }}
-                      className={cn(
-                        "rounded-full border px-2.5 py-0.5 text-xs font-bold transition-all",
-                        active
-                          ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-black"
-                          : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                      )}
-                    >
-                      {user.name}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-white px-2 py-1 text-xs font-bold text-slate-600 shadow-sm">
-              <input
-                type="checkbox"
-                checked={taskTypeDetailed}
-                onChange={event => setTaskTypeDetailed(event.target.checked)}
-                className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
-              />
-              Detailed Review Workflow (Request Edits Form)
-            </label>
-          </div>
-        </div>
-
-        {/* List & Edit Forms */}
-        <div className="space-y-2">
-          {taskTypeConfigs.map(config => {
-            const isEditing = editingTaskTypeId === config.id;
-            return (
-              <div key={config.id} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-all hover:border-slate-300">
-                {isEditing ? (
-                  <div className="space-y-3">
-                    <div className="flex gap-2">
-                      <input
-                        value={editingLabel}
-                        onChange={event => setEditingLabel(event.target.value)}
-                        className="flex-1 rounded-xl border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-900 shadow-sm"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleSaveEditTaskType}
-                        className="rounded-xl bg-indigo-600 px-3 py-1.5 text-xs font-black text-white hover:bg-indigo-700 transition-colors"
-                      >
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setEditingTaskTypeId(null)}
-                        className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-black text-slate-600 hover:bg-slate-50 transition-colors"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Suggested Roles</label>
-                      <div className="flex flex-wrap gap-1.5">
-                        {appSettings.responsibilities.map(r => {
-                          const active = editingJobTitles.includes(r.label);
-                          return (
-                            <button
-                              key={r.id}
-                              type="button"
-                              onClick={() => {
-                                setEditingJobTitles(prev =>
-                                  prev.includes(r.label) ? prev.filter(l => l !== r.label) : [...prev, r.label]
-                                );
-                              }}
-                              className={cn(
-                                "rounded-full border px-2.5 py-0.5 text-[11px] font-bold transition-all",
-                                active
-                                  ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-black"
-                                  : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                              )}
-                            >
-                              {r.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <div className="grid gap-3 md:grid-cols-3 pt-1">
-                      <div className="space-y-1">
-                        <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Full Reviewers (Custom)</label>
-                        <div className="flex flex-wrap gap-1.5">
-                          {seedUsers.map(user => {
-                            const active = editingFullReviewers.includes(user.id);
-                            return (
-                              <button
-                                key={user.id}
-                                type="button"
-                                onClick={() => {
-                                  setEditingFullReviewers(prev => toggleValue(prev, user.id));
-                                }}
-                                className={cn(
-                                  "rounded-full border px-2 py-0.5 text-[11px] font-bold transition-all",
-                                  active
-                                    ? "bg-blue-50 border-blue-200 text-blue-700 font-black"
-                                    : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                                )}
-                              >
-                                {user.name}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Quick Look Reviewers (Custom)</label>
-                        <div className="flex flex-wrap gap-1.5">
-                          {seedUsers.map(user => {
-                            const active = editingQuickLookReviewers.includes(user.id);
-                            return (
-                              <button
-                                key={user.id}
-                                type="button"
-                                onClick={() => {
-                                  setEditingQuickLookReviewers(prev => toggleValue(prev, user.id));
-                                }}
-                                className={cn(
-                                  "rounded-full border px-2 py-0.5 text-[11px] font-bold transition-all",
-                                  active
-                                    ? "bg-amber-50 border-amber-200 text-amber-700 font-black"
-                                    : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                                )}
-                              >
-                                {user.name}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Final Reviewers (Custom)</label>
-                        <div className="flex flex-wrap gap-1.5">
-                          {seedUsers.map(user => {
-                            const active = editingFinalReviewers.includes(user.id);
-                            return (
-                              <button
-                                key={user.id}
-                                type="button"
-                                onClick={() => {
-                                  setEditingFinalReviewers(prev => toggleValue(prev, user.id));
-                                }}
-                                className={cn(
-                                  "rounded-full border px-2 py-0.5 text-[11px] font-bold transition-all",
-                                  active
-                                    ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-black"
-                                    : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                                )}
-                              >
-                                {user.name}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-0.5 text-xs font-bold text-slate-600">
-                        <input
-                          type="checkbox"
-                          checked={editingDetailed}
-                          onChange={event => setEditingDetailed(event.target.checked)}
-                          className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
-                        />
-                        Detailed Review Workflow
-                      </label>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="space-y-1 min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h4 className="text-sm font-black text-slate-900">{config.label}</h4>
-                        <span className="text-[10px] font-bold text-slate-400 font-mono">ID: {config.id}</span>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Suggested:</span>
-                        {config.suggestedJobTitles.length > 0 ? (
-                          config.suggestedJobTitles.map(title => (
-                            <span key={title} className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">{title}</span>
-                          ))
-                        ) : (
-                          <span className="text-[10px] font-medium text-slate-500 italic">Anyone</span>
-                        )}
-                        <span className="text-[10px] text-slate-300 font-bold">|</span>
-                        <span className={cn(
-                          "rounded-full px-2 py-0.5 text-[10px] font-bold",
-                          config.isDetailedReview 
-                            ? "bg-amber-50 text-amber-700 border border-amber-200/50" 
-                            : "bg-slate-50 text-slate-500 border border-slate-200/50"
-                        )}>
-                          {config.isDetailedReview ? 'Detailed Review' : 'Simple Feedback'}
-                        </span>
-                      </div>
-
-                      {/* Custom Reviewers Display */}
-                      {((config.fullReviewerUserIds?.length || 0) > 0 || 
-                        (config.quickLookUserIds?.length || 0) > 0 || 
-                        (config.finalReviewerUserIds?.length || 0) > 0) && (
-                        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-                          {config.fullReviewerUserIds && config.fullReviewerUserIds.length > 0 && (
-                            <div className="flex items-center gap-1">
-                              <span className="font-black text-blue-600 uppercase tracking-wider text-[9px]">Full Reviewers:</span>
-                              <span className="font-bold text-slate-700 bg-blue-50/50 px-1.5 py-0.5 rounded border border-blue-100/50">
-                                {config.fullReviewerUserIds.map(uid => users[uid]?.name || uid).join(', ')}
-                              </span>
-                            </div>
-                          )}
-                          {config.quickLookUserIds && config.quickLookUserIds.length > 0 && (
-                            <div className="flex items-center gap-1">
-                              <span className="font-black text-amber-600 uppercase tracking-wider text-[9px]">Quick Look:</span>
-                              <span className="font-bold text-slate-700 bg-amber-50/50 px-1.5 py-0.5 rounded border border-amber-100/50">
-                                {config.quickLookUserIds.map(uid => users[uid]?.name || uid).join(', ')}
-                              </span>
-                            </div>
-                          )}
-                          {config.finalReviewerUserIds && config.finalReviewerUserIds.length > 0 && (
-                            <div className="flex items-center gap-1">
-                              <span className="font-black text-indigo-600 uppercase tracking-wider text-[9px]">Final Review:</span>
-                              <span className="font-bold text-slate-700 bg-indigo-50/50 px-1.5 py-0.5 rounded border border-indigo-100/50">
-                                {config.finalReviewerUserIds.map(uid => users[uid]?.name || uid).join(', ')}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {workflowOptions.length > 0 && (
-                        <div className="mt-2 max-w-sm">
-                          <label className="mb-1 block text-[9px] font-black uppercase tracking-wider text-slate-400">Default Workflow</label>
-                          <CustomSelect
-                            value={appSettings.taskTypeWorkflowIds?.[cleanTaskTypeKey(config.id)] || config.workflowId || appSettings.defaultWorkflowId || ''}
-                            onChange={value => updateAppSettings(settings => ({
-                              ...settings,
-                              taskTypeWorkflowIds: {
-                                ...(settings.taskTypeWorkflowIds || {}),
-                                [cleanTaskTypeKey(config.id)]: value,
-                              },
-                            }))}
-                            options={workflowOptions}
-                          />
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleStartEditingTaskType(config)}
-                        className="rounded-lg border border-slate-200 bg-white p-1 text-slate-500 hover:text-slate-900 hover:bg-slate-50 transition-colors"
-                        title="Edit task type"
-                      >
-                        <Settings className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteTaskType(config.id)}
-                        className="rounded-lg border border-rose-200 bg-white p-1 text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors"
-                        title="Delete task type"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-black uppercase tracking-wider text-slate-500">Flow Access Permissions Matrix</h2>
@@ -1426,6 +747,51 @@ export function SettingsManagement() {
               ))}
             </tbody>
           </table>
+        </div>
+      </section>
+
+      <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 className="text-base font-black text-slate-900">Reviewer & Daily Report Notifications</h3>
+        <p className="mt-1 text-xs font-bold text-slate-500">Pick the responsible senior reviewers for comment fan-out, and configure the daily report auto-send.</p>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Responsible Senior Reviewers</label>
+            <UserMultiSelect
+              users={userList.filter(user => user.id !== 'guest')}
+              selectedIds={appSettings.seniorReviewerUserIds || []}
+              onChange={ids => updateAppSettings(settings => ({ ...settings, seniorReviewerUserIds: ids }))}
+              emptyText="Pick seniors"
+            />
+            <p className="mt-1 text-[10px] font-bold text-slate-400">They are notified when reviewers comment on a task, in addition to the assignee.</p>
+          </div>
+          <div>
+            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Daily Report Auto-Send Time</label>
+            <input
+              type="time"
+              value={appSettings.dailyReportAutoSendTime || '17:29'}
+              onChange={event => updateAppSettings(settings => ({ ...settings, dailyReportAutoSendTime: event.target.value }))}
+              className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-900"
+            />
+            <label className="mt-3 inline-flex items-center gap-2 text-xs font-bold text-slate-600">
+              <input
+                type="checkbox"
+                checked={appSettings.dailyReportAutoSendEnabled !== false}
+                onChange={event => updateAppSettings(settings => ({ ...settings, dailyReportAutoSendEnabled: event.target.checked }))}
+                className="h-4 w-4 rounded border-slate-300 accent-indigo-600"
+              />
+              Auto-send daily reports at the time above
+            </label>
+          </div>
+        </div>
+        <div className="mt-4">
+          <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Daily Report Receivers</label>
+          <UserMultiSelect
+            users={userList.filter(user => user.id !== 'guest')}
+            selectedIds={appSettings.dailyReportReceiverUserIds || []}
+            onChange={ids => updateAppSettings(settings => ({ ...settings, dailyReportReceiverUserIds: ids }))}
+            emptyText="Pick receivers (defaults to leaders and admins)"
+          />
+          <p className="mt-1 text-[10px] font-bold text-slate-400">Leave empty to use the default: team leader, art director, marketing manager, admin, and leaderboard users.</p>
         </div>
       </section>
     </div>

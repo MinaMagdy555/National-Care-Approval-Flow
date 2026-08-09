@@ -4,6 +4,7 @@ import { ensureDriveAccessToken, googleApiKey, hasUsableDriveToken } from './dri
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif']);
 const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v']);
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
+export const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
 type DriveLinkMetadata = {
   id: string;
@@ -14,6 +15,21 @@ type DriveLinkMetadata = {
   webContentLink?: string;
   thumbnailLink?: string;
 };
+
+async function getDriveApiHeaders(params: URLSearchParams) {
+  const headers: HeadersInit = {};
+  if (hasUsableDriveToken()) {
+    try {
+      const accessToken = await ensureDriveAccessToken();
+      headers.Authorization = `Bearer ${accessToken}`;
+    } catch {
+      if (googleApiKey) params.set('key', googleApiKey);
+    }
+  } else if (googleApiKey) {
+    params.set('key', googleApiKey);
+  }
+  return headers;
+}
 
 function getUrlExtension(url: URL) {
   const cleanPath = url.pathname.split('/').pop() || '';
@@ -64,22 +80,63 @@ async function fetchDriveLinkMetadata(fileId: string): Promise<DriveLinkMetadata
     supportsAllDrives: 'true',
   });
 
-  const headers: HeadersInit = {};
-  if (hasUsableDriveToken()) {
-    try {
-      const accessToken = await ensureDriveAccessToken();
-      headers.Authorization = `Bearer ${accessToken}`;
-    } catch {
-      // Public Drive links may still resolve with the API key fallback.
-      if (googleApiKey) params.set('key', googleApiKey);
-    }
-  } else if (googleApiKey) {
-    params.set('key', googleApiKey);
-  }
+  const headers = await getDriveApiHeaders(params);
 
   const response = await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?${params.toString()}`, { headers });
   if (!response.ok) return null;
   return response.json() as Promise<DriveLinkMetadata>;
+}
+
+function driveMetadataToUploadedTaskFile(metadata: DriveLinkMetadata, fallbackUrl?: string): UploadedTaskFile {
+  const url = metadata.webViewLink || fallbackUrl || `https://drive.google.com/file/d/${encodeURIComponent(metadata.id)}/view`;
+  const previewUrl = metadata.thumbnailLink || getLinkedFileThumbnailUrl(url) || undefined;
+  return {
+    id: metadata.id,
+    name: metadata.name || 'Google Drive file',
+    type: metadata.mimeType || inferLinkedFileType(url),
+    size: Number(metadata.size || 0),
+    url,
+    storageProvider: 'link',
+    storagePath: metadata.id,
+    previewUrl,
+    previewStoragePath: previewUrl ? `drive-thumbnail:${metadata.id}` : undefined,
+    driveFileId: metadata.id,
+    webViewLink: url,
+    downloadUrl: metadata.webContentLink,
+  };
+}
+
+export async function getDriveLinkMetadata(rawUrl: string): Promise<DriveLinkMetadata | null> {
+  const parsedUrl = normalizeLinkedUrl(rawUrl);
+  if (!isGoogleDriveHost(parsedUrl)) return null;
+  const driveFileId = getGoogleDriveFileId(parsedUrl);
+  return driveFileId ? fetchDriveLinkMetadata(driveFileId) : null;
+}
+
+export function isDriveFolderMetadata(metadata?: Pick<DriveLinkMetadata, 'mimeType'> | null) {
+  return metadata?.mimeType === DRIVE_FOLDER_MIME_TYPE;
+}
+
+export async function listDriveFolderLinkedFiles(rawUrl: string): Promise<UploadedTaskFile[]> {
+  const parsedUrl = normalizeLinkedUrl(rawUrl);
+  const folderId = getGoogleDriveFileId(parsedUrl);
+  if (!folderId) throw new Error('Paste a shared Google Drive folder link.');
+
+  const params = new URLSearchParams({
+    q: `'${folderId.replace(/'/g, "\\'")}' in parents and trashed = false`,
+    fields: 'files(id,name,mimeType,size,webViewLink,webContentLink,thumbnailLink)',
+    orderBy: 'folder,name_natural',
+    pageSize: '100',
+    supportsAllDrives: 'true',
+    includeItemsFromAllDrives: 'true',
+  });
+  const headers = await getDriveApiHeaders(params);
+  const response = await fetch(`${DRIVE_API_BASE}/files?${params.toString()}`, { headers });
+  if (!response.ok) throw new Error('Could not read this Drive folder. Make sure the folder is shared with this account.');
+  const data = await response.json() as { files?: DriveLinkMetadata[] };
+  return (data.files || [])
+    .filter(file => file.mimeType !== DRIVE_FOLDER_MIME_TYPE)
+    .map(file => driveMetadataToUploadedTaskFile(file));
 }
 
 function getGoogleDocsPreviewUrl(url: URL) {

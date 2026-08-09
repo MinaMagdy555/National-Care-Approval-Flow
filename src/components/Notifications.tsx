@@ -3,7 +3,7 @@ import { useAppStore } from '../lib/store';
 import { Bell, Check, FileText, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-export function NotificationsList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
+export function NotificationsList({ onOpenTask, onOpenDailyReports }: { onOpenTask: (id: string) => void; onOpenDailyReports?: () => void }) {
   const { notifications, tasks, currentUser, markNotificationAsRead } = useAppStore();
 
   const userNotifications = notifications.filter(n => n.userId === currentUser.id);
@@ -27,7 +27,8 @@ export function NotificationsList({ onOpenTask }: { onOpenTask: (id: string) => 
 
       <div className="space-y-4">
         {userNotifications.map(notification => {
-          const isDeleted = !tasks.some(t => t.id === notification.taskId);
+          const isDailyReportNotification = notification.taskId === 'daily-report';
+          const isDeleted = !isDailyReportNotification && !tasks.some(t => t.id === notification.taskId);
           return (
             <div 
               key={notification.id}
@@ -43,7 +44,11 @@ export function NotificationsList({ onOpenTask }: { onOpenTask: (id: string) => 
                   markNotificationAsRead(notification.id);
                 }
                 if (!isDeleted) {
-                  onOpenTask(notification.taskId);
+                  if (isDailyReportNotification) {
+                    onOpenDailyReports?.();
+                  } else {
+                    onOpenTask(notification.taskId);
+                  }
                 }
               }}
             >

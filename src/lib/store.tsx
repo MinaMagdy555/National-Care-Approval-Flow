@@ -1,10 +1,10 @@
 import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
-import { AccountProfile, AppSettings, AuthStatus, User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile, ReviewMode, WorkflowDefinition, WorkflowPhaseHistoryEntry } from './types';
+import { AccountProfile, AppSettings, AuthStatus, User, Role, Environment, Task, TaskStatus, Priority, TaskType, Notification, TaskComment, TaskVersion, UploadedTaskFile, ReviewMode, WorkflowDefinition, WorkflowPhaseHistoryEntry, DailyReport, DailyReportEditVersion, DailyReportEntry } from './types';
 import { initialUsers, initialTasks, userRoleLabels } from './mockData';
 import { supabase } from './supabaseClient';
 import { clearAppState, loadAppState, saveAppState } from './localDb';
 import { fetchNeonAppState, saveNeonAppState, USE_NEON_DATA } from './neonDb';
-import { shouldAutoArchiveTask } from './archiveUtils';
+import { isTaskArchived, shouldAutoArchiveTask } from './archiveUtils';
 import { sanitizeHandledBy } from './handlerUtils';
 import {
   canManageAppSettings,
@@ -32,6 +32,9 @@ import {
   canReviewRouteUpdateStatus,
   canManageWorkflowBuilder,
   cloneWorkflow,
+  computePhaseAvailableAt,
+  evaluateSkipRule,
+  getNextPhaseIndex,
   getPhaseOwnerRole,
   getCurrentOwnerUserIds,
   getReviewRouteTarget,
@@ -43,10 +46,12 @@ import {
   getWorkflowPhaseIndex,
   hasUserApprovedWorkflowPhase,
   isDirectToFinalReviewUploader,
+  isPhaseAvailable,
   resolveWorkflowPhaseReviewerIds,
   uniqueIds,
 } from './workflowUtils';
-import { canCreateWorkAssignment, canManageWorkAssignment, getAssignmentPeriodFromDeadline } from './workAssignmentUtils';
+import { canCreateWorkAssignment, canDeleteWorkAssignment, canManageWorkAssignment, canSetActiveWorkForMember, getAssignmentPeriodFromDeadline, isLeaderboardUser } from './workAssignmentUtils';
+import { buildTaskEditDiff, isPastWorkDate } from './workAssignmentUtils';
 import {
   fetchDriveNotifications,
   fetchDriveSettings,
@@ -77,13 +82,17 @@ type WorkAssignmentInput = {
   name: string;
   description: string;
   priority: Priority;
-  deadlineAt: string;
+  assignmentDate?: string | null;
+  deadlineAt?: string | null;
   assignmentLinks: string[];
   handledByIds: string[];
+  workflowNodeAssigneeIds?: Record<string, string[]>;
   isOvertime?: boolean;
   taskType?: string;
   needsContentRevision?: boolean;
   contentRevisionAssigneeIds?: string[];
+  isTemporarySelfTask?: boolean;
+  submittedOnBehalfOfIds?: string[];
 };
 
 type WorkAssignmentUploadPayload = {
@@ -115,6 +124,24 @@ const GUEST_USER: User = {
   role: 'team_member',
   jobTitle: 'Not signed in',
 };
+
+export function getDefaultDailyReportReceivers(userList: User[]) {
+  return userList.filter(user => (
+    user.id !== 'guest' && (
+      user.role === 'team_leader' ||
+      user.role === 'art_director' ||
+      user.role === 'marketing_manager' ||
+      user.role === 'admin' ||
+      isLeaderboardUser(user.id)
+    )
+  )).map(user => user.id);
+}
+
+export function getDailyReportReceiverIds(report: Pick<DailyReport, 'userId'>, settings: AppSettings, userList: User[]) {
+  const explicit = Array.isArray(settings.dailyReportReceiverUserIds) ? settings.dailyReportReceiverUserIds : [];
+  const fallback = explicit.length > 0 ? explicit : getDefaultDailyReportReceivers(userList);
+  return Array.from(new Set(fallback.filter(id => id && id !== report.userId)));
+}
 
 function isSharedWorkspaceStatus(status: AuthStatus) {
   return (USE_NEON_DATA || USE_SHARED_DRIVE_DATA) && status === 'approved';
@@ -190,6 +217,8 @@ function coerceTaskComment(comment: Partial<TaskComment> & { id?: string }, fall
   return {
     id: comment.id,
     authorId: comment.authorId || fallbackAuthorId,
+    versionId: comment.versionId,
+    versionNumber: typeof comment.versionNumber === 'number' ? comment.versionNumber : undefined,
     action: comment.action || 'review_note',
     message: comment.message,
     sections: Array.isArray(comment.sections) ? comment.sections.map(section => ({ ...section })) : [],
@@ -207,6 +236,7 @@ function coerceTaskComment(comment: Partial<TaskComment> & { id?: string }, fall
     deletedAt: comment.deletedAt,
     deletedBy: comment.deletedBy,
     isDeleted: Boolean(comment.isDeleted || comment.deletedAt),
+    parentId: comment.parentId,
   };
 }
 
@@ -336,6 +366,8 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
     deadlineText: task.deadlineText ?? null,
     assignmentPeriod: task.assignmentPeriod ?? null,
     assignmentLinks: Array.isArray(task.assignmentLinks) ? task.assignmentLinks : [],
+    assignmentDate: task.assignmentDate ?? null,
+    workflowNodeAssigneeIds: task.workflowNodeAssigneeIds && typeof task.workflowNodeAssigneeIds === 'object' ? task.workflowNodeAssigneeIds : {},
     deadlineAt: task.deadlineAt ?? null,
     assignmentUploadedAt: task.assignmentUploadedAt ?? null,
     scheduledPublishAt: task.scheduledPublishAt ?? null,
@@ -425,6 +457,8 @@ function taskSyncKey(task: Task) {
     task.description || '',
     task.assignmentPeriod || '',
     (task.assignmentLinks || []).join(','),
+    task.assignmentDate || '',
+    JSON.stringify(task.workflowNodeAssigneeIds || {}),
     task.deadlineAt || '',
     task.assignmentUploadedAt || '',
     task.scheduledPublishAt || '',
@@ -519,6 +553,111 @@ function mergeNotificationsIntoState(currentNotifications: Notification[], incom
   return incomingNotifications.reduce(mergeNotificationIntoState, currentNotifications);
 }
 
+function dailyReportSyncKey(report: DailyReport) {
+  return [
+    report.id,
+    report.sentAt || '',
+    report.sentBy || '',
+    report.autoSent ? 'auto' : 'manual',
+    report.note,
+    report.entries.map(entry => `${entry.taskId}:${entry.startTime || ''}:${entry.endTime || ''}:${entry.durationMinutes || ''}:${entry.note || ''}`).join('|'),
+    report.editHistory.length,
+    report.updatedAt,
+  ].join('::');
+}
+
+function coerceDailyReport(report: Partial<DailyReport> & { id?: string }): DailyReport | null {
+  if (!report || !report.id || !report.date || !report.userId) return null;
+  return {
+    id: report.id,
+    date: report.date,
+    userId: report.userId,
+    note: typeof report.note === 'string' ? report.note : '',
+    entries: Array.isArray(report.entries) ? report.entries.map(entry => ({
+      taskId: entry.taskId,
+      startTime: entry.startTime ?? null,
+      endTime: entry.endTime ?? null,
+      durationMinutes: typeof entry.durationMinutes === 'number' ? entry.durationMinutes : null,
+      note: entry.note,
+    })) : [],
+    sentAt: report.sentAt ?? null,
+    sentBy: report.sentBy ?? null,
+    autoSent: Boolean(report.autoSent),
+    editHistory: Array.isArray(report.editHistory) ? report.editHistory.map(version => ({
+      id: version.id,
+      editedBy: version.editedBy,
+      editedAt: version.editedAt,
+      previousNote: version.previousNote ?? null,
+      nextNote: version.nextNote ?? null,
+      changedEntries: Array.isArray(version.changedEntries) ? version.changedEntries : [],
+      autoSent: Boolean(version.autoSent),
+    })) : [],
+    createdAt: report.createdAt || new Date().toISOString(),
+    updatedAt: report.updatedAt || new Date().toISOString(),
+  };
+}
+
+function mergeDailyReportIntoState(currentReports: DailyReport[], incomingReport: DailyReport) {
+  let changed = false;
+  const nextReports = currentReports.map(report => {
+    if (report.id !== incomingReport.id) return report;
+    if (new Date(report.updatedAt).getTime() > new Date(incomingReport.updatedAt).getTime()) return report;
+    if (dailyReportSyncKey(report) === dailyReportSyncKey(incomingReport)) return report;
+    changed = true;
+    return incomingReport;
+  });
+
+  if (!currentReports.some(report => report.id === incomingReport.id)) {
+    changed = true;
+    nextReports.unshift(incomingReport);
+  }
+
+  return changed ? nextReports : currentReports;
+}
+
+function mergeDailyReportsIntoState(currentReports: DailyReport[], incomingReports: DailyReport[]) {
+  return incomingReports.reduce(mergeDailyReportIntoState, currentReports);
+}
+
+const DAILY_REPORT_LOCALSTORAGE_PREFIX = 'national-care-daily-report-';
+
+function migrateDailyReportsFromLocalStorage(): DailyReport[] {
+  if (typeof window === 'undefined' || !window.localStorage) return [];
+  const reports: DailyReport[] = [];
+  for (let i = 0; i < window.localStorage.length; i += 1) {
+    const key = window.localStorage.key(i);
+    if (!key || !key.startsWith(DAILY_REPORT_LOCALSTORAGE_PREFIX)) continue;
+    const raw = window.localStorage.getItem(key);
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw) as { note?: string; savedAt?: string; sentAt?: string | null };
+      const remainder = key.slice(DAILY_REPORT_LOCALSTORAGE_PREFIX.length);
+      const lastDash = remainder.lastIndexOf('-');
+      if (lastDash < 0) continue;
+      const date = remainder.slice(0, lastDash);
+      const userId = remainder.slice(lastDash + 1);
+      if (!date || !userId) continue;
+      reports.push({
+        id: `${date}:${userId}`,
+        date,
+        userId,
+        note: parsed.note || '',
+        entries: [],
+        sentAt: parsed.sentAt || null,
+        sentBy: null,
+        autoSent: false,
+        editHistory: [],
+        createdAt: parsed.savedAt || new Date().toISOString(),
+        updatedAt: parsed.savedAt || new Date().toISOString(),
+      });
+      window.localStorage.removeItem(key);
+    } catch {
+      // Ignore bad localStorage entries.
+    }
+  }
+  return reports;
+}
+
 async function uploadMigratedTaskFiles(task: Task): Promise<Task> {
   const versions = await Promise.all(task.versions.map(async version => {
     if (!version.files || version.files.length === 0) return version;
@@ -560,6 +699,7 @@ interface AppState {
   users: Record<string, User>;
   userList: User[];
   notifications: Notification[];
+  dailyReports: DailyReport[];
   persistenceMode: 'neon' | 'drive' | 'local';
   persistenceError: string | null;
   localMigrationCount: number;
@@ -577,10 +717,15 @@ interface AppContextType extends AppState {
   updateTaskStatus: (taskId: string, newStatus: TaskStatus, newOwnerRole: Role | null, newOwnerUserIds?: string[]) => void;
   toggleTaskHold: (taskId: string) => void;
   updateTaskPriority: (taskId: string, priority: Priority, deadline: string | null) => void;
+  updateTaskBasicDetails: (taskId: string, input: { name: string; description?: string; taskType: string; priority: Priority; deadlineAt?: string | null; assignmentDate?: string | null }) => void;
   updateTaskAssignment: (taskId: string, handledByIds: string[], currentOwnerUserIds: string[]) => void;
   updateTaskReviewMode: (taskId: string, reviewMode: ReviewMode) => void;
+  updateTaskActiveWork: (taskId: string, active: boolean, note?: string) => void;
   applyTaskWorkflow: (taskId: string, workflowId: string, phaseId?: string) => void;
   approveWorkflowPhase: (taskId: string, note?: string) => void;
+  rejectWorkflowPhase: (taskId: string, note?: string) => void;
+  skipWorkflowPhase: (taskId: string) => void;
+  manuallyApproveTask: (taskId: string, note?: string) => void;
   updateTaskPublishSchedule: (taskId: string, schedule: { scheduledPublishAt: string | null; publishNote: string | null }) => void;
   markCampaignPublished: (taskId: string) => void;
   markPublishReminderSent: (taskId: string) => void;
@@ -589,6 +734,7 @@ interface AppContextType extends AppState {
   editScheduledCampaign: (taskId: string, input: { name: string; taskType: 'campaign' | 'media_buying'; scheduledPublishAt: string; publishNote?: string | null; platform?: string | null; budgetAmount?: number | null; budgetCurrency?: string | null }) => void;
   createWorkAssignment: (input: WorkAssignmentInput) => void;
   updateWorkAssignment: (taskId: string, input: WorkAssignmentInput) => void;
+  deleteWorkAssignment: (taskId: string) => void;
   updateTaskContentRevisionAssignees: (taskId: string, assigneeIds: string[]) => void;
   submitWorkAssignmentUpload: (taskId: string, payload: WorkAssignmentUploadPayload) => void;
   addTaskComment: (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => void;
@@ -601,10 +747,16 @@ interface AppContextType extends AppState {
   addNotification: (notification: Omit<Notification, 'id' | 'createdAt' | 'read'>) => void;
   addNotifications: (userIds: string[], taskId: string, message: string) => void;
   markNotificationAsRead: (id: string) => void;
+  upsertDailyReport: (report: { date: string; userId: string; note?: string; entries?: DailyReportEntry[] }) => DailyReport | null;
+  upsertDailyReportEntry: (reportId: string, taskId: string, patch: { startTime?: string | null; endTime?: string | null; note?: string }) => void;
+  sendDailyReport: (reportId: string, options?: { auto?: boolean; actorId?: string }) => void;
+  setTaskActiveWorkByLeader: (taskId: string, memberId: string | null) => void;
   loginWithPassword: (identifier: string, password: string) => Promise<AuthActionResult>;
   signupWithEmail: (email: string, password: string, name?: string) => Promise<AuthActionResult>;
   updateUserRole: (userId: string, role: Role) => void;
   updateUserResponsibility: (userId: string, responsibility: string, permissionRole?: Role) => void;
+  createManualUser: (input: { name: string; email?: string; role?: Role; jobTitle?: string; password?: string }) => void;
+  updateUserProfile: (userId: string, input: { name: string; email?: string; role?: Role; jobTitle?: string; password?: string }) => void;
   addCustomResponsibility: (responsibility: string) => void;
   getEffectiveReviewMode: (taskType: string, isContentCreatorTask: boolean, selectedMode: 'full_review' | 'quick_look' | 'direct_to_ad') => 'full_review' | 'quick_look' | 'direct_to_ad';
   updateAppSettings: (updater: AppSettings | ((settings: AppSettings) => AppSettings)) => void;
@@ -623,20 +775,52 @@ interface AppContextType extends AppState {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+const normalizeLoginIdentifier = (value: string) => value.trim().toLowerCase();
+
+async function hashToolPassword(password: string) {
+  const value = password.trim();
+  if (!value) return '';
+
+  const data = new TextEncoder().encode(`national-care-tool-login:${value}`);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest))
+    .map(byte => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const hasLoadedPersistedState = useRef(false);
   const sharedDataLoadFailedRef = useRef(false);
   const pendingTaskBroadcastIdsRef = useRef<Set<string>>(new Set());
   const pendingNotificationBroadcastIdsRef = useRef<Set<string>>(new Set());
   const pendingSettingsBroadcastRef = useRef(false);
+  const pendingDailyReportBroadcastIdsRef = useRef<Set<string>>(new Set());
   const linkedMetadataBackfillAttemptsRef = useRef<Set<string>>(new Set());
+  const dailyReportMigratedRef = useRef(false);
   const [accountProfiles, setAccountProfiles] = useState<AccountProfile[]>([]);
   const [customResponsibilities, setCustomResponsibilities] = useState<string[]>([]);
   const [appSettings, setAppSettings] = useState<AppSettings>(() => mergeAppSettings(defaultAppSettings));
   const [authProfile, setAuthProfile] = useState<AccountProfile | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>('loading');
   const [authError, setAuthError] = useState<string | null>(null);
-  const [userList, setUserList] = useState<User[]>([]);
+  const [profileUserList, setProfileUserList] = useState<User[]>([]);
+  const manualUserList = Array.isArray(appSettings.manualUsers) ? appSettings.manualUsers : [];
+  const userList = React.useMemo(() => {
+    const manualEmails = new Set(
+      manualUserList
+        .map(user => normalizeLoginIdentifier(user.email || ''))
+        .filter(Boolean)
+    );
+    const visibleProfiles = profileUserList.filter(user => {
+      const email = normalizeLoginIdentifier(user.email || '');
+      return !email || !manualEmails.has(email);
+    });
+    const profileIds = new Set(visibleProfiles.map(user => user.id));
+    return [
+      ...visibleProfiles,
+      ...manualUserList.filter(user => !profileIds.has(user.id)),
+    ];
+  }, [profileUserList, manualUserList]);
   const usersObj = userList.reduce((acc, user) => {
     acc[user.id] = user;
     return acc;
@@ -646,6 +830,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [environment, setEnvironment] = useState<Environment>('production');
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [dailyReports, setDailyReports] = useState<DailyReport[]>([]);
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [localMigrationState, setLocalMigrationState] = useState<{ tasks: Task[]; notifications: Notification[] } | null>(null);
   const [isMigratingLocalData, setIsMigratingLocalData] = useState(false);
@@ -699,6 +884,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     pendingSettingsBroadcastRef.current = true;
   };
 
+  const queueDailyReportBroadcast = (reportId: string) => {
+    pendingDailyReportBroadcastIdsRef.current.add(reportId);
+  };
+
   const fetchProfiles = async () => {
     try {
       const { data, error } = await supabase.from('profiles').select('*');
@@ -715,7 +904,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           jobTitle: profile.job_title || userRoleLabels[profile.role] || 'Content Creator',
           isAdmin: profile.is_admin,
         }));
-        setUserList(list);
+        setProfileUserList(list);
         
         const profilesList: AccountProfile[] = data.map(profile => ({
           id: profile.id,
@@ -739,6 +928,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const fetchSettings = async () => {
+    if (USE_NEON_DATA) {
+      try {
+        const neonState = await fetchNeonAppState();
+        if (neonState?.settings) {
+          setAppSettings(mergeAppSettings(neonState.settings));
+          return;
+        }
+      } catch (err) {
+        console.warn('Exception loading settings from Neon before login, trying Supabase settings:', err);
+      }
+    }
+
     try {
       const { data, error } = await supabase.from('app_settings').select('settings').eq('id', 'current').single();
       if (data?.settings) {
@@ -754,9 +955,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let isMounted = true;
+    const codexPreviewAuth = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('codexPreview') === '1';
     
     fetchProfiles();
     fetchSettings();
+
+    if (codexPreviewAuth) {
+      setCurrentUserState({
+        id: MINA_ID,
+        email: 'minamagdy5555@gmail.com',
+        name: 'Mina M. Bashir',
+        role: 'reviewer',
+        jobTitle: 'Senior Brand Designer & Video Editor',
+        isAdmin: true,
+      });
+      setAuthStatus('approved');
+      return () => {
+        isMounted = false;
+      };
+    }
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!isMounted) return;
@@ -845,6 +1062,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setAppSettings(mergeAppSettings(localState?.settings));
         setTasks(reviveWorkspaceTasks(localTasks, usersObj));
         setNotifications(Array.isArray(localState?.notifications) ? removeGuestSeedNotifications(localState.notifications) : []);
+        const storedReports = Array.isArray(localState?.dailyReports) ? localState.dailyReports.map(coerceDailyReport).filter(Boolean) as DailyReport[] : [];
+        let mergedReports = storedReports;
+        if (!dailyReportMigratedRef.current) {
+          dailyReportMigratedRef.current = true;
+          const migratedReports = migrateDailyReportsFromLocalStorage();
+          if (migratedReports.length > 0) {
+            mergedReports = mergeDailyReportsIntoState(storedReports, migratedReports);
+          }
+        }
+        setDailyReports(mergedReports);
         setLocalMigrationState(null);
         setPersistenceError(null);
       })
@@ -970,11 +1197,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const sharedSettings = mergeAppSettings(neonState?.settings || localState?.settings);
         const localTasks = Array.isArray(localState?.tasks) ? localState.tasks.filter(task => !isGuestSeedTask(task) && !isPlaceholderTask(task)) : [];
         const localNotifications = Array.isArray(localState?.notifications) ? removeGuestSeedNotifications(localState.notifications) : [];
+        const sharedReports = Array.isArray(neonState?.dailyReports) ? neonState.dailyReports.map(coerceDailyReport).filter(Boolean) as DailyReport[] : [];
+        const localReports = Array.isArray(localState?.dailyReports) ? localState.dailyReports.map(coerceDailyReport).filter(Boolean) as DailyReport[] : [];
+        let combinedReports = mergeDailyReportsIntoState(sharedReports, localReports);
+        if (!dailyReportMigratedRef.current) {
+          dailyReportMigratedRef.current = true;
+          const migratedReports = migrateDailyReportsFromLocalStorage();
+          if (migratedReports.length > 0) {
+            combinedReports = mergeDailyReportsIntoState(combinedReports, migratedReports);
+          }
+        }
 
         sharedDataLoadFailedRef.current = false;
         setAppSettings(sharedSettings);
         setTasks(sharedTasks);
         setNotifications(sharedNotifications);
+        setDailyReports(combinedReports);
         setLocalMigrationState(localTasks.length || localNotifications.length
           ? { tasks: localTasks, notifications: localNotifications }
           : null);
@@ -1027,6 +1265,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setAppSettings(sharedSettings);
         setTasks(sharedTasks);
         setNotifications(sharedNotifications);
+        const localReports = Array.isArray(localState?.dailyReports) ? localState.dailyReports.map(coerceDailyReport).filter(Boolean) as DailyReport[] : [];
+        let combinedReports = localReports;
+        if (!dailyReportMigratedRef.current) {
+          dailyReportMigratedRef.current = true;
+          const migratedReports = migrateDailyReportsFromLocalStorage();
+          if (migratedReports.length > 0) {
+            combinedReports = mergeDailyReportsIntoState(localReports, migratedReports);
+          }
+        }
+        setDailyReports(combinedReports);
         setLocalMigrationState(localTasks.length || localNotifications.length
           ? { tasks: localTasks, notifications: localNotifications }
           : null);
@@ -1052,7 +1300,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isNeonWorkspaceActive || !hasLoadedPersistedState.current || sharedDataLoadFailedRef.current) return;
 
-    saveNeonAppState({ tasks, notifications, settings: appSettings })
+    saveNeonAppState({ tasks, notifications, settings: appSettings, dailyReports })
       .then(() => {
         setPersistenceError(null);
       })
@@ -1061,7 +1309,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         sharedDataLoadFailedRef.current = true;
         setPersistenceError(getSharedDataErrorMessage(error, 'Failed to save Neon app state.'));
       });
-  }, [tasks, notifications, appSettings, isNeonWorkspaceActive]);
+  }, [tasks, notifications, appSettings, dailyReports, isNeonWorkspaceActive]);
 
   useEffect(() => {
     if (!isDriveWorkspaceReady || !hasLoadedPersistedState.current || sharedDataLoadFailedRef.current) return;
@@ -1104,7 +1352,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isLocalWorkspaceActive || !hasLoadedPersistedState.current) return;
 
-    saveAppState({ tasks, notifications, settings: appSettings })
+    saveAppState({ tasks, notifications, settings: appSettings, dailyReports })
       .then(() => {
         setPersistenceError(null);
       })
@@ -1112,7 +1360,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         console.error('Failed to save local demo workspace', error);
         setPersistenceError(getErrorMessage(error, 'Failed to save local demo workspace.'));
       });
-  }, [tasks, notifications, appSettings, isLocalWorkspaceActive]);
+  }, [tasks, notifications, appSettings, dailyReports, isLocalWorkspaceActive]);
 
   useEffect(() => {
     if (!isNeonWorkspaceActive) return;
@@ -1131,6 +1379,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         sharedDataLoadFailedRef.current = false;
         setTasks(prev => mergeTasksIntoState(prev.filter(task => !isGuestSeedTask(task) && !isPlaceholderTask(task)), reviveWorkspaceTasks(latestState.tasks || [], usersObj)));
         setNotifications(prev => mergeNotificationsIntoState(removeGuestSeedNotifications(prev), removeGuestSeedNotifications(latestState.notifications || [])));
+        if (Array.isArray(latestState.dailyReports)) {
+          setDailyReports(prev => mergeDailyReportsIntoState(prev, latestState.dailyReports!.map(coerceDailyReport).filter(Boolean) as DailyReport[]));
+        }
         if (latestState.settings) {
           setAppSettings(mergeAppSettings(latestState.settings));
         }
@@ -1219,6 +1470,103 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [isDriveWorkspaceReady, currentUser.id, driveRootFolder?.id]);
 
+  useEffect(() => {
+    if (authStatus !== 'approved' || !hasLoadedPersistedState.current) return;
+    if (appSettings.dailyReportAutoSendEnabled === false) return;
+    const sendTime = (appSettings.dailyReportAutoSendTime || '17:29').trim();
+    const [sh, sm] = sendTime.split(':').map(part => Number(part));
+    if (Number.isNaN(sh) || Number.isNaN(sm)) return;
+
+    const tick = () => {
+      const now = new Date();
+      const localTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      const targetMinutes = sh * 60 + sm;
+      const targetKey = `${today}:${sh}:${sm}`;
+      const warningKey = `${targetKey}:warning`;
+      const alreadyTicked = (() => {
+        try {
+          return window.sessionStorage.getItem('national-care-daily-report-auto-tick') === targetKey;
+        } catch {
+          return false;
+        }
+      })();
+      const alreadyWarned = (() => {
+        try {
+          return window.sessionStorage.getItem('national-care-daily-report-auto-warning') === warningKey;
+        } catch {
+          return false;
+        }
+      })();
+      const minutesUntilSend = targetMinutes - currentMinutes;
+      if (minutesUntilSend > 0 && minutesUntilSend <= 20 && !alreadyWarned) {
+        try {
+          window.sessionStorage.setItem('national-care-daily-report-auto-warning', warningKey);
+        } catch {
+          // Ignore storage errors.
+        }
+        const warningUserIds = Array.from(new Set([
+          currentUser.id,
+          ...userList.filter(user => user.id !== 'guest').map(user => user.id),
+        ]));
+        warningUserIds.forEach(userId => {
+          const reportId = `${today}:${userId}`;
+          const existing = dailyReports.find(report => report.id === reportId);
+          if (existing?.sentAt) return;
+          addNotifications(
+            [userId],
+            'daily-report',
+            `Your daily report for ${today} will auto-send at ${String(sh).padStart(2, '0')}:${String(sm).padStart(2, '0')}. Open it now to review before it is sent.`
+          );
+        });
+      }
+      if (localTime !== `${String(sh).padStart(2, '0')}:${String(sm).padStart(2, '0')}`) return;
+      if (alreadyTicked) return;
+      try {
+        window.sessionStorage.setItem('national-care-daily-report-auto-tick', targetKey);
+      } catch {
+        // Ignore storage errors.
+      }
+      const allUserIds = Array.from(new Set([
+        currentUser.id,
+        ...userList.filter(user => user.id !== 'guest').map(user => user.id),
+      ]));
+      allUserIds.forEach(userId => {
+        const reportId = `${today}:${userId}`;
+        const existing = dailyReports.find(report => report.id === reportId);
+        if (existing && existing.sentAt) return;
+        if (!existing) {
+          const nowIso = new Date().toISOString();
+          const newReport: DailyReport = {
+            id: reportId,
+            date: today,
+            userId,
+            note: '',
+            entries: [],
+            sentAt: nowIso,
+            sentBy: userId,
+            autoSent: true,
+            editHistory: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          };
+          queueDailyReportBroadcast(reportId);
+          setDailyReports(prev => mergeDailyReportIntoState(prev, newReport));
+          const receivers = getDailyReportReceiverIds(newReport, appSettings, userList);
+          const ownerName = usersObj[userId]?.name || userId;
+          addNotifications(receivers, 'daily-report', `${ownerName}'s daily report for ${today} was auto-sent.`);
+        } else {
+          sendDailyReport(reportId, { auto: true, actorId: userId });
+        }
+      });
+    };
+
+    tick();
+    const intervalId = window.setInterval(tick, 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [authStatus, appSettings.dailyReportAutoSendEnabled, appSettings.dailyReportAutoSendTime, dailyReports, currentUser.id, userList, appSettings, usersObj]);
+
   const addNotification = (notif: Omit<Notification, 'id' | 'createdAt' | 'read'>) => {
     const notification: Notification = {
       ...notif,
@@ -1234,6 +1582,182 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const addNotifications = (userIds: string[], taskId: string, message: string) => {
     Array.from(new Set(userIds)).forEach(userId => {
       addNotification({ userId, taskId, message });
+    });
+  };
+
+  const computeEntryDurationMinutes = (startTime?: string | null, endTime?: string | null) => {
+    if (!startTime) return null;
+    const [sh, sm] = startTime.split(':').map(part => Number(part));
+    if (Number.isNaN(sh) || Number.isNaN(sm)) return null;
+    const startMinutes = sh * 60 + sm;
+    let endMinutes: number;
+    if (endTime) {
+      const [eh, em] = endTime.split(':').map(part => Number(part));
+      if (Number.isNaN(eh) || Number.isNaN(em)) return null;
+      endMinutes = eh * 60 + em;
+    } else {
+      const now = new Date();
+      endMinutes = now.getHours() * 60 + now.getMinutes();
+    }
+    const diff = endMinutes - startMinutes;
+    return diff > 0 ? diff : 0;
+  };
+
+  const upsertDailyReport = (input: { date: string; userId: string; note?: string; entries?: DailyReportEntry[] }) => {
+    if (!input.date || !input.userId) return null;
+    const reportId = `${input.date}:${input.userId}`;
+    const now = new Date().toISOString();
+    let result: DailyReport | null = null;
+
+    setDailyReports(prev => {
+      const existing = prev.find(report => report.id === reportId);
+      const next: DailyReport = {
+        id: reportId,
+        date: input.date,
+        userId: input.userId,
+        note: input.note !== undefined ? input.note : (existing?.note || ''),
+        entries: Array.isArray(input.entries) ? input.entries : (existing?.entries || []),
+        sentAt: existing?.sentAt ?? null,
+        sentBy: existing?.sentBy ?? null,
+        autoSent: existing?.autoSent ?? false,
+        editHistory: existing?.editHistory || [],
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
+      };
+      result = next;
+      const nextReports = mergeDailyReportIntoState(prev, next);
+      if (nextReports === prev) return prev;
+      queueDailyReportBroadcast(reportId);
+      return nextReports;
+    });
+
+    return result;
+  };
+
+  const upsertDailyReportEntry = (reportId: string, taskId: string, patch: { startTime?: string | null; endTime?: string | null; note?: string }) => {
+    if (!reportId || !taskId) return;
+    const now = new Date().toISOString();
+    setDailyReports(prev => {
+      const report = prev.find(item => item.id === reportId) || (() => {
+        const [date, ...userIdParts] = reportId.split(':');
+        const userId = userIdParts.join(':');
+        return {
+          id: reportId,
+          date,
+          userId,
+          note: '',
+          entries: [],
+          sentAt: null,
+          sentBy: null,
+          autoSent: false,
+          editHistory: [],
+          createdAt: now,
+          updatedAt: now,
+        } as DailyReport;
+      })();
+      const previousEntry = report.entries.find(entry => entry.taskId === taskId) || null;
+      const previousStart = previousEntry?.startTime ?? null;
+      const previousEnd = previousEntry?.endTime ?? null;
+      const previousNote = previousEntry?.note ?? null;
+      const nextStart = patch.startTime !== undefined ? (patch.startTime || null) : previousStart;
+      const nextEnd = patch.endTime !== undefined ? (patch.endTime || null) : previousEnd;
+      const nextNote = patch.note !== undefined ? (patch.note || '') : (previousNote || '');
+      if (nextStart && nextEnd && nextStart > nextEnd) {
+        console.warn('End time must be after start time');
+        return prev;
+      }
+      const durationMinutes = computeEntryDurationMinutes(nextStart, nextEnd);
+      const entries = previousEntry
+        ? report.entries.map(entry => entry.taskId === taskId
+          ? { taskId, startTime: nextStart, endTime: nextEnd, durationMinutes, note: nextNote }
+          : entry)
+        : [...report.entries, { taskId, startTime: nextStart, endTime: nextEnd, durationMinutes, note: nextNote }];
+
+      const changedEntries: DailyReportEditVersion['changedEntries'] = [];
+      if (previousStart !== nextStart) {
+        changedEntries.push({ taskId, field: 'startTime', oldValue: previousStart, newValue: nextStart });
+      }
+      if (previousEnd !== nextEnd) {
+        changedEntries.push({ taskId, field: 'endTime', oldValue: previousEnd, newValue: nextEnd });
+      }
+      if (previousNote !== nextNote) {
+        changedEntries.push({ taskId, field: 'note', oldValue: previousNote, newValue: nextNote });
+      }
+
+      let editHistory = report.editHistory;
+      if (report.sentAt && changedEntries.length > 0) {
+        editHistory = [
+          ...editHistory,
+          {
+            id: Math.random().toString(36).substring(7),
+            editedBy: currentUser.id,
+            editedAt: now,
+            previousNote: report.note,
+            nextNote: report.note,
+            changedEntries,
+          },
+        ];
+      }
+
+      const updatedReport: DailyReport = {
+        ...report,
+        entries,
+        editHistory,
+        updatedAt: now,
+      };
+
+      const nextReports = mergeDailyReportIntoState(prev, updatedReport);
+      if (nextReports === prev) return prev;
+      queueDailyReportBroadcast(reportId);
+
+      if (report.sentAt && changedEntries.length > 0) {
+        const receivers = getDailyReportReceiverIds(updatedReport, appSettings, userList);
+        const summary = changedEntries
+          .map(change => {
+            if (change.field === 'startTime' || change.field === 'endTime') {
+              const task = tasks.find(item => item.id === change.taskId);
+              const label = task ? `${task.code} ${task.name}` : change.taskId;
+              return `${label} ${change.field === 'startTime' ? 'start' : 'end'} ${change.oldValue || 'unset'} -> ${change.newValue || 'unset'}`;
+            }
+            return `${change.taskId} note changed`;
+          })
+          .join('; ');
+        addNotifications(
+          receivers,
+          tasks.find(item => item.id === changedEntries[0]?.taskId)?.id || 'daily-report',
+          `${currentUser.name} updated their daily report for ${report.date}: ${summary}`
+        );
+      }
+
+      return nextReports;
+    });
+  };
+
+  const sendDailyReport = (reportId: string, options?: { auto?: boolean; actorId?: string }) => {
+    const now = new Date().toISOString();
+    const actorId = options?.actorId || currentUser.id;
+    setDailyReports(prev => {
+      const report = prev.find(item => item.id === reportId);
+      if (!report) return prev;
+      if (report.sentAt) return prev;
+      const updatedReport: DailyReport = {
+        ...report,
+        sentAt: now,
+        sentBy: actorId,
+        autoSent: Boolean(options?.auto),
+        updatedAt: now,
+      };
+      const receivers = getDailyReportReceiverIds(updatedReport, appSettings, userList);
+      const ownerName = usersObj[report.userId]?.name || initialUsers.find(user => user.id === report.userId)?.name || 'Member';
+      addNotifications(
+        receivers,
+        tasks.find(item => item.id === report.entries[0]?.taskId)?.id || 'daily-report',
+        `${ownerName}'s daily report for ${report.date} was ${options?.auto ? 'auto-sent' : 'sent'}.`
+      );
+      const nextReports = mergeDailyReportIntoState(prev, updatedReport);
+      if (nextReports === prev) return prev;
+      queueDailyReportBroadcast(reportId);
+      return nextReports;
     });
   };
 
@@ -1415,7 +1939,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ? uniqueIds(configuredReviewerIds)
       : uniqueIds(getFallbackOwnerIdsForWorkflowPhase(getPhaseOwnerRole(phase), task));
     const approvedIds = nextApprovals[phase.id] || [];
-    const phaseComplete = allReviewerIds.length === 0 || allReviewerIds.every(userId => approvedIds.includes(userId));
+    const requiredApprovals = typeof phase.requiredApprovals === 'number' && phase.requiredApprovals > 0
+      ? phase.requiredApprovals
+      : (allReviewerIds.length || 1);
+    const phaseComplete = approvedIds.length >= requiredApprovals;
     const now = new Date().toISOString();
     const approvedHistory: WorkflowPhaseHistoryEntry[] = [
       ...(task.workflowPhaseHistory || []),
@@ -1443,7 +1970,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       };
     }
 
-    const completedHistory: WorkflowPhaseHistoryEntry[] = [
+    let completedHistory: WorkflowPhaseHistoryEntry[] = [
       ...approvedHistory,
       {
         phaseId: phase.id,
@@ -1453,12 +1980,57 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: now,
       },
     ];
-    const nextPhaseIndex = phaseIndex + 1;
-    if (nextPhaseIndex < workflow.phases.length) {
-      return buildTaskWithWorkflowPhase({
+    let nextIndex = phase.passToPhaseId
+      ? getWorkflowPhaseIndex(workflow, phase.passToPhaseId)
+      : getNextPhaseIndex(workflow, phaseIndex, { ...task, workflowPhaseApprovals: nextApprovals });
+    if (nextIndex < 0) {
+      nextIndex = getNextPhaseIndex(workflow, phaseIndex, { ...task, workflowPhaseApprovals: nextApprovals });
+    }
+
+    while (nextIndex < workflow.phases.length) {
+      const candidate = workflow.phases[nextIndex];
+      if (candidate.nodeType !== 'step') {
+        completedHistory = [...completedHistory, {
+          phaseId: candidate.id,
+          phaseName: candidate.name,
+          action: 'skipped',
+          actorId,
+          createdAt: now,
+          note: 'Non-step node skipped automatically.',
+        }];
+        nextIndex += 1;
+        continue;
+      }
+      if (evaluateSkipRule(candidate.skipRule, { ...task, workflowPhaseApprovals: nextApprovals })) {
+        completedHistory = [...completedHistory, {
+          phaseId: candidate.id,
+          phaseName: candidate.name,
+          action: 'skipped',
+          actorId,
+          createdAt: now,
+          note: `Skipped by rule: ${candidate.skipRule}.`,
+        }];
+        nextIndex = getNextPhaseIndex(workflow, nextIndex, { ...task, workflowPhaseApprovals: nextApprovals });
+        continue;
+      }
+      break;
+    }
+
+    if (nextIndex < workflow.phases.length) {
+      const targetPhase = workflow.phases[nextIndex];
+      const availableAt = computePhaseAvailableAt(now, targetPhase.delayDays, appSettings.businessCalendar);
+      const routedTask = buildTaskWithWorkflowPhase({
         ...task,
         workflowPhaseApprovals: nextApprovals,
-      }, workflow, nextPhaseIndex, nextApprovals, completedHistory, actorId);
+      }, workflow, nextIndex, nextApprovals, completedHistory, actorId);
+      if (availableAt && new Date(availableAt).getTime() > Date.now()) {
+        return {
+          ...routedTask,
+          workflowPhaseAvailableAt: availableAt,
+          updatedAt: now,
+        };
+      }
+      return routedTask;
     }
 
     return {
@@ -1503,6 +2075,61 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const loginWithPassword = async (identifier: string, password: string): Promise<AuthActionResult> => {
     if (!identifier.trim() || !password.trim()) {
       return { ok: false, message: 'Enter your email or account name and password.' };
+    }
+
+    const normalizedIdentifier = normalizeLoginIdentifier(identifier);
+    let toolManagedUsers = manualUserList;
+    let manualUser = toolManagedUsers.find(user => {
+      const email = normalizeLoginIdentifier(user.email || '');
+      const name = normalizeLoginIdentifier(user.name);
+      return normalizedIdentifier === email || normalizedIdentifier === name;
+    });
+
+    if (!manualUser && USE_NEON_DATA) {
+      try {
+        const neonState = await fetchNeonAppState();
+        const sharedSettings = mergeAppSettings(neonState?.settings);
+        setAppSettings(sharedSettings);
+        toolManagedUsers = sharedSettings.manualUsers || [];
+        manualUser = toolManagedUsers.find(user => {
+          const email = normalizeLoginIdentifier(user.email || '');
+          const name = normalizeLoginIdentifier(user.name);
+          return normalizedIdentifier === email || normalizedIdentifier === name;
+        });
+      } catch (err) {
+        console.warn('Could not load Neon users during login fallback:', err);
+      }
+    }
+
+    if (manualUser) {
+      if (!manualUser.passwordHash) {
+        return { ok: false, message: 'This member has no tool password yet. Ask an admin to set one in Members Roles and Positions.' };
+      }
+
+      const passwordHash = await hashToolPassword(password);
+      if (passwordHash !== manualUser.passwordHash) {
+        return { ok: false, message: 'Invalid email/name or password.' };
+      }
+
+      setAuthError(null);
+      setAuthProfile({
+        id: manualUser.id,
+        email: manualUser.email || '',
+        name: manualUser.name,
+        role: manualUser.role,
+        jobTitle: manualUser.jobTitle,
+        requestedRole: manualUser.role,
+        approvalStatus: 'approved',
+        isAdmin: Boolean(manualUser.isAdmin),
+        legacyId: manualUser.legacyId || null,
+        approvedBy: 'tool',
+        approvedAt: manualUser.passwordUpdatedAt || new Date().toISOString(),
+        createdAt: manualUser.passwordUpdatedAt || new Date().toISOString(),
+        updatedAt: manualUser.passwordUpdatedAt || new Date().toISOString(),
+      });
+      setCurrentUserState(manualUser);
+      setAuthStatus('approved');
+      return { ok: true };
     }
 
     let email = identifier.trim();
@@ -1569,6 +2196,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const updateUserResponsibility = async (userId: string, responsibility: string, permissionRole: Role = 'team_member') => {
     const jobTitle = responsibility.trim() || getResponsibilityLabelForRole(appSettings, permissionRole) || 'Content Creator';
+
+    if (manualUserList.some(user => user.id === userId)) {
+      await updateAppSettings(settings => ({
+        ...settings,
+        manualUsers: (settings.manualUsers || []).map(user => (
+          user.id === userId
+            ? { ...user, role: permissionRole, jobTitle }
+            : user
+        )),
+      }));
+      if (currentUser.id === userId) {
+        setCurrentUserState(prev => ({ ...prev, role: permissionRole, jobTitle }));
+      }
+      return;
+    }
     
     const { error } = await supabase
       .from('profiles')
@@ -1593,6 +2235,92 @@ export function AppProvider({ children }: { children: ReactNode }) {
         jobTitle,
       }));
     }
+  };
+
+  const createManualUser = async (input: { name: string; email?: string; role?: Role; jobTitle?: string; password?: string }) => {
+    const name = input.name.trim();
+    if (!name || !canManageSettings) return;
+    const passwordHash = input.password?.trim() ? await hashToolPassword(input.password) : undefined;
+    const now = new Date().toISOString();
+
+    const user: User = {
+      id: `manual_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      email: input.email?.trim() || undefined,
+      role: input.role || 'team_member',
+      jobTitle: input.jobTitle?.trim() || 'Team Member',
+      isAdmin: false,
+      passwordHash,
+      passwordUpdatedAt: passwordHash ? now : undefined,
+    };
+
+    await updateAppSettings(settings => ({
+      ...settings,
+      manualUsers: [...(settings.manualUsers || []), user],
+    }));
+    addNotification({
+      userId: user.id,
+      taskId: 'members',
+      message: `${currentUser.name} added you to Members Roles and Positions as ${user.jobTitle}.`,
+    });
+  };
+
+  const updateUserProfile = async (userId: string, input: { name: string; email?: string; role?: Role; jobTitle?: string; password?: string }) => {
+    const name = input.name.trim();
+    if (!name || !canManageSettings) return;
+
+    const role = input.role || usersObj[userId]?.role || 'team_member';
+    const jobTitle = input.jobTitle?.trim() || usersObj[userId]?.jobTitle || getResponsibilityLabelForRole(appSettings, role) || 'Team Member';
+    const email = input.email?.trim() || undefined;
+    const passwordHash = input.password?.trim() ? await hashToolPassword(input.password) : undefined;
+    const passwordUpdatedAt = passwordHash ? new Date().toISOString() : undefined;
+
+    if (manualUserList.some(user => user.id === userId)) {
+      await updateAppSettings(settings => ({
+        ...settings,
+        manualUsers: (settings.manualUsers || []).map(user => (
+          user.id === userId
+            ? { ...user, name, email, role, jobTitle, ...(passwordHash ? { passwordHash, passwordUpdatedAt } : {}) }
+            : user
+        )),
+      }));
+      if (currentUser.id === userId) {
+        setCurrentUserState(prev => ({ ...prev, name, email, role, jobTitle, ...(passwordHash ? { passwordHash, passwordUpdatedAt } : {}) }));
+      }
+      addNotification({
+        userId,
+        taskId: 'members',
+        message: `${currentUser.name} updated your member role, position, or responsibilities.`,
+      });
+      return;
+    }
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        name,
+        email: email || null,
+        role,
+        job_title: jobTitle,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', userId);
+
+    if (error) {
+      console.error('Failed to update user profile in Supabase', error);
+      return;
+    }
+
+    await fetchProfiles();
+
+    if (currentUser.id === userId) {
+      setCurrentUserState(prev => ({ ...prev, name, email, role, jobTitle }));
+    }
+    addNotification({
+      userId,
+      taskId: 'members',
+      message: `${currentUser.name} updated your member role, position, or responsibilities.`,
+    });
   };
 
   const addCustomResponsibility = async (responsibility: string) => {
@@ -1647,6 +2375,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteUserAccount = async (userId: string) => {
+    if (manualUserList.some(user => user.id === userId)) {
+      await updateAppSettings(settings => {
+        const removeUserId = (ids: string[] = []) => ids.filter(id => id !== userId);
+        return {
+          ...settings,
+          manualUsers: (settings.manualUsers || []).filter(user => user.id !== userId),
+          settingsManagerUserIds: removeUserId(settings.settingsManagerUserIds),
+          workAssignmentCreatorIds: removeUserId(settings.workAssignmentCreatorIds),
+          contributorAssignerIds: removeUserId(settings.contributorAssignerIds),
+          neverHandlerIds: removeUserId(settings.neverHandlerIds),
+          selfAssignmentBlockedIds: removeUserId(settings.selfAssignmentBlockedIds),
+          videoOnlyHandlerIds: removeUserId(settings.videoOnlyHandlerIds),
+          alwaysAssignableHandlerIds: removeUserId(settings.alwaysAssignableHandlerIds),
+          firstReviewerUserIds: removeUserId(settings.firstReviewerUserIds || []),
+          finalReviewerUserIds: removeUserId(settings.finalReviewerUserIds || []),
+          viewAllWorkloadUserIds: removeUserId(settings.viewAllWorkloadUserIds || []),
+          customPermissions: (settings.customPermissions || []).map(permission => ({
+            ...permission,
+            userIds: removeUserId(permission.userIds),
+          })),
+          workflows: (settings.workflows || []).map(workflow => ({
+            ...workflow,
+            phases: workflow.phases.map(phase => ({
+              ...phase,
+              userIds: removeUserId(phase.userIds),
+            })),
+          })),
+        };
+      });
+      return;
+    }
+
     const { error } = await supabase
       .from('profiles')
       .delete()
@@ -1833,13 +2593,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ]);
 
       if (newStatus === 'approved_by_art_director' && task.status !== newStatus) {
-        addNotifications(allRecipients, taskId, `Final Approvement approved "${task.name}".`);
+        addNotifications(allRecipients, taskId, `Art Director approved "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_reviewer' && task.status !== newStatus) {
         addNotifications(allRecipients, taskId, `Reviewer requested changes on "${task.name}".`);
       } else if (newStatus === 'changes_requested_by_art_director' && task.status !== newStatus) {
-        addNotifications(allRecipients, taskId, `Final Approvement rejected "${task.name}" and requested changes.`);
+        addNotifications(allRecipients, taskId, `Art Director rejected "${task.name}" and requested changes.`);
       } else if ((newStatus === 'reviewer_approved' || newStatus === 'sent_to_art_director') && task.status !== newStatus) {
-        addNotifications(allRecipients, taskId, `Reviewer approved "${task.name}" and sent to Final Approvement.`);
+        addNotifications(allRecipients, taskId, `Reviewer approved "${task.name}" and sent to Art Director.`);
       }
     }
 
@@ -1895,6 +2655,97 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }));
   };
 
+  const updateTaskActiveWork = (taskId: string, active: boolean, note?: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    const isAssignee = task.handledBy.includes(currentUser.id);
+    const isHighboardOrLeader = canSetActiveWorkForMember(currentUser);
+    if (!isAssignee && !isHighboardOrLeader) return;
+
+    const now = new Date().toISOString();
+    const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
+    const reviewerIds = uniqueIds([
+      ...getUserIdsByRole(userList, ['reviewer', 'admin']),
+      ...(appSettings.firstReviewerUserIds || []),
+    ]);
+    const artDirectorIds = uniqueIds([
+      ...getUserIdsByRole(userList, ['art_director']),
+      ...(appSettings.finalReviewerUserIds || []),
+    ]);
+    const recipients = uniqueIds([
+      task.createdBy,
+      ...task.handledBy,
+      ...(task.contentRevisionAssigneeIds || []),
+      ...teamLeaderIds,
+      ...reviewerIds,
+      ...artDirectorIds,
+    ]).filter(userId => userId !== currentUser.id);
+
+    addNotifications(
+      recipients,
+      taskId,
+      active
+        ? `${currentUser.name} started working on "${task.name}".`
+        : `${currentUser.name} finished active work on "${task.name}".`
+    );
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      const prevStarter = t.activeWorkBy;
+      const prevFinisher = t.activeWorkFinishedById;
+      return addAuditComment({
+        ...t,
+        activeWorkBy: active ? currentUser.id : t.activeWorkBy,
+        activeWorkStartedAt: active ? now : t.activeWorkStartedAt,
+        activeWorkFinishedAt: active ? null : now,
+        activeWorkFinishedById: active ? null : currentUser.id,
+        activeWorkNote: note?.trim() || t.activeWorkNote || null,
+        updatedAt: now,
+      }, currentUser.id, active ? 'active_work_started' : 'active_work_finished', active ? 'Marked as actively working.' : 'Marked active work as finished.', now);
+    }));
+  };
+
+  const setTaskActiveWorkByLeader = (taskId: string, memberId: string | null) => {
+    if (!canSetActiveWorkForMember(currentUser)) return;
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+    const now = new Date().toISOString();
+
+    if (!memberId) {
+      queueTaskBroadcast(taskId);
+      setTasks(prev => prev.map(t => (
+        t.id !== taskId
+          ? t
+          : addAuditComment({
+              ...t,
+              activeWorkSetById: null,
+              activeWorkSetAt: null,
+              updatedAt: now,
+            }, currentUser.id, 'assignment_change', `${currentUser.name} cleared the active task marker.`, now)
+      )));
+      return;
+    }
+
+    addNotifications(
+      [memberId],
+      taskId,
+      `${currentUser.name} set "${task.name}" as your active task.`
+    );
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      return addAuditComment({
+        ...t,
+        activeWorkSetById: currentUser.id,
+        activeWorkSetAt: now,
+        updatedAt: now,
+      }, currentUser.id, 'assignment_change', `${currentUser.name} set this task as active for ${getUserDisplayName(usersObj, memberId)}.`, now);
+    }));
+  };
+
   const updateTaskPriority = (taskId: string, priority: Priority, deadline: string | null) => {
     queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(t => {
@@ -1944,7 +2795,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const shouldUpdateStatus = canReviewRouteUpdateStatus(task);
     const nextOwnerRole = shouldUpdateStatus ? target.ownerRole : task.currentOwnerRole;
     const nextOwnerIds = shouldUpdateStatus ? getDefaultOwnerIdsForRole(target.ownerRole, task) : getCurrentOwnerUserIds(task);
-    const reviewerLabel = reviewMode === 'full_review' ? 'Full Review' : reviewMode === 'quick_look' ? 'Quick Look' : 'Direct to Final Approvement';
+    const reviewerLabel = reviewMode === 'full_review' ? 'Full Review' : reviewMode === 'quick_look' ? 'Quick Look' : 'Direct to Art Director';
 
     if (shouldUpdateStatus && nextOwnerIds.length > 0) {
       addNotifications(nextOwnerIds, taskId, `"${task.name}" is now routed to ${reviewerLabel}.`);
@@ -1964,6 +2815,73 @@ export function AppProvider({ children }: { children: ReactNode }) {
         updatedAt: now,
       };
       return addAuditComment(updatedTask, currentUser.id, 'review_route_change', `Review route changed to ${reviewerLabel}.`, now);
+    }));
+  };
+
+  const updateTaskBasicDetails = (taskId: string, input: { name: string; description?: string; taskType: string; priority: Priority; deadlineAt?: string | null; assignmentDate?: string | null }) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    const today = new Date();
+    const todayValue = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    if (input.assignmentDate && input.assignmentDate < todayValue) {
+      console.warn('Assignment date cannot be in the past.');
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const isLiveTask = !['assigned_work', 'draft', 'approved_by_art_director', 'completed', 'archived'].includes(task.status);
+    const typeChanged = input.taskType && input.taskType !== task.taskType;
+    const diffs = buildTaskEditDiff(task, {
+      name: input.name.trim() || task.name,
+      description: input.description ?? task.description,
+      taskType: input.taskType,
+      priority: input.priority,
+      assignmentDate: input.assignmentDate,
+      deadlineAt: input.deadlineAt,
+    });
+
+    const recipients = uniqueIds([
+      task.createdBy,
+      ...task.handledBy,
+      ...(task.contentRevisionAssigneeIds || []),
+      ...getCurrentOwnerUserIds(task),
+    ]).filter(userId => userId !== currentUser.id);
+
+    const summary = diffs.length > 0 ? diffs.join('; ') : 'no changes';
+    if (recipients.length > 0) {
+      addNotifications(recipients, taskId, `${currentUser.name} edited "${task.name}": ${summary}`);
+    }
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      let nextOwners: string[] = t.currentOwnerUserIds;
+      let nextRole = t.currentOwnerRole;
+      const newWorkflow = typeChanged ? getWorkflowBySelection(input.taskType, t.workflowId) : null;
+      if (isLiveTask && typeChanged && newWorkflow) {
+        const phase = newWorkflow.phases[0] || null;
+        if (phase) {
+          nextRole = getPhaseOwnerRole(phase);
+          nextOwners = resolveWorkflowPhaseReviewerIds(phase, appSettings, userList, { ...t, taskType: input.taskType, workflowSnapshot: cloneWorkflow(newWorkflow) });
+        }
+      }
+      const updatedTask = {
+        ...t,
+        name: input.name.trim() || t.name,
+        description: input.description ?? t.description,
+        taskType: input.taskType || t.taskType,
+        priority: input.priority,
+        deadlineAt: input.deadlineAt || null,
+        assignmentDate: input.assignmentDate || t.assignmentDate || null,
+        currentOwnerRole: typeChanged ? nextRole : t.currentOwnerRole,
+        currentOwnerUserIds: typeChanged ? nextOwners : t.currentOwnerUserIds,
+        currentOwnerUserId: typeChanged ? (nextOwners[0] || null) : t.currentOwnerUserId,
+        workflowId: typeChanged ? (newWorkflow?.id || t.workflowId) : t.workflowId,
+        workflowSnapshot: typeChanged ? (newWorkflow ? cloneWorkflow(newWorkflow) : t.workflowSnapshot) : t.workflowSnapshot,
+        updatedAt: now,
+      };
+      return addAuditComment(updatedTask, currentUser.id, 'assignment_change', `Task edited by ${currentUser.name}: ${summary}.`, now);
     }));
   };
 
@@ -2026,6 +2944,183 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ...updatedTask,
         updatedAt: now,
       }, currentUser.id, beforePhase?.reviewStyle === 'final_approval' ? 'sent_to_marwa' : 'review_note', note || `${beforePhase?.name || 'Review phase'} approved.`, now);
+    }));
+  };
+
+  const rejectWorkflowPhase = (taskId: string, noteText?: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+    const workflow = task.workflowSnapshot || getWorkflowBySelection(task.taskType, task.workflowId);
+    if (!workflow || workflow.phases.length === 0) return;
+    const phase = getWorkflowPhase(task);
+    if (!phase) return;
+    const now = new Date().toISOString();
+    const rejectionTargetId = phase.failToPhaseId || phase.returnToPhaseId || null;
+    const revisionKey = rejectionTargetId || phase.id;
+    const previousRevisions = (task.workflowPhaseRevisionCounts || {})[revisionKey] || 0;
+    const newRevisions = previousRevisions + 1;
+    const reachedMax = typeof phase.maxRevisionRounds === 'number' && phase.maxRevisionRounds > 0 && newRevisions > phase.maxRevisionRounds;
+    const fallbackStatus: TaskStatus = phase.reviewStyle === 'final_approval' || (phase.roleIds || []).includes('art_director')
+      ? 'changes_requested_by_art_director'
+      : 'changes_requested_by_reviewer';
+
+    let routedTask: Task;
+    if (rejectionTargetId) {
+      const targetIndex = getWorkflowPhaseIndex(workflow, rejectionTargetId);
+      if (targetIndex >= 0) {
+        const targetPhase = workflow.phases[targetIndex];
+        const clearedApprovals = { ...(task.workflowPhaseApprovals || {}) };
+        delete clearedApprovals[targetPhase.id];
+        const returnHistory: WorkflowPhaseHistoryEntry[] = [
+          ...(task.workflowPhaseHistory || []),
+          {
+            phaseId: phase.id,
+            phaseName: phase.name,
+            action: 'changes_requested',
+            actorId: currentUser.id,
+            createdAt: now,
+            note: noteText || `Returned to ${targetPhase.name} (round ${newRevisions}).`,
+          },
+        ];
+        routedTask = buildTaskWithWorkflowPhase({
+          ...task,
+          workflowPhaseApprovals: clearedApprovals,
+          workflowPhaseRevisionCounts: { ...(task.workflowPhaseRevisionCounts || {}), [revisionKey]: newRevisions },
+        }, workflow, targetIndex, clearedApprovals, returnHistory, currentUser.id);
+        routedTask = {
+          ...routedTask,
+          workflowPhaseAvailableAt: computePhaseAvailableAt(now, targetPhase.delayDays, appSettings.businessCalendar),
+        };
+      } else {
+        routedTask = {
+          ...task,
+          status: fallbackStatus,
+          currentOwnerRole: 'team_member',
+          currentOwnerUserIds: [task.createdBy, ...task.handledBy],
+          updatedAt: now,
+        };
+      }
+    } else {
+      routedTask = {
+        ...task,
+        status: fallbackStatus,
+        currentOwnerRole: 'team_member',
+        currentOwnerUserIds: [task.createdBy, ...task.handledBy],
+        updatedAt: now,
+      };
+    }
+
+    if (reachedMax) {
+      const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
+      const artDirectorIds = uniqueIds([
+        ...getUserIdsByRole(userList, ['art_director']),
+        ...(appSettings.finalReviewerUserIds || []),
+      ]);
+      addNotifications(
+        uniqueIds([...teamLeaderIds, ...artDirectorIds]).filter(userId => userId !== currentUser.id),
+        taskId,
+        `${currentUser.name} reported "${task.name}" exceeds ${phase.maxRevisionRounds} revision rounds in ${phase.name}.`
+      );
+    }
+
+    const targetOwnerIds = uniqueIds([
+      ...getCurrentOwnerUserIds(routedTask),
+      task.createdBy,
+      ...task.handledBy,
+    ]).filter(userId => userId !== currentUser.id);
+    addNotifications(
+      targetOwnerIds,
+      taskId,
+      `${currentUser.name} requested changes on "${task.name}"${rejectionTargetId ? ` and routed it to ${getWorkflowPhase(routedTask)?.name || 'the selected workflow phase'}` : ''}.`
+    );
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => (
+      t.id !== taskId ? t : addAuditComment({
+        ...routedTask,
+        updatedAt: now,
+      }, currentUser.id, 'request_edits', noteText || `Phase rejected${rejectionTargetId ? ` and routed to ${workflow.phases[getWorkflowPhaseIndex(workflow, rejectionTargetId)]?.name || 'previous phase'}` : ''}.`, now)
+    )));
+  };
+
+  const skipWorkflowPhase = (taskId: string) => {
+    if (!isLeaderboardUser(currentUser.id)) return;
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+    const workflow = task.workflowSnapshot || getWorkflowBySelection(task.taskType, task.workflowId);
+    if (!workflow || workflow.phases.length === 0) return;
+    const phase = getWorkflowPhase(task);
+    if (!phase) return;
+    const phaseIndex = getWorkflowPhaseIndex(workflow, phase.id);
+    if (phaseIndex < 0) return;
+    const now = new Date().toISOString();
+    const nextIndex = getNextPhaseIndex(workflow, phaseIndex, task);
+    const historyEntry: WorkflowPhaseHistoryEntry = {
+      phaseId: phase.id,
+      phaseName: phase.name,
+      action: 'skipped',
+      actorId: currentUser.id,
+      createdAt: now,
+      note: 'Skipped manually by leaderboard.',
+    };
+    const mergedHistory: WorkflowPhaseHistoryEntry[] = [...(task.workflowPhaseHistory || []), historyEntry];
+    if (nextIndex < workflow.phases.length) {
+      const targetPhase = workflow.phases[nextIndex];
+      const nextTask = buildTaskWithWorkflowPhase(task, workflow, nextIndex, task.workflowPhaseApprovals || {}, mergedHistory, currentUser.id);
+      const availableAt = computePhaseAvailableAt(now, targetPhase.delayDays, appSettings.businessCalendar);
+      queueTaskBroadcast(taskId);
+      setTasks(prev => prev.map(t => (
+        t.id !== taskId ? t : {
+          ...nextTask,
+          workflowPhaseAvailableAt: availableAt,
+          updatedAt: now,
+        }
+      )));
+    } else {
+      queueTaskBroadcast(taskId);
+      setTasks(prev => prev.map(t => (
+        t.id !== taskId ? t : addAuditComment({
+          ...t,
+          status: 'approved_by_art_director',
+          currentOwnerRole: null,
+          currentOwnerUserId: null,
+          currentOwnerUserIds: [],
+          workflowPhaseHistory: mergedHistory,
+          updatedAt: now,
+        }, currentUser.id, 'manual_approval', 'Phase skipped by leaderboard.', now)
+      )));
+    }
+  };
+
+  const manuallyApproveTask = (taskId: string, note?: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || ['approved_by_art_director', 'completed', 'archived'].includes(task.status) || isTaskArchived(task)) return;
+
+    const recipients = uniqueIds([
+      task.createdBy,
+      ...task.handledBy,
+      ...(task.currentOwnerUserIds || []),
+      ...(task.contentRevisionAssigneeIds || []),
+      ...getUserIdsByRole(userList, ['team_leader']),
+      ...getUserIdsByRole(userList, ['reviewer', 'admin']),
+      ...getUserIdsByRole(userList, ['art_director']),
+    ]).filter(userId => userId !== currentUser.id);
+    addNotifications(recipients, taskId, `${currentUser.name} marked "${task.name}" as approved.`);
+
+    queueTaskBroadcast(taskId);
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      const now = new Date().toISOString();
+      return addAuditComment({
+        ...t,
+        status: 'approved_by_art_director',
+        currentOwnerRole: null,
+        currentOwnerUserId: null,
+        currentOwnerUserIds: [],
+        workflowCurrentPhaseId: null,
+        workflowCurrentPhaseIndex: null,
+        updatedAt: now,
+      }, currentUser.id, 'manual_approval', note?.trim() || 'Marked approved manually. Approval happened outside the tool.', now);
     }));
   };
 
@@ -2235,14 +3330,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const createWorkAssignment = (input: WorkAssignmentInput) => {
     if (!canCreateWorkAssignment(currentUser, appSettings)) return;
 
-    const handledBy = sanitizeHandledByWithSettings(appSettings, input.handledByIds, currentUser.id);
-    if (!input.name.trim() || !input.description.trim() || handledBy.length === 0) return;
+    const handledBy = input.isTemporarySelfTask
+      ? uniqueIds(input.handledByIds.filter(Boolean))
+      : sanitizeHandledByWithSettings(appSettings, input.handledByIds, currentUser.id);
+    if (!input.name.trim() || handledBy.length === 0) return;
 
     const now = new Date().toISOString();
     const taskId = Math.random().toString(36).substring(7);
     const normalizedLinks = input.assignmentLinks.map(link => link.trim()).filter(Boolean);
     const deadlineText = formatDeadlineText(input.deadlineAt);
     const assignmentPeriod = getAssignmentPeriodFromDeadline(input.deadlineAt);
+    const workflow = getWorkflowBySelection(input.taskType || 'others', null);
     const isContentCreatorTask = handledBy.some(id => {
       const u = usersObj[id];
       return u && (u.jobTitle === 'Content Creator' || (u.role === 'team_member' && u.jobTitle === 'Content Creator'));
@@ -2268,6 +3366,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       deadlineText,
       assignmentPeriod,
       assignmentLinks: normalizedLinks,
+      assignmentDate: input.assignmentDate || null,
+      workflowNodeAssigneeIds: input.workflowNodeAssigneeIds || {},
       deadlineAt: input.deadlineAt || null,
       assignmentUploadedAt: null,
       scheduledPublishAt: null,
@@ -2280,8 +3380,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       isOvertime: input.isOvertime || false,
       needsContentRevision: input.needsContentRevision || false,
       contentRevisionAssigneeIds: input.needsContentRevision ? (input.contentRevisionAssigneeIds || []) : [],
+      isTemporarySelfTask: input.isTemporarySelfTask || false,
+      selfAssignedBy: currentUser.id,
+      submittedOnBehalfOfIds: input.submittedOnBehalfOfIds || [],
       createdAt: now,
       updatedAt: now,
+      workflowId: workflow?.id || null,
+      workflowSnapshot: null,
+      workflowCurrentPhaseId: null,
+      workflowCurrentPhaseIndex: null,
+      workflowPhaseApprovals: {},
+      workflowPhaseHistory: [],
     };
 
     addNotifications(handledBy.filter(userId => userId !== currentUser.id), taskId, `You were assigned "${task.name}".`);
@@ -2296,18 +3405,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const task = tasks.find(t => t.id === taskId);
     if (!task || !canManageWorkAssignment(task, currentUser, appSettings)) return;
 
-    const handledBy = sanitizeHandledByWithSettings(appSettings, input.handledByIds, currentUser.id);
-    if (!input.name.trim() || !input.description.trim() || handledBy.length === 0) return;
+    const today = new Date();
+    const todayValue = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    if (input.assignmentDate && input.assignmentDate < todayValue) {
+      console.warn('Assignment date cannot be in the past.');
+      return;
+    }
+
+    const handledBy = input.isTemporarySelfTask
+      ? uniqueIds(input.handledByIds.filter(Boolean))
+      : sanitizeHandledByWithSettings(appSettings, input.handledByIds, currentUser.id);
+    if (!input.name.trim() || handledBy.length === 0) return;
 
     const previousAssignees = new Set(task.handledBy);
     const addedAssignees = handledBy.filter(userId => !previousAssignees.has(userId));
+    const removedAssignees = task.handledBy.filter(userId => !handledBy.includes(userId));
     if (addedAssignees.length > 0) {
-      addNotifications(addedAssignees.filter(userId => userId !== currentUser.id), taskId, `You were assigned "${input.name.trim()}".`);
+      addNotifications(addedAssignees.filter(userId => userId !== currentUser.id), taskId, `${currentUser.name} edited "${input.name.trim()}". You are now assigned to work on it.`);
+    }
+    if (removedAssignees.length > 0) {
+      addNotifications(removedAssignees.filter(userId => userId !== currentUser.id), taskId, `${currentUser.name} edited "${input.name.trim()}". You are no longer assigned to this task and it is not in your workflow right now.`);
     }
 
     const normalizedLinks = input.assignmentLinks.map(link => link.trim()).filter(Boolean);
     const assignmentPeriod = getAssignmentPeriodFromDeadline(input.deadlineAt);
-    const message = `Assigned work updated for ${handledBy.map(userId => getUserDisplayName(usersObj, userId)).join(', ')}.`;
+    const diffs = buildTaskEditDiff(task, {
+      name: input.name.trim(),
+      description: input.description.trim() || null,
+      taskType: input.taskType,
+      priority: input.priority,
+      assignmentDate: input.assignmentDate,
+      deadlineAt: input.deadlineAt,
+      handledBy,
+    });
+    const summary = diffs.length > 0 ? diffs.join('; ') : 'no changes';
+    const message = `Assigned work updated for ${handledBy.map(userId => getUserDisplayName(usersObj, userId)).join(', ')}. (${summary})`;
+    const workflow = getWorkflowBySelection(input.taskType || task.taskType || 'others', null);
 
     queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(t => {
@@ -2324,27 +3457,55 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const creator = usersObj[t.createdBy];
         return creator && (creator.jobTitle === 'Content Creator' || (creator.role === 'team_member' && creator.jobTitle === 'Content Creator'));
       })();
+      const typeChanged = (input.taskType as TaskType) && input.taskType !== t.taskType;
+      const newWorkflow = typeChanged ? workflow : (t.workflowSnapshot || null);
+      const newPhase = newWorkflow ? (newWorkflow.phases[0] || null) : null;
+      const recomputedOwners = isAlreadyUploaded && typeChanged && newPhase
+        ? resolveWorkflowPhaseReviewerIds(newPhase, appSettings, userList, { ...t, taskType: (input.taskType as TaskType) || t.taskType, workflowSnapshot: cloneWorkflow(newWorkflow) })
+        : null;
+      const recomputedRole = isAlreadyUploaded && typeChanged && newPhase ? getPhaseOwnerRole(newPhase) : null;
       return addAuditComment({
         ...t,
         name: input.name.trim(),
         description: input.description.trim() || null,
         taskType: (input.taskType as TaskType) || t.taskType,
+        workflowId: workflow?.id || null,
+        workflowSnapshot: t.workflowSnapshot && workflow?.id === t.workflowSnapshot.id ? t.workflowSnapshot : (typeChanged && workflow ? cloneWorkflow(workflow) : t.workflowSnapshot),
+        workflowCurrentPhaseId: typeChanged ? null : (t.workflowSnapshot && workflow?.id === t.workflowSnapshot.id ? t.workflowCurrentPhaseId : null),
+        workflowCurrentPhaseIndex: typeChanged ? null : (t.workflowSnapshot && workflow?.id === t.workflowSnapshot.id ? t.workflowCurrentPhaseIndex : null),
+        workflowPhaseApprovals: typeChanged ? {} : (t.workflowSnapshot && workflow?.id === t.workflowSnapshot.id ? t.workflowPhaseApprovals : {}),
         reviewMode: getEffectiveReviewMode((input.taskType as TaskType) || t.taskType, isContentCreatorTask, t.reviewMode),
         handledBy,
-        currentOwnerRole: isAlreadyUploaded ? t.currentOwnerRole : 'team_member',
-        currentOwnerUserId: isAlreadyUploaded ? t.currentOwnerUserId : (handledBy[0] || null),
-        currentOwnerUserIds: isAlreadyUploaded ? t.currentOwnerUserIds : handledBy,
+        currentOwnerRole: recomputedRole || (isAlreadyUploaded ? t.currentOwnerRole : 'team_member'),
+        currentOwnerUserId: recomputedOwners ? (recomputedOwners[0] || null) : (isAlreadyUploaded ? t.currentOwnerUserId : (handledBy[0] || null)),
+        currentOwnerUserIds: recomputedOwners || (isAlreadyUploaded ? t.currentOwnerUserIds : handledBy),
         priority: input.priority,
         deadlineText: formatDeadlineText(input.deadlineAt),
         assignmentPeriod,
         assignmentLinks: normalizedLinks,
+        assignmentDate: input.assignmentDate || null,
+        workflowNodeAssigneeIds: input.workflowNodeAssigneeIds || {},
         deadlineAt: input.deadlineAt || null,
         isOvertime: input.isOvertime || false,
         needsContentRevision: input.needsContentRevision || false,
         contentRevisionAssigneeIds: input.needsContentRevision ? (input.contentRevisionAssigneeIds || []) : [],
+        isTemporarySelfTask: input.isTemporarySelfTask || false,
+        selfAssignedBy: t.selfAssignedBy || (t.createdBy === currentUser.id ? currentUser.id : null),
+        submittedOnBehalfOfIds: input.submittedOnBehalfOfIds || t.submittedOnBehalfOfIds || [],
         updatedAt: now,
       }, currentUser.id, 'work_assignment_updated', message, now);
     }));
+  };
+
+  const deleteWorkAssignment = (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || !canDeleteWorkAssignment(task, currentUser)) return;
+
+    setTasks(prev => prev.filter(t => t.id !== taskId));
+    setNotifications(prev => prev.filter(notification => notification.taskId !== taskId));
+    if (isDriveWorkspaceReady) {
+      deleteDriveTask(taskId).catch(error => console.error('Failed to delete assigned task from Drive', error));
+    }
   };
 
   const updateTaskContentRevisionAssignees = (taskId: string, assigneeIds: string[]) => {
@@ -2519,10 +3680,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           : 'waiting_reviewer_full_review';
       nextOwnerRole = sendToMarwa ? 'art_director' : 'reviewer';
       nextOwnerIds = getDefaultOwnerIdsForRole(nextOwnerRole, task);
-      auditMsg = `New version resubmitted for ${nextOwnerRole === 'art_director' ? 'Final Approvement' : 'First Review'}.`;
+      auditMsg = `New version resubmitted for ${nextOwnerRole === 'art_director' ? 'Art Director' : 'First Review'}.`;
     }
 
-    const creatorName = usersObj[task.createdBy]?.name || 'Someone';
+    const uploaderName = getUserDisplayName(usersObj, version.submittedBy);
     const reviewerIds = getUserIdsByRole(userList, ['reviewer', 'admin']);
     const artDirectorIds = getUserIdsByRole(userList, ['art_director']);
     const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
@@ -2531,9 +3692,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       : sendToMarwa
         ? [...nextOwnerIds, ...artDirectorIds, ...teamLeaderIds, ...reviewerIds]
         : [...nextOwnerIds, ...reviewerIds, ...teamLeaderIds]
-    ).filter(userId => userId !== task.createdBy);
+    ).filter(userId => userId !== version.submittedBy);
 
-    addNotifications(recipients, taskId, `${creatorName} uploaded V${version.versionNumber} for "${task.name}".`);
+    addNotifications(recipients, taskId, `${uploaderName} uploaded V${version.versionNumber} for "${task.name}".`);
 
     queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(t => {
@@ -2625,7 +3786,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }));
   };
 
-  const addTaskComment = (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => {
+  const addTaskComment = (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>, options?: { skipNotificationUserIds?: string[] }) => {
+    const task = tasks.find(item => item.id === taskId);
+    if (task) {
+      const author = usersObj[currentUser.id] || currentUser;
+      const reviewerLikeRoles: Role[] = ['reviewer', 'art_director', 'team_leader', 'manager', 'admin'];
+      const isReviewerComment = reviewerLikeRoles.includes(author.role) || isLeaderboardUser(author.id);
+      const hasCommentContent = Boolean(
+        comment.message?.trim() ||
+        (comment.sections || []).some(section => section.note?.trim() || section.imageUrl)
+      );
+
+      if (isReviewerComment && hasCommentContent) {
+        const teamLeaderIds = getUserIdsByRole(userList, ['team_leader']);
+        const reviewerIds = uniqueIds([
+          ...getUserIdsByRole(userList, ['reviewer', 'admin']),
+          ...(appSettings.firstReviewerUserIds || []),
+        ]);
+        const artDirectorIds = uniqueIds([
+          ...getUserIdsByRole(userList, ['art_director']),
+          ...(appSettings.finalReviewerUserIds || []),
+        ]);
+        const seniorIds = Array.isArray(appSettings.seniorReviewerUserIds) ? appSettings.seniorReviewerUserIds : [];
+        const recipients = uniqueIds([
+          task.createdBy,
+          ...task.handledBy,
+          ...(task.contentRevisionAssigneeIds || []),
+          ...seniorIds,
+          ...teamLeaderIds,
+          ...reviewerIds,
+          ...artDirectorIds,
+        ]).filter(userId => userId && userId !== currentUser.id);
+        const dedupedRecipients = recipients.filter(userId => !(options?.skipNotificationUserIds || []).includes(userId));
+        addNotifications(dedupedRecipients, taskId, `${currentUser.name} put a comment on "${task.name}".`);
+      }
+    }
+
     queueTaskBroadcast(taskId);
     setTasks(prev => prev.map(task => {
       if (task.id !== taskId) return task;
@@ -2731,6 +3927,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       persistenceError,
       localMigrationCount: (localMigrationState?.tasks.length || 0) + (localMigrationState?.notifications.length || 0),
       isMigratingLocalData,
+      dailyReports,
       driveStatus,
       driveUserEmail,
       driveRootFolder,
@@ -2741,10 +3938,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTaskStatus,
       toggleTaskHold,
       updateTaskPriority,
+      updateTaskBasicDetails,
       updateTaskAssignment,
       updateTaskReviewMode,
+      updateTaskActiveWork,
       applyTaskWorkflow,
       approveWorkflowPhase,
+      rejectWorkflowPhase,
+      skipWorkflowPhase,
+      manuallyApproveTask,
       updateTaskPublishSchedule,
       markCampaignPublished,
       markPublishReminderSent,
@@ -2753,6 +3955,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       editScheduledCampaign,
       createWorkAssignment,
       updateWorkAssignment,
+      deleteWorkAssignment,
       updateTaskContentRevisionAssignees,
       submitWorkAssignmentUpload,
       addTaskComment,
@@ -2765,10 +3968,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addNotification,
       addNotifications,
       markNotificationAsRead,
+      upsertDailyReport,
+      upsertDailyReportEntry,
+      sendDailyReport,
+      setTaskActiveWorkByLeader,
       loginWithPassword,
       signupWithEmail,
       updateUserRole,
       updateUserResponsibility,
+      createManualUser,
+      updateUserProfile,
       addCustomResponsibility,
       getEffectiveReviewMode,
       updateAppSettings,

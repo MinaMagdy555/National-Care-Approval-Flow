@@ -7,3 +7,7 @@ coverage/
 .env*
 !.env.example
 .vercel
+.playwright-cli/
+output/
+public/evidence/
+public/review-screenshots/
