@@ -174,6 +174,26 @@ function getSharedDataErrorMessage(error: unknown, fallback: string) {
   return message;
 }
 
+function mergeAppSettingsPreservingWorkflowDeletions(
+  incomingSettings?: Partial<AppSettings> | null,
+  currentSettings?: AppSettings | null,
+) {
+  const currentDeletedWorkflowIds = Array.isArray(currentSettings?.deletedWorkflowIds)
+    ? currentSettings.deletedWorkflowIds
+    : [];
+  const incomingDeletedWorkflowIds = Array.isArray(incomingSettings?.deletedWorkflowIds)
+    ? incomingSettings.deletedWorkflowIds
+    : [];
+
+  return mergeAppSettings({
+    ...(incomingSettings || {}),
+    deletedWorkflowIds: Array.from(new Set([
+      ...currentDeletedWorkflowIds,
+      ...incomingDeletedWorkflowIds,
+    ])),
+  });
+}
+
 function normalizeCredentialValue(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
@@ -932,7 +952,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         const neonState = await fetchNeonAppState();
         if (neonState?.settings) {
-          setAppSettings(mergeAppSettings(neonState.settings));
+          setAppSettings(prev => mergeAppSettingsPreservingWorkflowDeletions(neonState.settings, prev));
           return;
         }
       } catch (err) {
@@ -943,13 +963,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const { data, error } = await supabase.from('app_settings').select('settings').eq('id', 'current').single();
       if (data?.settings) {
-        setAppSettings(mergeAppSettings(data.settings));
+        setAppSettings(prev => mergeAppSettingsPreservingWorkflowDeletions(data.settings, prev));
       } else {
-        setAppSettings(defaultAppSettings);
+        setAppSettings(prev => mergeAppSettingsPreservingWorkflowDeletions(defaultAppSettings, prev));
       }
     } catch (err) {
       console.warn('Exception loading settings from Supabase, using defaults:', err);
-      setAppSettings(defaultAppSettings);
+      setAppSettings(prev => mergeAppSettingsPreservingWorkflowDeletions(defaultAppSettings, prev));
     }
   };
 
@@ -1059,7 +1079,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!isMounted) return;
 
         const localTasks = Array.isArray(localState?.tasks) && localState.tasks.length > 0 ? localState.tasks : initialTasks;
-        setAppSettings(mergeAppSettings(localState?.settings));
+        setAppSettings(prev => mergeAppSettingsPreservingWorkflowDeletions(localState?.settings, prev));
         setTasks(reviveWorkspaceTasks(localTasks, usersObj));
         setNotifications(Array.isArray(localState?.notifications) ? removeGuestSeedNotifications(localState.notifications) : []);
         const storedReports = Array.isArray(localState?.dailyReports) ? localState.dailyReports.map(coerceDailyReport).filter(Boolean) as DailyReport[] : [];
@@ -1194,7 +1214,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           usersObj
         );
         const sharedNotifications = removeGuestSeedNotifications(neonState?.notifications || []);
-        const sharedSettings = mergeAppSettings(neonState?.settings || localState?.settings);
+        const sharedSettings = mergeAppSettingsPreservingWorkflowDeletions(neonState?.settings || localState?.settings, appSettings);
         const localTasks = Array.isArray(localState?.tasks) ? localState.tasks.filter(task => !isGuestSeedTask(task) && !isPlaceholderTask(task)) : [];
         const localNotifications = Array.isArray(localState?.notifications) ? removeGuestSeedNotifications(localState.notifications) : [];
         const sharedReports = Array.isArray(neonState?.dailyReports) ? neonState.dailyReports.map(coerceDailyReport).filter(Boolean) as DailyReport[] : [];
@@ -1257,7 +1277,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         const sharedTasks = reviveWorkspaceTasks(loadedTasks.length > 0 ? loadedTasks : initialTasks, usersObj);
         const sharedNotifications = removeGuestSeedNotifications(loadedNotifications);
-        const sharedSettings = mergeAppSettings(loadedSettings || localState?.settings);
+        const sharedSettings = mergeAppSettingsPreservingWorkflowDeletions(loadedSettings || localState?.settings, appSettings);
         const localTasks = Array.isArray(localState?.tasks) ? localState.tasks.filter(task => !isGuestSeedTask(task) && !isPlaceholderTask(task)) : [];
         const localNotifications = Array.isArray(localState?.notifications) ? removeGuestSeedNotifications(localState.notifications) : [];
 
@@ -1383,7 +1403,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setDailyReports(prev => mergeDailyReportsIntoState(prev, latestState.dailyReports!.map(coerceDailyReport).filter(Boolean) as DailyReport[]));
         }
         if (latestState.settings) {
-          setAppSettings(mergeAppSettings(latestState.settings));
+          setAppSettings(prev => mergeAppSettingsPreservingWorkflowDeletions(latestState.settings, prev));
         }
         setPersistenceError(null);
       } catch (error) {
@@ -2088,7 +2108,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!manualUser && USE_NEON_DATA) {
       try {
         const neonState = await fetchNeonAppState();
-        const sharedSettings = mergeAppSettings(neonState?.settings);
+        const sharedSettings = mergeAppSettingsPreservingWorkflowDeletions(neonState?.settings, appSettings);
         setAppSettings(sharedSettings);
         toolManagedUsers = sharedSettings.manualUsers || [];
         manualUser = toolManagedUsers.find(user => {
