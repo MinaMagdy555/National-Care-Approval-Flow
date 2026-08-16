@@ -759,7 +759,7 @@ interface AppContextType extends AppState {
   updateUserProfile: (userId: string, input: { name: string; email?: string; role?: Role; jobTitle?: string; password?: string }) => void;
   addCustomResponsibility: (responsibility: string) => void;
   getEffectiveReviewMode: (taskType: string, isContentCreatorTask: boolean, selectedMode: 'full_review' | 'quick_look' | 'direct_to_ad') => 'full_review' | 'quick_look' | 'direct_to_ad';
-  updateAppSettings: (updater: AppSettings | ((settings: AppSettings) => AppSettings)) => void;
+  updateAppSettings: (updater: AppSettings | ((settings: AppSettings) => AppSettings)) => Promise<void>;
   deleteUserAccount: (userId: string) => void;
   logout: () => Promise<void>;
   archiveTask: (taskId: string, reason?: string) => void;
@@ -2366,12 +2366,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
     
     setAppSettings(merged);
+
+    const nextState = { tasks, notifications, settings: merged, dailyReports };
     
-    await supabase.from('app_settings').upsert({
-      id: 'current',
-      settings: merged,
-      updated_at: new Date().toISOString()
-    });
+    try {
+      if (isNeonWorkspaceActive && hasLoadedPersistedState.current && !sharedDataLoadFailedRef.current) {
+        await saveNeonAppState(nextState);
+      } else if (isDriveWorkspaceReady && hasLoadedPersistedState.current && !sharedDataLoadFailedRef.current) {
+        await upsertDriveSettings(merged);
+      } else if (isLocalWorkspaceActive && hasLoadedPersistedState.current) {
+        await saveAppState(nextState);
+      }
+
+      await supabase.from('app_settings').upsert({
+        id: 'current',
+        settings: merged,
+        updated_at: new Date().toISOString()
+      });
+
+      setPersistenceError(null);
+    } catch (error) {
+      console.error('Failed to save app settings', error);
+      setPersistenceError(getSharedDataErrorMessage(error, 'Failed to save app settings.'));
+    }
   };
 
   const deleteUserAccount = async (userId: string) => {

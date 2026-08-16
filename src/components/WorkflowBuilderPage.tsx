@@ -234,6 +234,7 @@ export function WorkflowBuilderPage() {
   const [sectionBox, setSectionBox] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [isDrawingSection, setIsDrawingSection] = useState(false);
   const [canvasZoom, setCanvasZoom] = useState(1);
+  const [deletingWorkflowId, setDeletingWorkflowId] = useState<string | null>(null);
 
   const selectedWorkflow = workflows.find(workflow => workflow.id === selectedWorkflowId) || workflows[0];
   const selectedWorkflowIdSafe = selectedWorkflow?.id || '';
@@ -530,22 +531,28 @@ export function WorkflowBuilderPage() {
     setSelectedWorkflowId(workflow.id);
   };
 
-  const deleteWorkflow = (workflowId: string) => {
+  const deleteWorkflow = async (workflowId: string) => {
     const workflow = workflows.find(item => item.id === workflowId);
     if (!workflow || !confirm(`Delete workflow "${workflow.name}"? Existing tasks keep their saved workflow snapshot.`)) return;
-    updateAppSettings(settings => {
-      const nextWorkflows = (settings.workflows || []).filter(item => item.id !== workflowId);
-      const nextAssignments = Object.fromEntries(Object.entries(settings.taskTypeWorkflowIds || {}).filter(([, value]) => value !== workflowId));
-      const nextDeletedWorkflowIds = Array.from(new Set([...(settings.deletedWorkflowIds || []), workflowId]));
-      return {
-        ...settings,
-        workflows: nextWorkflows,
-        deletedWorkflowIds: nextDeletedWorkflowIds,
-        defaultWorkflowId: settings.defaultWorkflowId === workflowId ? (nextWorkflows[0]?.id || null) : settings.defaultWorkflowId,
-        taskTypeWorkflowIds: nextAssignments,
-      };
-    });
-    setSelectedWorkflowId(workflows.find(item => item.id !== workflowId)?.id || '');
+    const nextSelectedWorkflowId = workflows.find(item => item.id !== workflowId)?.id || '';
+    setDeletingWorkflowId(workflowId);
+    try {
+      await updateAppSettings(settings => {
+        const nextWorkflows = (settings.workflows || []).filter(item => item.id !== workflowId);
+        const nextAssignments = Object.fromEntries(Object.entries(settings.taskTypeWorkflowIds || {}).filter(([, value]) => value !== workflowId));
+        const nextDeletedWorkflowIds = Array.from(new Set([...(settings.deletedWorkflowIds || []), workflowId]));
+        return {
+          ...settings,
+          workflows: nextWorkflows,
+          deletedWorkflowIds: nextDeletedWorkflowIds,
+          defaultWorkflowId: settings.defaultWorkflowId === workflowId ? (nextWorkflows[0]?.id || null) : settings.defaultWorkflowId,
+          taskTypeWorkflowIds: nextAssignments,
+        };
+      });
+      setSelectedWorkflowId(nextSelectedWorkflowId);
+    } finally {
+      setDeletingWorkflowId(current => current === workflowId ? null : current);
+    }
   };
 
   const getCanvasPoint = (event: React.MouseEvent, canvas: HTMLElement) => {
@@ -824,18 +831,30 @@ export function WorkflowBuilderPage() {
           </div>
           <div className="space-y-2">
             {workflowOptions.map(({ workflow, taskTypeCount }) => (
-              <button key={workflow.id} type="button" onClick={() => setSelectedWorkflowId(workflow.id)} className={cn("w-full rounded-xl border p-3 text-left transition-colors", selectedWorkflow?.id === workflow.id ? "border-indigo-200 bg-indigo-50 text-indigo-900" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50")}>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-black">{workflow.name}</span>
-                  {appSettings.defaultWorkflowId === workflow.id && <span className="rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-white">Default</span>}
-                </div>
-                <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-wide text-slate-400">
-                  <span>{workflow.phases.filter(phase => phase.nodeType !== 'note').length} steps</span>
-                  <span>{workflow.phases.filter(phase => phase.nodeType === 'note').length} notes</span>
-                  <span>{taskTypeCount} task types</span>
-                  <span>{workflow.active === false ? 'Disabled' : 'Active'}</span>
-                </div>
-              </button>
+              <div key={workflow.id} className={cn("flex w-full items-start gap-2 rounded-xl border p-2 transition-colors", selectedWorkflow?.id === workflow.id ? "border-indigo-200 bg-indigo-50 text-indigo-900" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50")}>
+                <button type="button" onClick={() => setSelectedWorkflowId(workflow.id)} className="min-w-0 flex-1 rounded-lg p-1 text-left outline-none focus:ring-2 focus:ring-indigo-500/30">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-black">{workflow.name}</span>
+                    {appSettings.defaultWorkflowId === workflow.id && <span className="shrink-0 rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-white">Default</span>}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-wide text-slate-400">
+                    <span>{workflow.phases.filter(phase => phase.nodeType !== 'note').length} steps</span>
+                    <span>{workflow.phases.filter(phase => phase.nodeType === 'note').length} notes</span>
+                    <span>{taskTypeCount} task types</span>
+                    <span>{workflow.active === false ? 'Disabled' : 'Active'}</span>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void deleteWorkflow(workflow.id)}
+                  disabled={deletingWorkflowId === workflow.id}
+                  className="mt-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-rose-200 bg-white text-rose-600 shadow-sm hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-500/20 disabled:cursor-wait disabled:opacity-50"
+                  title={`Delete ${workflow.name}`}
+                  aria-label={`Delete ${workflow.name}`}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
             ))}
           </div>
         </aside>
@@ -853,7 +872,7 @@ export function WorkflowBuilderPage() {
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={() => updateAppSettings(settings => ({ ...settings, defaultWorkflowId: selectedWorkflow.id }))} className={cn("rounded-xl border px-3 py-2.5 text-xs font-black", appSettings.defaultWorkflowId === selectedWorkflow.id ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-700")}>{appSettings.defaultWorkflowId === selectedWorkflow.id ? 'Default' : 'Set Default'}</button>
                   <button type="button" onClick={() => updateSelectedWorkflow(workflow => ({ ...workflow, active: workflow.active === false }))} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-black text-slate-700">{selectedWorkflow.active === false ? 'Enable' : 'Disable'}</button>
-                  <button type="button" onClick={() => deleteWorkflow(selectedWorkflow.id)} className="rounded-xl border border-rose-200 bg-white px-3 py-2.5 text-xs font-black text-rose-600 hover:bg-rose-50">Delete</button>
+                  <button type="button" onClick={() => void deleteWorkflow(selectedWorkflow.id)} disabled={deletingWorkflowId === selectedWorkflow.id} className="rounded-xl border border-rose-200 bg-white px-3 py-2.5 text-xs font-black text-rose-600 hover:bg-rose-50 disabled:cursor-wait disabled:opacity-50">{deletingWorkflowId === selectedWorkflow.id ? 'Deleting...' : 'Delete'}</button>
                 </div>
               </div>
               <div className="mt-4 border-t border-slate-100 pt-4">
