@@ -590,6 +590,7 @@ export const defaultAppSettings: AppSettings = {
     'others'
   ],
   workflows: defaultWorkflows,
+  deletedWorkflowIds: [],
   defaultWorkflowId: QUICK_LOOK_WORKFLOW_ID,
   taskTypeWorkflowIds: {
     campaign: SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID,
@@ -718,10 +719,14 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
   let firstReviewerUserIds = Array.isArray(settings?.firstReviewerUserIds) ? settings.firstReviewerUserIds : defaultAppSettings.firstReviewerUserIds || [];
   let finalReviewerUserIds = Array.isArray(settings?.finalReviewerUserIds) ? settings.finalReviewerUserIds : defaultAppSettings.finalReviewerUserIds || [];
   let viewAllWorkloadUserIds = Array.isArray(settings?.viewAllWorkloadUserIds) ? settings.viewAllWorkloadUserIds : defaultAppSettings.viewAllWorkloadUserIds || [];
+  const deletedWorkflowIds = Array.isArray(settings?.deletedWorkflowIds)
+    ? Array.from(new Set(settings.deletedWorkflowIds.filter((id): id is string => typeof id === 'string' && Boolean(id))))
+    : [];
+  const deletedWorkflowIdSet = new Set(deletedWorkflowIds);
   const incomingWorkflows = Array.isArray(settings?.workflows) ? settings.workflows : [];
   const workflowsById = new Map<string, WorkflowDefinition>();
   [...defaultWorkflows, ...incomingWorkflows].forEach(workflow => {
-    if (!workflow?.id) return;
+    if (!workflow?.id || deletedWorkflowIdSet.has(workflow.id)) return;
     workflowsById.set(workflow.id, {
       ...workflow,
       active: workflow.active !== false,
@@ -765,17 +770,25 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
       })) : [],
     });
   });
-  const defaultCampaignWorkflow = defaultWorkflows.find(workflow => workflow.id === SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID);
-  if (defaultCampaignWorkflow) {
-    workflowsById.set(SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID, defaultCampaignWorkflow);
-  }
   const workflows = Array.from(workflowsById.values());
+  const workflowIds = new Set(workflows.map(workflow => workflow.id));
   const taskTypeWorkflowIds = {
     ...(settings?.taskTypeWorkflowIds || {}),
-    campaign: SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID,
-    'social media campaign': SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID,
-    'social media campaigns': SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID,
   };
+  Object.entries(taskTypeWorkflowIds).forEach(([key, workflowId]) => {
+    if (!workflowId || deletedWorkflowIdSet.has(workflowId) || !workflowIds.has(workflowId)) {
+      delete taskTypeWorkflowIds[key];
+    }
+  });
+  if (workflowIds.has(SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID)) {
+    taskTypeWorkflowIds.campaign = SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
+    taskTypeWorkflowIds['social media campaign'] = SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
+    taskTypeWorkflowIds['social media campaigns'] = SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
+  }
+  const requestedDefaultWorkflowId = settings?.defaultWorkflowId || QUICK_LOOK_WORKFLOW_ID;
+  const defaultWorkflowId = workflowIds.has(requestedDefaultWorkflowId)
+    ? requestedDefaultWorkflowId
+    : workflows[0]?.id || null;
 
   // Migration & Dynamic Sync: Always ensure Marwa, Sobeeh, Dina, and Fawzy have correct permissions 
   // and are correctly excluded from handledBy lists, regardless of settings stored in database/localStorage.
@@ -833,7 +846,8 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     customWorkingHours: Array.isArray(settings?.customWorkingHours) ? settings.customWorkingHours : [],
     taskTypes: Array.isArray(settings?.taskTypes) ? settings.taskTypes : defaultAppSettings.taskTypes || [],
     workflows,
-    defaultWorkflowId: settings?.defaultWorkflowId || QUICK_LOOK_WORKFLOW_ID,
+    deletedWorkflowIds,
+    defaultWorkflowId,
     taskTypeWorkflowIds,
     campaignPlatforms: Array.isArray(settings?.campaignPlatforms) ? settings.campaignPlatforms : defaultAppSettings.campaignPlatforms || [],
     hiddenColumns: Array.isArray(settings?.hiddenColumns) ? settings?.hiddenColumns : [],

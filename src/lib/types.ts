@@ -177,6 +177,7 @@ export interface AppSettings {
   customWorkingHours?: CustomWorkingHours[];
   taskTypes?: Array<string | TaskTypeConfig>;
   workflows?: WorkflowDefinition[];
+  deletedWorkflowIds?: string[];
   defaultWorkflowId?: string | null;
   taskTypeWorkflowIds?: Record<string, string>;
   campaignPlatforms?: string[];

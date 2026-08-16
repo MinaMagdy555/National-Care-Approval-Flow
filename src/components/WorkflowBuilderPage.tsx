@@ -536,9 +536,11 @@ export function WorkflowBuilderPage() {
     updateAppSettings(settings => {
       const nextWorkflows = (settings.workflows || []).filter(item => item.id !== workflowId);
       const nextAssignments = Object.fromEntries(Object.entries(settings.taskTypeWorkflowIds || {}).filter(([, value]) => value !== workflowId));
+      const nextDeletedWorkflowIds = Array.from(new Set([...(settings.deletedWorkflowIds || []), workflowId]));
       return {
         ...settings,
         workflows: nextWorkflows,
+        deletedWorkflowIds: nextDeletedWorkflowIds,
         defaultWorkflowId: settings.defaultWorkflowId === workflowId ? (nextWorkflows[0]?.id || null) : settings.defaultWorkflowId,
         taskTypeWorkflowIds: nextAssignments,
       };
