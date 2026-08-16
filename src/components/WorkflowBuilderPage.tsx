@@ -35,6 +35,124 @@ type WorkflowEdge = {
   route?: 'parent' | 'pass' | 'fail';
 };
 
+type CanvasPoint = {
+  x: number;
+  y: number;
+};
+
+const EDGE_NODE_GAP = 18;
+const EDGE_TURN_GAP = 96;
+const EDGE_CORNER_RADIUS = 14;
+
+function dedupeEdgePoints(points: CanvasPoint[]) {
+  return points.filter((point, index) => {
+    const previous = points[index - 1];
+    return !previous || Math.abs(previous.x - point.x) > 0.5 || Math.abs(previous.y - point.y) > 0.5;
+  });
+}
+
+function getRoundedPolylinePath(points: CanvasPoint[], radius = EDGE_CORNER_RADIUS) {
+  if (points.length === 0) return '';
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+
+  let path = `M ${points[0].x} ${points[0].y}`;
+
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    const next = points[index + 1];
+    const previousLength = Math.hypot(current.x - previous.x, current.y - previous.y);
+    const nextLength = Math.hypot(next.x - current.x, next.y - current.y);
+    const cornerRadius = Math.min(radius, previousLength / 2, nextLength / 2);
+
+    if (cornerRadius <= 0) {
+      path += ` L ${current.x} ${current.y}`;
+      continue;
+    }
+
+    const beforeCorner = {
+      x: current.x - ((current.x - previous.x) / previousLength) * cornerRadius,
+      y: current.y - ((current.y - previous.y) / previousLength) * cornerRadius,
+    };
+    const afterCorner = {
+      x: current.x + ((next.x - current.x) / nextLength) * cornerRadius,
+      y: current.y + ((next.y - current.y) / nextLength) * cornerRadius,
+    };
+
+    path += ` L ${beforeCorner.x} ${beforeCorner.y} Q ${current.x} ${current.y} ${afterCorner.x} ${afterCorner.y}`;
+  }
+
+  const last = points[points.length - 1];
+  return `${path} L ${last.x} ${last.y}`;
+}
+
+function getEdgeRoutePoints(edge: WorkflowEdge) {
+  const start: CanvasPoint = { x: edge.x1, y: edge.y1 };
+  const end: CanvasPoint = { x: edge.x2, y: edge.y2 };
+  const isVerticalRoute = Math.abs(edge.y2 - edge.y1) > Math.abs(edge.x2 - edge.x1);
+
+  if (isVerticalRoute) {
+    if (Math.abs(edge.x1 - edge.x2) < 10) {
+      return dedupeEdgePoints([start, end]);
+    }
+
+    const midY = (edge.y1 + edge.y2) / 2;
+    return dedupeEdgePoints([
+      start,
+      { x: edge.x1, y: midY },
+      { x: edge.x2, y: midY },
+      end,
+    ]);
+  }
+
+  const isForward = edge.x2 >= edge.x1;
+  const midX = isForward
+    ? Math.max(edge.x1 + EDGE_TURN_GAP, Math.min((edge.x1 + edge.x2) / 2, edge.x2 - EDGE_TURN_GAP))
+    : Math.max(edge.x1, edge.x2) + EDGE_TURN_GAP;
+
+  if (Math.abs(edge.y1 - edge.y2) < 10) {
+    return dedupeEdgePoints([start, end]);
+  }
+
+  return dedupeEdgePoints([
+    start,
+    { x: midX, y: edge.y1 },
+    { x: midX, y: edge.y2 },
+    end,
+  ]);
+}
+
+function getEdgePath(edge: WorkflowEdge) {
+  return getRoundedPolylinePath(getEdgeRoutePoints(edge));
+}
+
+function getEdgeHandlePoint(edge: WorkflowEdge) {
+  const points = getEdgeRoutePoints(edge);
+  const segments = points.slice(1).map((point, index) => {
+    const previous = points[index];
+    return {
+      from: previous,
+      to: point,
+      length: Math.hypot(point.x - previous.x, point.y - previous.y),
+    };
+  });
+  const totalLength = segments.reduce((sum, segment) => sum + segment.length, 0);
+  let travelled = 0;
+
+  for (const segment of segments) {
+    if (travelled + segment.length >= totalLength / 2) {
+      const ratio = segment.length === 0 ? 0 : (totalLength / 2 - travelled) / segment.length;
+      return {
+        x: segment.from.x + (segment.to.x - segment.from.x) * ratio,
+        y: segment.from.y + (segment.to.y - segment.from.y) * ratio,
+      };
+    }
+    travelled += segment.length;
+  }
+
+  return points[Math.floor(points.length / 2)] || { x: edge.x1, y: edge.y1 };
+}
+
 const RESPONSIBILITY_VISUALS: ResponsibilityVisual[] = [
   { key: 'content', label: 'Content', color: '#10b981', chipClass: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
   { key: 'team_leader', label: 'Team Leader', color: '#4f46e5', chipClass: 'border-indigo-200 bg-indigo-50 text-indigo-700' },
@@ -743,16 +861,43 @@ export function WorkflowBuilderPage() {
     const maxY = Math.max(...boxes.map(box => box.y + box.h));
     return { id: groupId, x: minX - 20, y: minY - 28, w: maxX - minX + 40, h: maxY - minY + 56, count: boxes.length };
   }).filter((item): item is { id: string; x: number; y: number; w: number; h: number; count: number } => Boolean(item));
-  const getNodeAnchor = (nodeId: string, side: 'left' | 'right') => {
+  const getNodeBox = (nodeId: string) => {
     if (nodeId === ROOT_ID) {
-      return { x: side === 'right' ? root.x + root.w : root.x, y: root.y + root.h / 2 };
+      return root;
     }
     const phase = phases.find(item => item.id === nodeId);
-    if (!phase) return { x: root.x + root.w, y: root.y + root.h / 2 };
+    if (!phase) return root;
     const index = phases.findIndex(item => item.id === nodeId);
     const pos = getPhasePosition(phase, index);
     const size = getNodeSize(phase);
-    return { x: side === 'right' ? pos.x + size.w : pos.x, y: pos.y + size.h / 2 };
+    return { x: pos.x, y: pos.y, w: size.w, h: size.h };
+  };
+
+  const getNodeAnchor = (nodeId: string, side: 'left' | 'right' | 'top' | 'bottom') => {
+    const box = getNodeBox(nodeId);
+    if (side === 'left') return { x: box.x - EDGE_NODE_GAP, y: box.y + box.h / 2 };
+    if (side === 'right') return { x: box.x + box.w + EDGE_NODE_GAP, y: box.y + box.h / 2 };
+    if (side === 'top') return { x: box.x + box.w / 2, y: box.y - EDGE_NODE_GAP };
+    return { x: box.x + box.w / 2, y: box.y + box.h + EDGE_NODE_GAP };
+  };
+
+  const getBestNodeAnchors = (fromId: string, toId: string) => {
+    const fromBox = getNodeBox(fromId);
+    const toBox = getNodeBox(toId);
+    const fromCenter = { x: fromBox.x + fromBox.w / 2, y: fromBox.y + fromBox.h / 2 };
+    const toCenter = { x: toBox.x + toBox.w / 2, y: toBox.y + toBox.h / 2 };
+    const dx = toCenter.x - fromCenter.x;
+    const dy = toCenter.y - fromCenter.y;
+
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return dx >= 0
+        ? { from: getNodeAnchor(fromId, 'right'), to: getNodeAnchor(toId, 'left') }
+        : { from: getNodeAnchor(fromId, 'left'), to: getNodeAnchor(toId, 'right') };
+    }
+
+    return dy >= 0
+      ? { from: getNodeAnchor(fromId, 'bottom'), to: getNodeAnchor(toId, 'top') }
+      : { from: getNodeAnchor(fromId, 'top'), to: getNodeAnchor(toId, 'bottom') };
   };
 
   const parentEdges: WorkflowEdge[] = phases
@@ -762,8 +907,7 @@ export function WorkflowBuilderPage() {
         ? phase.parentPhaseIds
         : [phase.parentPhaseId || (index === 0 ? ROOT_ID : phases[index - 1].id)];
       return parentIds.filter(parentId => parentId && parentId !== UNLINKED_PARENT_ID).map(parentId => {
-        const from = getNodeAnchor(parentId, 'right');
-        const to = getNodeAnchor(phase.id, 'left');
+        const { from, to } = getBestNodeAnchors(parentId, phase.id);
         return { id: `parent:${parentId}:${phase.id}`, fromId: parentId, toId: phase.id, x1: from.x, y1: from.y, x2: to.x, y2: to.y, tone: 'default' as const, route: 'parent' as const };
       });
     });
@@ -776,9 +920,9 @@ export function WorkflowBuilderPage() {
     ];
     routeTargets.forEach(route => {
       if (!route.id || route.id === phase.id) return;
-      const from = getNodeAnchor(phase.id, 'right');
-      const targetPos = getNodeAnchor(route.id, 'left');
-      edges.push({ id: `${route.key}:${phase.id}:${route.id}`, fromId: phase.id, toId: route.id, x1: from.x, y1: from.y + (route.key === 'fail' ? 18 : -18), x2: targetPos.x, y2: targetPos.y + (route.key === 'fail' ? 18 : -18), tone: route.tone, route: route.key as WorkflowEdge['route'] });
+      const { from, to } = getBestNodeAnchors(phase.id, route.id);
+      const routeOffset = route.key === 'fail' ? 14 : -14;
+      edges.push({ id: `${route.key}:${phase.id}:${route.id}`, fromId: phase.id, toId: route.id, x1: from.x, y1: from.y + routeOffset, x2: to.x, y2: to.y + routeOffset, tone: route.tone, route: route.key as WorkflowEdge['route'] });
     });
     return edges;
   });
@@ -917,33 +1061,38 @@ export function WorkflowBuilderPage() {
                   {sectionBox && <div className="pointer-events-none absolute z-50 rounded-2xl border-2 border-dashed border-violet-500 bg-violet-500/10" style={{ left: Math.min(sectionBox.x1, sectionBox.x2), top: Math.min(sectionBox.y1, sectionBox.y2), width: Math.abs(sectionBox.x2 - sectionBox.x1), height: Math.abs(sectionBox.y2 - sectionBox.y1) }} />}
                   <svg className="pointer-events-none absolute inset-0 h-full w-full">
                     <defs>
-                      <marker id="workflow-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse">
-                        <path d="M 0 0 L 8 4 L 0 8 z" fill="#94a3b8" />
+                      <marker id="workflow-arrow" markerWidth="12" markerHeight="12" refX="10.5" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+                        <path d="M 1 1 L 11 6 L 1 11 z" fill="#64748b" />
                       </marker>
-                      <marker id="workflow-arrow-pass" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse">
-                        <path d="M 0 0 L 8 4 L 0 8 z" fill="#10b981" />
+                      <marker id="workflow-arrow-pass" markerWidth="12" markerHeight="12" refX="10.5" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+                        <path d="M 1 1 L 11 6 L 1 11 z" fill="#059669" />
                       </marker>
-                      <marker id="workflow-arrow-fail" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse">
-                        <path d="M 0 0 L 8 4 L 0 8 z" fill="#f43f5e" />
+                      <marker id="workflow-arrow-fail" markerWidth="12" markerHeight="12" refX="10.5" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+                        <path d="M 1 1 L 11 6 L 1 11 z" fill="#e11d48" />
                       </marker>
                     </defs>
                     {edges.map(edge => {
-                      const stroke = edge.tone === 'pass' ? '#10b981' : edge.tone === 'fail' ? '#f43f5e' : '#c7d2fe';
+                      const stroke = edge.tone === 'pass' ? '#059669' : edge.tone === 'fail' ? '#e11d48' : '#94a3b8';
                       const marker = edge.tone === 'pass' ? 'url(#workflow-arrow-pass)' : edge.tone === 'fail' ? 'url(#workflow-arrow-fail)' : 'url(#workflow-arrow)';
-                      return <path key={edge.id} d={`M ${edge.x1} ${edge.y1} C ${edge.x1 + 90} ${edge.y1}, ${edge.x2 - 90} ${edge.y2}, ${edge.x2} ${edge.y2}`} fill="none" stroke={stroke} strokeDasharray={edge.tone === 'fail' ? '7 6' : undefined} strokeWidth="3" markerEnd={marker} />;
+                      const path = getEdgePath(edge);
+                      return (
+                        <g key={edge.id}>
+                          <path d={path} fill="none" stroke="#fff" strokeLinecap="round" strokeLinejoin="round" strokeWidth="8" />
+                          <path d={path} fill="none" stroke={stroke} strokeDasharray={edge.tone === 'fail' ? '8 7' : undefined} strokeLinecap="round" strokeLinejoin="round" strokeWidth="3.5" markerEnd={marker} />
+                        </g>
+                      );
                     })}
-                    {linkDrag && <path d={`M ${linkDrag.x1} ${linkDrag.y1} C ${linkDrag.x1 + 90} ${linkDrag.y1}, ${linkDrag.x2 - 90} ${linkDrag.y2}, ${linkDrag.x2} ${linkDrag.y2}`} fill="none" stroke="#2563eb" strokeDasharray="8 6" strokeWidth="3" markerEnd="url(#workflow-arrow)" />}
+                    {linkDrag && <path d={getRoundedPolylinePath(getEdgeRoutePoints({ ...linkDrag, id: 'draft', toId: 'draft-target', tone: 'default' }))} fill="none" stroke="#2563eb" strokeDasharray="8 6" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3.5" markerEnd="url(#workflow-arrow)" />}
                   </svg>
                   {edges.map(edge => {
-                    const midX = (edge.x1 + edge.x2) / 2;
-                    const midY = (edge.y1 + edge.y2) / 2;
+                    const handlePoint = getEdgeHandlePoint(edge);
                     return (
                       <button
                         key={`rewire-${edge.id}`}
                         type="button"
                         onMouseDown={event => startEdgeRewire(event, edge)}
                         className="absolute z-20 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-indigo-200 bg-white text-[10px] font-black text-indigo-600 shadow hover:bg-indigo-50"
-                        style={{ left: midX, top: midY }}
+                        style={{ left: handlePoint.x, top: handlePoint.y }}
                         title="Drag to rewire this arrow"
                       >
                         <Settings2 className="h-3 w-3" />
