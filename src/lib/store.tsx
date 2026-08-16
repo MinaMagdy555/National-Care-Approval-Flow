@@ -2268,7 +2268,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       name,
       email: input.email?.trim() || undefined,
       role: input.role || 'team_member',
-      jobTitle: input.jobTitle?.trim() || 'Team Member',
+      jobTitle: input.jobTitle?.trim() || 'Content Creator',
       isAdmin: false,
       passwordHash,
       passwordUpdatedAt: passwordHash ? now : undefined,
@@ -2290,7 +2290,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!name || !canManageSettings) return;
 
     const role = input.role || usersObj[userId]?.role || 'team_member';
-    const jobTitle = input.jobTitle?.trim() || usersObj[userId]?.jobTitle || getResponsibilityLabelForRole(appSettings, role) || 'Team Member';
+    const jobTitle = input.jobTitle?.trim() || usersObj[userId]?.jobTitle || getResponsibilityLabelForRole(appSettings, role) || 'Content Creator';
     const email = input.email?.trim() || undefined;
     const passwordHash = input.password?.trim() ? await hashToolPassword(input.password) : undefined;
     const passwordUpdatedAt = passwordHash ? new Date().toISOString() : undefined;

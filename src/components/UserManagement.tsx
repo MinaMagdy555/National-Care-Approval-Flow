@@ -5,15 +5,41 @@ import { CustomSelect } from './CustomSelect';
 import { AppSettings, Role, User } from '../lib/types';
 import { isLeaderboardUser } from '../lib/workAssignmentUtils';
 
-const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
-  { value: 'team_member', label: 'Team Member' },
-  { value: 'reviewer', label: 'Reviewer' },
-  { value: 'art_director', label: 'Art Director' },
-  { value: 'team_leader', label: 'Team Leader' },
-  { value: 'manager', label: 'Manager' },
-  { value: 'marketing_manager', label: 'Marketing Manager' },
-  { value: 'admin', label: 'Admin' },
+const JOB_TITLE_OPTIONS: Array<{ value: string; label: string; permissionRole: Role }> = [
+  { value: 'senior_brand_designer_video_editor', label: 'Senior Brand Designer & Video Editor', permissionRole: 'reviewer' },
+  { value: 'graphic_designer', label: 'Graphic Designer', permissionRole: 'team_member' },
+  { value: 'content_creator', label: 'Content Creator', permissionRole: 'team_member' },
+  { value: 'senior_content_creator', label: 'Senior Content Creator', permissionRole: 'team_member' },
+  { value: 'video_editor', label: 'Video Editor', permissionRole: 'team_member' },
+  { value: 'art_director', label: 'Art Director', permissionRole: 'art_director' },
+  { value: 'team_leader', label: 'Team Leader', permissionRole: 'team_leader' },
+  { value: 'manager', label: 'Manager', permissionRole: 'manager' },
+  { value: 'developer', label: 'Developer', permissionRole: 'developer' },
+  { value: 'marketing_manager', label: 'Marketing Manager', permissionRole: 'marketing_manager' },
+  { value: 'hr', label: 'HR', permissionRole: 'team_member' },
 ];
+
+function normalizeLabel(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function getJobTitleOption(value: string) {
+  const normalized = normalizeLabel(value);
+  return JOB_TITLE_OPTIONS.find(option => normalizeLabel(option.label) === normalized || option.value === normalized);
+}
+
+function getPermissionRoleForJobTitle(title: string, fallback: Role): Role {
+  const exactMatch = getJobTitleOption(title);
+  if (exactMatch) return exactMatch.permissionRole;
+
+  const normalized = normalizeLabel(title);
+  if (normalized.includes('art director')) return 'art_director';
+  if (normalized.includes('team leader')) return 'team_leader';
+  if (normalized.includes('marketing manager')) return 'marketing_manager';
+  if (normalized.includes('manager')) return 'manager';
+  if (normalized.includes('developer')) return 'developer';
+  return fallback;
+}
 
 function splitCapabilities(value?: string) {
   return (value || '')
@@ -138,7 +164,7 @@ export function UserManagement() {
     const payload = {
       name,
       email: memberEmail.trim() || undefined,
-      role: memberRole,
+      role: getPermissionRoleForJobTitle(title, memberRole),
       jobTitle,
       password: memberPassword.trim() || undefined,
     };
@@ -494,7 +520,7 @@ export function UserManagement() {
                   />
                 </label>
                 <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-                  Position / Main Title *
+                  Position / Custom Title *
                   <input
                     value={memberTitle}
                     onChange={event => setMemberTitle(event.target.value)}
@@ -503,11 +529,16 @@ export function UserManagement() {
                   />
                 </label>
                 <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-                  Permission Role
+                  Job Title
                   <CustomSelect
-                    value={memberRole}
-                    onChange={value => setMemberRole(value as Role)}
-                    options={ROLE_OPTIONS}
+                    value={getJobTitleOption(memberTitle)?.value || memberTitle}
+                    onChange={value => {
+                      const option = JOB_TITLE_OPTIONS.find(item => item.value === value);
+                      if (!option) return;
+                      setMemberTitle(option.label);
+                      setMemberRole(option.permissionRole);
+                    }}
+                    options={JOB_TITLE_OPTIONS.map(({ value, label }) => ({ value, label }))}
                     buttonClassName="mt-1 min-h-10 rounded-xl border-slate-200 px-3 py-2.5 text-sm font-black text-slate-900 shadow-sm hover:bg-slate-50 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                     menuClassName="rounded-xl border-slate-200 bg-white shadow-xl"
                   />
