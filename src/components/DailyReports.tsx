@@ -20,7 +20,7 @@ type ReportRow = {
 
 const bucketStyles: Record<ReportBucket, { label: string; icon: React.ElementType; className: string }> = {
   approved: { label: 'Finished / Approved', icon: CheckCircle2, className: 'border-emerald-200 bg-emerald-50 text-emerald-800' },
-  rejected: { label: 'Finished / Rejected', icon: XCircle, className: 'border-rose-200 bg-rose-50 text-rose-800' },
+  rejected: { label: 'Finished / Returned', icon: XCircle, className: 'border-rose-200 bg-rose-50 text-rose-800' },
   waiting_review: { label: 'Finished / Waiting Review', icon: FileText, className: 'border-blue-200 bg-blue-50 text-blue-800' },
   active: { label: 'Active Work', icon: Clock, className: 'border-amber-200 bg-amber-50 text-amber-800' },
   not_started: { label: 'Not Started', icon: Clock, className: 'border-slate-200 bg-slate-50 text-slate-700' },
@@ -28,7 +28,7 @@ const bucketStyles: Record<ReportBucket, { label: string; icon: React.ElementTyp
 
 const bucketCountLabels: Record<ReportBucket, string> = {
   approved: 'Approved',
-  rejected: 'Rejected',
+  rejected: 'Returned',
   waiting_review: 'Waiting Review',
   active: 'Active Work',
   not_started: 'Not Started',
@@ -101,11 +101,12 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
     sendDailyReport,
   } = useAppStore();
 
-  const isSeniorReviewer = currentUser.role === 'reviewer';
-  const canInspectTeamReports = !isSeniorReviewer && (
-    Boolean(currentUser.isAdmin) ||
-    reportInspectorRoles.has(currentUser.role as ReportInspectorRole)
-  );
+  const isLeadershipReporter = Boolean(currentUser.isAdmin) || reportInspectorRoles.has(currentUser.role as ReportInspectorRole);
+  const isSeniorReporter = /\bsenior\b/i.test(currentUser.jobTitle || '');
+  // Personal reports remain personal. The cross-team showcase is reserved for
+  // leadership roles, rather than every senior contributor. A senior title
+  // always keeps this screen private, even when that account has other admin access.
+  const canInspectTeamReports = isLeadershipReporter && !isSeniorReporter;
   const [selectedDate, setSelectedDate] = useState(todayValue());
   const [showcaseDate, setShowcaseDate] = useState(todayValue());
   const [showcaseMemberId, setShowcaseMemberId] = useState('all');
@@ -234,9 +235,18 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
   };
 
   const reportUsers = useMemo(() => userList.filter(user => user.id !== 'guest'), [userList]);
+  const canInspectReportOwner = (owner: User) => {
+    if (owner.id === currentUser.id) return true;
+    if (canInspectTeamReports) return true;
+    return false;
+  };
+  const inspectableReportUsers = useMemo(
+    () => reportUsers.filter(canInspectReportOwner),
+    [reportUsers, currentUser.id, currentUser.jobTitle, currentUser.role, currentUser.isAdmin],
+  );
   const teamOptions = useMemo(() => {
-    return Array.from(new Set(reportUsers.map(user => deriveTeamName(user)))).sort();
-  }, [reportUsers]);
+    return Array.from(new Set(inspectableReportUsers.map(user => deriveTeamName(user)))).sort();
+  }, [inspectableReportUsers]);
 
   const showcaseGroups = useMemo(() => {
     const search = showcaseSearch.trim().toLowerCase();
@@ -250,6 +260,7 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
     sentReports.forEach(item => {
       const user = users[item.userId];
       if (!user) return;
+      if (!canInspectReportOwner(user)) return;
       const team = deriveTeamName(user);
       if (showcaseTeam !== 'all' && team !== showcaseTeam) return;
 
@@ -271,7 +282,7 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
         team,
         reports: reports.sort((a, b) => a.user.name.localeCompare(b.user.name)),
       }));
-  }, [dailyReports, showcaseDate, showcaseMemberId, showcaseTeam, showcaseStatus, showcaseSearch, users, tasks, environment]);
+  }, [dailyReports, showcaseDate, showcaseMemberId, showcaseTeam, showcaseStatus, showcaseSearch, users, tasks, environment, currentUser.id, currentUser.jobTitle, currentUser.role, currentUser.isAdmin]);
 
   const renderTaskRows = (rows: ReportRow[], viewer: User, readOnly = false) => (
     <div className="overflow-x-auto">
@@ -457,7 +468,7 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
                 <CustomSelect
                   value={showcaseMemberId}
                   onChange={setShowcaseMemberId}
-                  options={[{ value: 'all', label: 'All Members' }, ...reportUsers.map(user => ({ value: user.id, label: user.name }))]}
+                  options={[{ value: 'all', label: 'All Members' }, ...inspectableReportUsers.map(user => ({ value: user.id, label: user.name }))]}
                   buttonClassName="h-11 rounded-xl px-3 py-2 text-sm font-black"
                 />
               </div>

@@ -153,7 +153,6 @@ export function Sidebar({
 
     if (isFirstRev) {
       taskCenterChildren.push({ id: 'review_queue', label: 'Waiting for First Rev.', icon: FilePenLine });
-      taskCenterChildren.push({ id: 'quick_look_queue', label: 'Needs Quick Look', icon: FileText });
     }
 
     if (isFinalRev) {
@@ -171,7 +170,7 @@ export function Sidebar({
     }
 
     taskCenterChildren.push({ id: 'approved_by_me', label: 'Approved', icon: Check });
-    taskCenterChildren.push({ id: 'rejected_reopened', label: 'Rejected', icon: CircleX });
+    taskCenterChildren.push({ id: 'rejected_reopened', label: 'Returned', icon: CircleX });
     taskCenterChildren.push({ id: 'archived_tasks', label: 'Archived', icon: Archive });
 
     const showUploadTask = !isFirstRev && !isFinalRev;
@@ -199,7 +198,6 @@ export function Sidebar({
     'my_tasks',
     'content_revision_queue',
     'review_queue',
-    'quick_look_queue',
     'ad_queue',
     'due_today',
     'due_this_week',

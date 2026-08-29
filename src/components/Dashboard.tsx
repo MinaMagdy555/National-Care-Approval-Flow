@@ -165,7 +165,7 @@ export function Dashboard({
   const getRevisionStatusLabel = (task: Task) => {
     if (task.status === 'waiting_content_revision') return 'Content Revision';
     if (task.status === 'submitted' || task.status === 'waiting_reviewer_full_review') return 'First Review';
-    if (task.status === 'waiting_reviewer_quick_look') return 'First Review (Quick Look)';
+    if (task.status === 'waiting_reviewer_quick_look') return 'First Review';
     if (task.status === 'reviewer_approved' || task.status === 'sent_to_art_director' || task.status === 'waiting_art_director_approval') return 'Final Approval';
     if (task.status === 'changes_requested_by_reviewer') return 'First Review Changes';
     if (task.status === 'changes_requested_by_art_director') return 'Final Approval Changes';
@@ -428,7 +428,6 @@ export function Dashboard({
   };
 
   const needsFullReviewCount = workflowTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status) && isScopedToCurrentOwner(t)).length;
-  const needsQuickLookCount = workflowTasks.filter(t => t.status === 'waiting_reviewer_quick_look' && isScopedToCurrentOwner(t)).length;
   const waitingMarwaCount = workflowTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) && (currentUser.role !== 'art_director' || isScopedToCurrentOwner(t))).length;
   const approvedCount = workflowTasks.filter(t => t.status === 'approved_by_art_director').length;
   const waitingContentRevCount = workflowTasks.filter(t => t.status === 'waiting_content_revision').length;
@@ -473,15 +472,6 @@ export function Dashboard({
               onClick={() => onNavigate('review_queue')}
             />
             <SummaryCard
-              label="Needs Quick Look"
-              value={needsQuickLookCount}
-              icon={Clock}
-              textClassName="text-indigo-800"
-              borderClassName="border-indigo-100"
-              iconClassName="text-indigo-600"
-              onClick={() => onNavigate('quick_look_queue')}
-            />
-            <SummaryCard
               label="Waiting for Final Rev."
               value={waitingMarwaCount}
               icon={History}
@@ -492,7 +482,7 @@ export function Dashboard({
               onClick={() => onNavigate('ad_queue')}
             />
             <SummaryCard
-              label="Rejected"
+              label="Returned"
               value={rejectedCount}
               icon={XCircle}
               textClassName="text-rose-800"
@@ -524,7 +514,7 @@ export function Dashboard({
               onClick={() => onNavigate('content_revision_queue')}
             />
             <SummaryCard
-              label="Rejected"
+              label="Returned"
               value={returned.length}
               icon={XCircle}
               textClassName="text-rose-800"
@@ -573,7 +563,7 @@ export function Dashboard({
               onClick={() => onNavigate('ad_queue')}
             />
             <SummaryCard
-              label="Rejected"
+              label="Returned"
               value={rejectedCount}
               icon={XCircle}
               textClassName="text-rose-800"
@@ -623,7 +613,7 @@ export function Dashboard({
               onClick={() => onNavigate('waiting_for_marwa')}
             />
             <SummaryCard
-              label="Rejected"
+              label="Returned"
               value={returned.length}
               icon={XCircle}
               textClassName="text-rose-800"
@@ -1028,7 +1018,7 @@ export function Dashboard({
 
                     const getReadableStatus = (status: string) => {
                       if (status === 'submitted' || status === 'waiting_reviewer_full_review') return 'Waiting for First Review';
-                      if (status === 'waiting_reviewer_quick_look') return 'Waiting for First Review (Quick Look)';
+                      if (status === 'waiting_reviewer_quick_look') return 'Waiting for First Review';
                       if (status === 'reviewer_approved' || status === 'sent_to_art_director' || status === 'waiting_art_director_approval') return 'Waiting for Art Director';
                       if (status === 'changes_requested_by_art_director') return 'Art Director Requested Changes';
                       return status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -1151,7 +1141,7 @@ export function Dashboard({
 
                   const getReadableStatus = (status: string) => {
                     if (status === 'submitted' || status === 'waiting_reviewer_full_review') return 'Waiting for First Review';
-                    if (status === 'waiting_reviewer_quick_look') return 'Waiting for First Review (Quick Look)';
+                    if (status === 'waiting_reviewer_quick_look') return 'Waiting for First Review';
                     if (status === 'reviewer_approved' || status === 'sent_to_art_director' || status === 'waiting_art_director_approval') return 'Waiting for Art Director';
                     if (status === 'changes_requested_by_art_director') return 'Art Director Requested Changes';
                     return status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());

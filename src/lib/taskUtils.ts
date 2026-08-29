@@ -35,10 +35,13 @@ export function getTaskTypeLabel(type: TaskType, settings?: AppSettings): string
 
 export function getReviewModeLabel(mode: ReviewMode): string {
   switch (mode) {
-    case 'full_review': return 'Full Review';
-    case 'quick_look': return 'Quick Look';
-    case 'direct_to_ad': return 'Direct to Art Director';
-    default: return 'Review';
+    case 'content_review': return 'Content Rev.';
+    case 'final_review':
+    case 'direct_to_ad': return 'Final Rev.';
+    case 'first_review':
+    case 'full_review':
+    case 'quick_look': return 'First Rev.';
+    default: return 'First Rev.';
   }
 }
 
@@ -215,7 +218,7 @@ export function getNextActionLabel(task: Task, viewerRole: Role): string {
       return 'Review now';
     }
     if (status === 'waiting_reviewer_quick_look') {
-      return 'Quick look & send';
+      return 'Review now';
     }
     if (status === 'approved_by_art_director') {
       return 'No action needed - approved';

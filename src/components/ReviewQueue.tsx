@@ -68,9 +68,9 @@ export function ReviewQueue({
   const getReviewerIdsForTask = (task: Task) => {
     const taskTypeConfig = getTaskTypeConfigs(appSettings).find(config => cleanTaskTypeKey(config.id) === cleanTaskTypeKey(task.taskType));
     const ownerIds = getCurrentOwnerUserIds(task);
-    const configuredFirstReviewerIds = task.reviewMode === 'quick_look'
-      ? (taskTypeConfig?.quickLookUserIds?.length ? taskTypeConfig.quickLookUserIds : appSettings.firstReviewerUserIds || [])
-      : (taskTypeConfig?.fullReviewerUserIds?.length ? taskTypeConfig.fullReviewerUserIds : appSettings.firstReviewerUserIds || []);
+    const configuredFirstReviewerIds = taskTypeConfig?.fullReviewerUserIds?.length
+      ? taskTypeConfig.fullReviewerUserIds
+      : appSettings.firstReviewerUserIds || [];
     const configuredFinalReviewerIds = taskTypeConfig?.finalReviewerUserIds?.length ? taskTypeConfig.finalReviewerUserIds : appSettings.finalReviewerUserIds || [];
 
     if (task.status === 'waiting_content_revision') {
@@ -137,6 +137,7 @@ export function ReviewQueue({
     const statusInfo = getStatusInfo(task, currentUser.role, users);
     if (statusFilter !== 'all' && statusInfo.label !== statusFilter) return false;
 
+    // Work Date is the date the assignee is expected to work, not the date the task was created.
     const taskDate = task.assignmentDate || '';
     if (dateFilterMode === 'single' && singleDate && taskDate !== singleDate) return false;
     if (dateFilterMode === 'range' && (rangeStartDate || rangeEndDate)) {
@@ -282,9 +283,9 @@ export function ReviewQueue({
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-12">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {/* Search */}
-          <div className="flex flex-col gap-1.5 sm:col-span-2 xl:col-span-3">
+          <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Search</label>
             <div className="relative">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -299,7 +300,7 @@ export function ReviewQueue({
           </div>
 
           {/* Assigner */}
-          <div className="flex flex-col gap-1.5 xl:col-span-2">
+          <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Assigner</label>
             <CustomSelect
               value={creatorFilter}
@@ -309,7 +310,7 @@ export function ReviewQueue({
           </div>
 
           {/* Solo / Cooperation */}
-          <div className="flex flex-col gap-1.5 xl:col-span-2">
+          <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Solo / Cooperation</label>
             <CustomSelect
               value={teamModeFilter}
@@ -319,7 +320,7 @@ export function ReviewQueue({
           </div>
 
           {/* Assignee */}
-          <div className="flex flex-col gap-1.5 xl:col-span-2">
+          <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Assignee</label>
             <CustomSelect
               value={assigneeFilter}
@@ -329,7 +330,7 @@ export function ReviewQueue({
           </div>
 
           {/* Task Type */}
-          <div className="flex flex-col gap-1.5 xl:col-span-2">
+          <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Task Type</label>
             <CustomSelect
               value={typeFilter}
@@ -339,7 +340,7 @@ export function ReviewQueue({
           </div>
 
           {/* Priority */}
-          <div className="flex flex-col gap-1.5 xl:col-span-1">
+          <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Priority</label>
             <CustomSelect
               value={priorityFilter}
@@ -349,7 +350,7 @@ export function ReviewQueue({
           </div>
 
           {/* Status */}
-          <div className="flex flex-col gap-1.5 xl:col-span-2">
+          <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Status</label>
             <CustomSelect
               value={statusFilter}
@@ -359,7 +360,7 @@ export function ReviewQueue({
           </div>
 
           {/* Reviewer */}
-          <div className="flex flex-col gap-1.5 xl:col-span-2">
+          <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Reviewer</label>
             <CustomSelect
               value={reviewerFilter}
@@ -368,7 +369,7 @@ export function ReviewQueue({
             />
           </div>
 
-          <div className="flex flex-col gap-1.5 xl:col-span-2">
+          <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Person Role</label>
             <CustomSelect
               value={roleFilter}
@@ -382,7 +383,7 @@ export function ReviewQueue({
           </div>
 
           {/* Work Date */}
-          <div className="flex flex-col gap-1.5 xl:col-span-3">
+          <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between gap-3">
               <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Work Date</label>
               {hasDateFilter && (
@@ -448,7 +449,7 @@ export function ReviewQueue({
           </div>
 
           {/* Deadline Date */}
-          <div className="flex flex-col gap-1.5 xl:col-span-3">
+          <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between gap-3">
               <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Deadline Date</label>
               {(deadlineFilterMode !== 'all' || deadlineSingleDate || deadlineStartDate || deadlineEndDate) && (
@@ -530,17 +531,17 @@ export function ReviewQueue({
 
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="max-w-full overflow-x-auto">
-        <table className="min-w-[1180px] w-full text-left border-collapse">
+        <table className="min-w-[1050px] w-full table-fixed border-collapse text-left">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200 text-[10px] uppercase tracking-wider font-black text-slate-400">
-              <th className="w-[260px] p-4">Details</th>
-              <th className="w-[100px] p-4">Assigner</th>
-              <th className="w-[150px] p-4">Reviewer</th>
-              <th className="w-[170px] p-4">Role</th>
-              <th className="w-[105px] p-4">Priority</th>
-              <th className="w-[130px] p-4">Deadline</th>
-              <th className="w-[210px] p-4">Status</th>
-              <th className="sticky right-0 z-10 w-[170px] bg-slate-50 p-4 text-right shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.45)]">Action</th>
+              <th className="w-[190px] p-3">Details</th>
+              <th className="w-[90px] p-3">Assigner</th>
+              <th className="w-[120px] p-3">Reviewer</th>
+              <th className="w-[100px] p-3">Role</th>
+              <th className="w-[80px] p-3">Priority</th>
+              <th className="w-[100px] p-3">Deadline</th>
+              <th className="w-[195px] p-3">Status</th>
+              <th className="sticky right-0 z-10 w-[150px] bg-slate-50 p-3 text-right shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.45)]">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -562,7 +563,7 @@ export function ReviewQueue({
 
               return (
                 <tr key={task.id} className="hover:bg-slate-50/50 transition-colors group cursor-pointer border-b border-slate-100 last:border-0" onClick={() => onOpenTask(task.id)}>
-                  <td className="w-[260px] p-4 align-top">
+                  <td className="w-[190px] p-3 align-top">
                     <div className="font-bold text-slate-900 mb-1 leading-tight">{task.name}</div>
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-bold text-slate-400 font-mono mb-2">
                       <span>{task.code}</span>
@@ -581,7 +582,7 @@ export function ReviewQueue({
                       </div>
                     )}
                   </td>
-                  <td className="w-[100px] p-4 align-top">
+                  <td className="w-[90px] p-3 align-top">
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs">
                         {creator?.avatar ? <img src={creator.avatar} className="w-full h-full rounded-full object-cover"/> : creator?.name.charAt(0)}
@@ -589,12 +590,12 @@ export function ReviewQueue({
                       <span className="font-semibold text-sm text-slate-700">{creator?.name.split(' ')[0]}</span>
                     </div>
                   </td>
-                  <td className="w-[150px] p-4 align-top">
+                  <td className="w-[120px] p-3 align-top">
                     <div className="text-sm font-bold leading-snug text-slate-700">
                       {reviewerNames}
                     </div>
                   </td>
-                  <td className="w-[170px] p-4 align-top">
+                  <td className="w-[100px] p-3 align-top">
                     <div className="flex flex-wrap gap-1">
                       {roleLabels.length > 0 ? roleLabels.map(label => (
                         <span key={label} className="rounded-full border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-indigo-700">{cleanRoleLabel(label)}</span>
@@ -603,7 +604,7 @@ export function ReviewQueue({
                       )}
                     </div>
                   </td>
-                  <td className="w-[105px] p-4 align-top">
+                  <td className="w-[80px] p-3 align-top">
                     {task.priority !== 'not_set' ? (
                       <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide', priorityToneClasses(getPriorityTone(appSettings, task.priority)))}>
                         {getPriorityLabel(task.priority, appSettings)}
@@ -612,7 +613,7 @@ export function ReviewQueue({
                       <span className="text-xs font-bold text-slate-400">-</span>
                     )}
                   </td>
-                  <td className="w-[130px] p-4 align-top">
+                  <td className="w-[100px] p-3 align-top">
                     {task.deadlineAt ? (
                       <div className="flex flex-col gap-1 text-xs font-bold text-slate-700 whitespace-nowrap">
                         <div className="flex items-center gap-1.5">
@@ -628,8 +629,8 @@ export function ReviewQueue({
                       <span className="text-xs font-bold text-slate-400">-</span>
                     )}
                   </td>
-                  <td className="w-[210px] p-4 align-top">
-                    <div className={cn("inline-flex max-w-[190px] items-center px-3 py-1 rounded-full text-xs font-bold gap-1.5 leading-tight", colorStyles[statusInfo.color] || colorStyles.gray)}>
+                  <td className="w-[195px] p-3 align-top">
+                    <div className={cn("inline-flex max-w-full items-center gap-1 rounded-full px-2.5 py-1 text-[9px] font-bold whitespace-nowrap", colorStyles[statusInfo.color] || colorStyles.gray)} title={statusInfo.label}>
                        <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", `bg-${statusInfo.color === 'gray' ? 'slate' : statusInfo.color}-500`)}></span>
                        <span>{statusInfo.label}</span>
                     </div>
@@ -637,7 +638,7 @@ export function ReviewQueue({
                       <div className="mt-1 w-fit rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-emerald-700">Active work</div>
                     )}
                   </td>
-                  <td className="sticky right-0 z-10 w-[170px] bg-white p-4 text-right align-top shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.45)] group-hover:bg-slate-50">
+                  <td className="sticky right-0 z-10 w-[150px] bg-white p-3 text-right align-top shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.45)] group-hover:bg-slate-50">
                     {(() => {
                       const isAssignedToMe = task.handledBy.includes(currentUser.id);
                       const isTaskActiveForUpload = task.status === 'assigned_work';
@@ -724,13 +725,13 @@ export function ReviewQueue({
                       const isReviewerOrLeader = currentUser.role === 'reviewer' || leaderboardIds.includes(currentUser.id);
                       if (isReviewerOrLeader) {
                         return (
-                          <button className="px-4 py-1.5 border border-dashed border-indigo-300 text-indigo-600 font-bold text-sm rounded-lg hover:bg-indigo-50 transition-colors">
+                          <button onClick={(event) => { event.stopPropagation(); onOpenTask(task.id); }} className="px-4 py-1.5 border border-dashed border-indigo-300 text-indigo-600 font-bold text-sm rounded-lg hover:bg-indigo-50 transition-colors">
                             Review
                           </button>
                         );
                       } else {
                         return (
-                          <button className="px-4 py-1.5 border border-dashed border-slate-300 text-slate-600 font-bold text-sm rounded-lg hover:bg-slate-50 transition-colors">
+                          <button onClick={(event) => { event.stopPropagation(); onOpenTask(task.id); }} className="px-4 py-1.5 border border-dashed border-slate-300 text-slate-600 font-bold text-sm rounded-lg hover:bg-slate-50 transition-colors">
                             View
                           </button>
                         );

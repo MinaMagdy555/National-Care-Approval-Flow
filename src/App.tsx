@@ -430,10 +430,6 @@ function WorkspaceContent() {
         );
         return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={contentTasks} title="Waiting for Content Rev." />;
       }
-      case 'quick_look_queue': {
-        const needsQuickLook = workflowVisibleEnvTasks.filter(t => t.status === 'waiting_reviewer_quick_look' && isScopedToCurrentOwner(t));
-        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={needsQuickLook} title="Needs Quick Look" />;
-      }
       case 'ad_queue': {
         const needsAd = workflowVisibleEnvTasks.filter(t => (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && isScopedToCurrentOwner(t));
         return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={needsAd} title="Waiting for Final Rev." />;
@@ -447,7 +443,7 @@ function WorkspaceContent() {
         return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={dueThisWeek} title="Due This Week" />;
       }
       case 'waiting_for_mina': {
-        const waitingForMina = workflowVisibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
+        const waitingForMina = workflowVisibleEnvTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status));
         return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={waitingForMina} title="Waiting for First Rev." />;
       }
       case 'waiting_for_marwa': {
@@ -463,14 +459,14 @@ function WorkspaceContent() {
         const rejected = isFinalRev
           ? workflowVisibleEnvTasks.filter(t => t.status === 'changes_requested_by_art_director')
           : workflowVisibleEnvTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
-        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={rejected} title="Rejected / Returned" />;
+        return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={rejected} title="Returned for Changes" />;
       }
       case 'all_tasks': {
         let visibleTasks = visibleEnvTasks;
         const isFinalRev = (appSettings.finalReviewerUserIds || []).includes(currentUser.id);
         if (isFinalRev) {
           // exclude tasks that haven't reached AD yet
-          visibleTasks = visibleEnvTasks.filter(t => !['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'changes_requested_by_reviewer', 'reviewer_approved'].includes(t.status) || t.reviewMode === 'direct_to_ad');
+          visibleTasks = visibleEnvTasks.filter(t => !['submitted', 'waiting_reviewer_full_review', 'changes_requested_by_reviewer', 'reviewer_approved'].includes(t.status) || t.reviewMode === 'final_review' || t.reviewMode === 'direct_to_ad');
         }
         return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={visibleTasks} title="All Tasks" />;
       }

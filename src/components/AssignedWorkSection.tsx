@@ -200,6 +200,8 @@ export function AssignedWorkSection({
   const [showAllUsers, setShowAllUsers] = useState(false);
   const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
   const [workflowNodeAssigneeIds, setWorkflowNodeAssigneeIds] = useState<Record<string, string[]>>({});
+  const [workflowNodeAIAssigneeIds, setWorkflowNodeAIAssigneeIds] = useState<Record<string, string>>({});
+  const [workflowSkippedPhaseIds, setWorkflowSkippedPhaseIds] = useState<string[]>([]);
   const [links, setLinks] = useState<string[]>([]);
   const [linkInput, setLinkInput] = useState('');
   const [assignmentDateError, setAssignmentDateError] = useState('');
@@ -283,7 +285,10 @@ export function AssignedWorkSection({
   const otherUsers = assigneeOptions.filter(user => !suggestedUsers.some(su => su.id === user.id));
   const selectedWorkflowForTaskType = getWorkflowForTaskType(appSettings, taskType);
   const workflowSteps = (selectedWorkflowForTaskType?.phases || []).filter(phase => (phase.nodeType || 'step') === 'step' && !phase.disabled);
-  const workflowNodeSelectedIds = Array.from(new Set(Object.values(workflowNodeAssigneeIds).flat().filter(Boolean)));
+  const workflowNodeSelectedIds = Array.from(new Set([
+    ...Object.values(workflowNodeAssigneeIds).flat().filter((id): id is string => typeof id === 'string' && Boolean(id) && !id.startsWith('voice_over_')),
+    ...Object.values(workflowNodeAIAssigneeIds).filter(Boolean),
+  ]));
   const effectiveAssigneeIds = isLeadershipAssigner
     ? Array.from(new Set([...assigneeIds, ...workflowNodeSelectedIds]))
     : [currentUser.id];
@@ -302,7 +307,16 @@ export function AssignedWorkSection({
       const next = Object.fromEntries(Object.entries(prev).filter(([phaseId]) => validStepIds.has(phaseId)));
       return Object.keys(next).length === Object.keys(prev).length ? prev : next;
     });
+    setWorkflowNodeAIAssigneeIds(prev => Object.fromEntries(Object.entries(prev).filter(([phaseId]) => validStepIds.has(phaseId))));
+    setWorkflowSkippedPhaseIds(prev => prev.filter(phaseId => validStepIds.has(phaseId)));
   }, [selectedWorkflowForTaskType?.id, taskType]);
+
+  useEffect(() => {
+    const availableTypes = getTaskTypeConfigs(appSettings);
+    if (availableTypes.length > 0 && !availableTypes.some(config => config.id === taskType)) {
+      setTaskType(availableTypes[0].id);
+    }
+  }, [appSettings, taskType]);
 
   const visibleTasks = tasks.filter(task => {
     return canViewAllWorkload || task.handledBy.includes(currentUser.id) || task.createdBy === currentUser.id;
@@ -448,6 +462,8 @@ export function AssignedWorkSection({
     setShowAllUsers(false);
     setAssigneeIds([]);
     setWorkflowNodeAssigneeIds({});
+    setWorkflowNodeAIAssigneeIds({});
+    setWorkflowSkippedPhaseIds([]);
     setLinks([]);
     setLinkInput('');
     setAssignmentDateError('');
@@ -680,6 +696,8 @@ export function AssignedWorkSection({
       assignmentLinks: normalizeLinks(links),
       handledByIds: effectiveAssigneeIds,
       workflowNodeAssigneeIds,
+      workflowNodeAIAssigneeIds,
+      workflowSkippedPhaseIds,
       isOvertime,
       taskType,
       needsContentRevision,
@@ -713,6 +731,8 @@ export function AssignedWorkSection({
     setTaskType(task.taskType || 'video');
     setAssigneeIds(task.handledBy);
     setWorkflowNodeAssigneeIds(task.workflowNodeAssigneeIds || {});
+    setWorkflowNodeAIAssigneeIds(task.workflowNodeAIAssigneeIds || {});
+    setWorkflowSkippedPhaseIds(task.workflowSkippedPhaseIds || []);
     setLinks(task.assignmentLinks || []);
     setActiveTab('assign_task');
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
@@ -728,6 +748,8 @@ export function AssignedWorkSection({
       assignmentLinks: normalizeLinks(task.assignmentLinks || []),
       handledByIds: task.handledBy,
       workflowNodeAssigneeIds: task.workflowNodeAssigneeIds || {},
+      workflowNodeAIAssigneeIds: task.workflowNodeAIAssigneeIds || {},
+      workflowSkippedPhaseIds: task.workflowSkippedPhaseIds || [],
       isOvertime: Boolean(task.isOvertime),
       taskType: task.taskType || 'others',
       needsContentRevision: Boolean(task.needsContentRevision),
@@ -751,14 +773,12 @@ export function AssignedWorkSection({
   const todayInputValue = getTodayInputValue();
   const assignmentDateIsValid = !assignmentDate || (isDateValue(assignmentDate) && assignmentDate >= todayInputValue);
   const deadlineIsValid = !hasDeadlineInput || (Boolean(deadlineDate && deadlineTime) && deadlineValidation.ok);
-  const formIsValid = name.trim() && assignmentDateIsValid && deadlineIsValid && effectiveAssigneeIds.length > 0;
+  const formIsValid = name.trim() && Boolean(taskType) && assignmentDateIsValid && deadlineIsValid && effectiveAssigneeIds.length > 0;
   const sectionTitle = mode === 'tracking'
     ? 'Task List'
     : activeTab === 'task_list'
       ? 'Task List'
-      : activeTab === 'task_types'
-        ? 'Task Types & Workflows'
-        : 'Assign a Task';
+      : 'Assign a Task';
   return (
     <section className="space-y-4">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-2">
@@ -789,18 +809,6 @@ export function AssignedWorkSection({
               )}
             >
               Task List
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('task_types')}
-              className={cn(
-                "px-3 py-1.5 text-xs font-black uppercase tracking-wider border-b-2 transition-all",
-                activeTab === 'task_types'
-                  ? "border-indigo-600 text-indigo-600"
-                  : "border-transparent text-slate-400 hover:text-slate-700"
-              )}
-            >
-              Task Types & Workflows
             </button>
           </div>
         )}
@@ -1276,41 +1284,10 @@ export function AssignedWorkSection({
                     <CustomSelect
                       value={taskType}
                       onChange={value => setTaskType(value)}
-                      options={(appSettings.taskTypes || []).map(t => {
-                        const id = typeof t === 'object' && t !== null ? t.id : String(t);
-                        return { value: id, label: getTaskTypeLabel(id, appSettings).toUpperCase() };
-                      })}
-                      buttonClassName={SELECT_BUTTON_CLASS}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const newType = prompt('Enter new task type name:');
-                      if (!newType || !newType.trim()) return;
-                      const normalized = normalizeTaskTypeId(newType);
-                      updateAppSettings(settings => {
-                        const current = settings.taskTypes || [];
-                        const exists = current.some(t => {
-                          const existingId = typeof t === 'object' && t !== null ? (t as any).id : String(t);
-                          return existingId.toLowerCase() === normalized.toLowerCase();
-                        });
-                        if (exists) {
-                          alert('This task type already exists.');
-                          return settings;
-                        }
-                        return {
-                          ...settings,
-                          taskTypes: [...current, normalized]
-                        };
-                      });
-                      setTaskType(normalized);
-                    }}
-                    className="h-11 px-3 rounded-xl border border-slate-200 hover:bg-slate-50 text-xs font-black uppercase tracking-wider text-slate-500 hover:text-slate-800 transition-colors shrink-0"
-                    title="Add new task type"
-                  >
-                    + Add Type
-                  </button>
+                    options={taskTypeConfigs.map(config => ({ value: config.id, label: config.label.toUpperCase() }))}
+                    buttonClassName={SELECT_BUTTON_CLASS}
+                  />
+                </div>
                 </div>
               </div>
               <div>
@@ -1441,20 +1418,27 @@ export function AssignedWorkSection({
                     </div>
                     {workflowSteps.map((phase, index) => {
                       const phaseResponsibilityLabels = (phase.responsibilityIds || []).map(id => appSettings.responsibilities.find(item => item.id === id)?.label || id.replace(/_/g, ' '));
+                      const isSkipped = workflowSkippedPhaseIds.includes(phase.id);
+                      const isVoiceOver = (phase.responsibilityIds || []).includes('voice_over');
                       const phaseUsers = assigneeOptions.filter(user => {
                         if ((phase.responsibilityIds || []).length === 0) return true;
                         return phase.responsibilityIds.some(responsibilityId => userMatchesResponsibilityLabel(user, responsibilityId, appSettings));
                       });
                       const selectedIds = workflowNodeAssigneeIds[phase.id] || [];
                       return (
-                        <div key={phase.id} className="rounded-xl border border-indigo-100 bg-white p-3">
+                        <div key={phase.id} className={cn("rounded-xl border bg-white p-3", isSkipped ? "border-slate-200 opacity-65" : "border-indigo-100")}>
                           <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
                             <div>
                               <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">Step {index + 1}</div>
                               <div className="text-sm font-black text-slate-950">{phase.name}</div>
                               {phase.nodeNote && <p className="mt-1 text-xs font-semibold text-slate-500">{phase.nodeNote}</p>}
                             </div>
-                            <div className="flex flex-wrap justify-end gap-1">
+                            <div className="flex flex-wrap justify-end gap-1.5">
+                              {phase.skipRule === 'manual' && (
+                                <button type="button" onClick={() => setWorkflowSkippedPhaseIds(prev => isSkipped ? prev.filter(id => id !== phase.id) : [...prev, phase.id])} className={cn("rounded-lg border px-2 py-1 text-[10px] font-black", isSkipped ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700")}>
+                                  {isSkipped ? 'Include step' : 'Skip optional step'}
+                                </button>
+                              )}
                               {phaseResponsibilityLabels.length > 0 ? phaseResponsibilityLabels.map(label => (
                                 <span key={label} className="rounded-full border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-indigo-700">{label}</span>
                               )) : (
@@ -1462,12 +1446,39 @@ export function AssignedWorkSection({
                               )}
                             </div>
                           </div>
-                          <UserMultiSelect
-                            users={phaseUsers.length > 0 ? phaseUsers : assigneeOptions}
-                            selectedIds={selectedIds}
-                            onChange={ids => setWorkflowNodeAssigneeIds(prev => ({ ...prev, [phase.id]: ids }))}
-                            emptyText="No members match this node responsibility"
-                          />
+                          {!isSkipped && (isVoiceOver ? (
+                            <div className="space-y-2">
+                              <CustomSelect
+                                value={selectedIds[0] || ''}
+                                onChange={value => {
+                                  setWorkflowNodeAssigneeIds(prev => ({ ...prev, [phase.id]: value ? [value] : [] }));
+                                  if (value !== 'voice_over_ai') setWorkflowNodeAIAssigneeIds(prev => ({ ...prev, [phase.id]: '' }));
+                                }}
+                                options={[
+                                  { value: '', label: 'Choose voice over provider' },
+                                  { value: 'voice_over_shaza', label: 'Shaza' },
+                                  { value: 'voice_over_ai', label: 'AI generated voice' },
+                                ]}
+                              />
+                              {selectedIds.includes('voice_over_ai') && (
+                                <CustomSelect
+                                  value={workflowNodeAIAssigneeIds[phase.id] || ''}
+                                  onChange={value => setWorkflowNodeAIAssigneeIds(prev => ({ ...prev, [phase.id]: value }))}
+                                  options={[
+                                    { value: '', label: 'Choose content team member' },
+                                    ...userList.filter(user => user.id !== 'guest' && /content creator/i.test(user.jobTitle || '')).map(user => ({ value: user.id, label: user.name })),
+                                  ]}
+                                />
+                              )}
+                            </div>
+                          ) : (
+                            <UserMultiSelect
+                              users={phaseUsers.length > 0 ? phaseUsers : assigneeOptions}
+                              selectedIds={selectedIds}
+                              onChange={ids => setWorkflowNodeAssigneeIds(prev => ({ ...prev, [phase.id]: ids }))}
+                              emptyText="No members match this node responsibility"
+                            />
+                          ))}
                         </div>
                       );
                     })}

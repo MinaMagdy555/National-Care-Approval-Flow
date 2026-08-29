@@ -29,10 +29,10 @@ export function userCanViewFullWorkspace(user: Pick<User, 'id' | 'role' | 'isAdm
 
 export function canUserAccessTask(task: Task, user: Pick<User, 'id' | 'role' | 'isAdmin'>, settings?: AppSettings) {
   if (userCanViewFullWorkspace(user, settings)) return true;
-  return task.createdBy === user.id || 
-         task.handledBy.includes(user.id) || 
-         getCurrentOwnerUserIds(task).includes(user.id) ||
-         (task.contentRevisionAssigneeIds || []).includes(user.id);
+  // Contributors see a task only when their phase is active. This prevents a
+  // later workflow owner from seeing work before it reaches their step.
+  if (task.createdBy === user.id) return true;
+  return isPhaseAvailable(task) && getCurrentOwnerUserIds(task).includes(user.id);
 }
 
 export function canManageWorkflow(user: Pick<User, 'id' | 'role' | 'isAdmin'>, settings?: AppSettings) {
@@ -77,16 +77,17 @@ export function isDirectToFinalReviewUploader(user?: Pick<User, 'role' | 'jobTit
 }
 
 export function canUserActAsCurrentOwner(task: Task, user: Pick<User, 'id'>) {
+  if (!isPhaseAvailable(task)) return false;
   const ownerIds = getCurrentOwnerUserIds(task);
   return ownerIds.length === 0 || ownerIds.includes(user.id);
 }
 
 export function getReviewRouteTarget(mode: ReviewMode): { status: TaskStatus; ownerRole: Role } {
-  if (mode === 'quick_look') {
-    return { status: 'waiting_reviewer_quick_look', ownerRole: 'reviewer' };
+  if (mode === 'content_review') {
+    return { status: 'waiting_content_revision', ownerRole: 'team_member' };
   }
 
-  if (mode === 'direct_to_ad') {
+  if (mode === 'final_review' || mode === 'direct_to_ad') {
     return { status: 'sent_to_art_director', ownerRole: 'art_director' };
   }
 
@@ -101,13 +102,14 @@ export function getWorkflowForTaskType(settings: AppSettings, taskType: string) 
   const cleanType = cleanTaskTypeKey(taskType);
   const configWorkflowId = getTaskTypeConfigs(settings).find(c => cleanTaskTypeKey(c.id) === cleanType)?.workflowId;
   const mappedWorkflowId = settings.taskTypeWorkflowIds?.[cleanType];
-  const workflowId = configWorkflowId || mappedWorkflowId || getDefaultWorkflowIdForTaskType(taskType) || settings.defaultWorkflowId;
-  return getWorkflowById(settings, workflowId) || getWorkflowById(settings, settings.defaultWorkflowId) || (settings.workflows || [])[0] || null;
+  const workflowId = configWorkflowId || mappedWorkflowId || getDefaultWorkflowIdForTaskType(taskType);
+  return getWorkflowById(settings, workflowId) || null;
 }
 
 export function cloneWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {
   return {
     ...workflow,
+    taskTypeIds: [...(workflow.taskTypeIds || [])],
     phases: workflow.phases.filter(phase => (phase.nodeType || 'step') === 'step' && !phase.disabled).map(phase => ({
       ...phase,
       groupId: null,
@@ -122,8 +124,13 @@ export function cloneWorkflow(workflow: WorkflowDefinition): WorkflowDefinition 
   };
 }
 
-export function getWorkflowPhase(task: Pick<Task, 'workflowSnapshot' | 'workflowCurrentPhaseIndex' | 'workflowCurrentPhaseId'>) {
+export function getWorkflowPhase(task: Pick<Task, 'workflowSnapshot' | 'workflowCurrentPhaseIndex' | 'workflowCurrentPhaseId' | 'workflowActivePhaseIds'>) {
   const phases = task.workflowSnapshot?.phases || [];
+  const activePhaseId = task.workflowActivePhaseIds?.[0];
+  if (activePhaseId) {
+    const activePhase = phases.find(phase => phase.id === activePhaseId);
+    if (activePhase) return activePhase;
+  }
   if (task.workflowCurrentPhaseId) {
     const byId = phases.find(phase => phase.id === task.workflowCurrentPhaseId);
     if (byId) return byId;
@@ -165,9 +172,39 @@ export function resolveWorkflowPhaseReviewerIds(phase: WorkflowPhaseDefinition |
   return Array.from(ids);
 }
 
+export function getActiveWorkflowPhaseForUser(
+  task: Task,
+  userId: string,
+  settings: AppSettings,
+  users: User[],
+) {
+  const activePhaseIds = task.workflowActivePhaseIds?.length
+    ? task.workflowActivePhaseIds
+    : [task.workflowCurrentPhaseId].filter(Boolean) as string[];
+  const activePhases = (task.workflowSnapshot?.phases || [])
+    .filter(phase => activePhaseIds.includes(phase.id));
+
+  const ownedPhase = activePhases.find(phase => {
+    const explicitAssignees = task.workflowNodeAssigneeIds?.[phase.id] || [];
+    const ownerIds = explicitAssignees.length > 0
+      ? uniqueIds([
+          ...explicitAssignees.filter(id => id !== 'voice_over_ai'),
+          ...(explicitAssignees.includes('voice_over_ai') && task.workflowNodeAIAssigneeIds?.[phase.id]
+            ? [task.workflowNodeAIAssigneeIds[phase.id]]
+            : []),
+        ])
+      : resolveWorkflowPhaseReviewerIds(phase, settings, users, task);
+    return ownerIds.includes(userId);
+  });
+
+  return ownedPhase || getWorkflowPhase(task);
+}
+
 export function getPhaseOwnerRole(phase: WorkflowPhaseDefinition | null | undefined): Role | null {
   if (!phase) return null;
-  if (phase.reviewStyle === 'final_approval' || (phase.roleIds || []).includes('art_director')) return 'art_director';
+  if (phase.phaseKind === 'final_review' || phase.reviewStyle === 'final_approval' || (phase.roleIds || []).includes('art_director')) return 'art_director';
+  if (phase.phaseKind === 'first_review') return 'reviewer';
+  if (phase.phaseKind === 'content_review') return 'team_member';
   if ((phase.roleIds || []).includes('team_member') || (phase.responsibilityIds || []).includes('content_creator')) return 'team_member';
   if ((phase.roleIds || []).includes('team_leader')) return 'team_leader';
   return 'reviewer';
@@ -175,15 +212,17 @@ export function getPhaseOwnerRole(phase: WorkflowPhaseDefinition | null | undefi
 
 export function getStatusForWorkflowPhase(phase: WorkflowPhaseDefinition | null | undefined): TaskStatus {
   if (!phase) return 'approved_by_art_director';
-  if (phase.reviewStyle === 'final_approval' || (phase.roleIds || []).includes('art_director')) return 'sent_to_art_director';
-  if ((phase.roleIds || []).includes('team_member') || (phase.responsibilityIds || []).includes('content_creator')) return 'waiting_content_revision';
-  return phase.reviewStyle === 'full_review' ? 'waiting_reviewer_full_review' : 'waiting_reviewer_quick_look';
+  if (phase.phaseKind === 'final_review' || phase.reviewStyle === 'final_approval' || (phase.roleIds || []).includes('art_director')) return 'sent_to_art_director';
+  if (phase.phaseKind === 'first_review' || phase.reviewStyle === 'full_review') return 'waiting_reviewer_full_review';
+  if (phase.phaseKind === 'content_review') return 'waiting_content_revision';
+  return 'assigned_work';
 }
 
 export function getReviewModeForWorkflowPhase(phase: WorkflowPhaseDefinition | null | undefined): ReviewMode {
-  if (!phase) return 'full_review';
-  if (phase.reviewStyle === 'final_approval') return 'direct_to_ad';
-  return phase.reviewStyle === 'full_review' ? 'full_review' : 'quick_look';
+  if (!phase) return 'first_review';
+  if (phase.phaseKind === 'final_review' || phase.reviewStyle === 'final_approval') return 'final_review';
+  if (phase.phaseKind === 'content_review') return 'content_review';
+  return 'first_review';
 }
 
 export function getWorkflowApprovalIds(task: Pick<Task, 'workflowPhaseApprovals'>, phaseId: string) {
@@ -223,13 +262,15 @@ export function getCurrentReviewPhaseName(task: Pick<Task, 'workflowSnapshot' | 
   if (task.status === 'reviewer_approved' || task.status === 'sent_to_art_director' || task.status === 'waiting_art_director_approval' || task.status === 'changes_requested_by_art_director' || task.status === 'approved_by_art_director') {
     return 'Final approval';
   }
-  if (task.status === 'waiting_reviewer_full_review') return 'First review';
-  if (task.status === 'waiting_reviewer_quick_look') return 'Quick look';
-  if (task.status === 'waiting_content_revision') return 'Content revision';
+  if (task.status === 'waiting_reviewer_full_review' || task.status === 'waiting_reviewer_quick_look') return 'First Rev.';
+  if (task.status === 'waiting_content_revision') return 'Content Rev.';
   return null;
 }
 
-export function evaluateSkipRule(rule: WorkflowPhaseDefinition['skipRule'] | undefined, task: Task): boolean {
+export function evaluateSkipRule(
+  rule: WorkflowPhaseDefinition['skipRule'] | undefined,
+  task: Pick<Task, 'assignmentLinks' | 'versions' | 'workflowSkippedPhaseIds'>,
+): boolean {
   if (!rule || rule === 'none') return false;
   if (rule === 'manual') return false;
   if (rule === 'if_no_task_links') {
@@ -277,11 +318,11 @@ export function isPhaseAvailable(task: Pick<Task, 'workflowPhaseAvailableAt'>, n
   return new Date(task.workflowPhaseAvailableAt).getTime() <= now.getTime();
 }
 
-export function getNextPhaseIndex(workflow: WorkflowDefinition, fromIndex: number, task: Task): number {
+export function getNextPhaseIndex(workflow: WorkflowDefinition, fromIndex: number, task: Pick<Task, 'assignmentLinks' | 'versions' | 'workflowSkippedPhaseIds' | 'workflowPhaseApprovals'>): number {
   let index = fromIndex + 1;
   while (index < workflow.phases.length) {
     const candidate = workflow.phases[index];
-    if (candidate && candidate.nodeType !== 'step') {
+    if (candidate && (candidate.nodeType !== 'step' || candidate.disabled || (task.workflowSkippedPhaseIds || []).includes(candidate.id))) {
       index += 1;
       continue;
     }

@@ -9,6 +9,7 @@ import { createLinkedTaskFileWithMetadata, getLinkHostLabel, parseAssignmentLink
 import { canManageWorkflowBuilder, getReviewRouteTarget, getWorkflowForTaskType, isContentCreatorProfile, isDirectToFinalReviewUploader, uniqueIds } from '../lib/workflowUtils';
 import { canUploadWorkAssignment } from '../lib/workAssignmentUtils';
 import { getTaskTypeLabel } from '../lib/taskUtils';
+import { getTaskTypeConfigs } from '../lib/appSettings';
 
 const FORM_SELECT_BUTTON_CLASS = 'rounded-xl border-slate-300 px-4 py-3 text-sm font-bold text-slate-900 shadow-none hover:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500';
 
@@ -22,8 +23,8 @@ export function CreateTask({
   const { tasks, currentUser, userList, users, environment, addTask, addNotification, submitWorkAssignmentUpload, appSettings, getEffectiveReviewMode } = useAppStore();
   const [taskName, setTaskName] = useState('');
   const [createdBy, setCreatedBy] = useState('');
-  const [taskType, setTaskType] = useState<TaskType>('video');
-  const [reviewMode, setReviewMode] = useState<ReviewMode>('full_review');
+  const [taskType, setTaskType] = useState<TaskType>('');
+  const [reviewMode, setReviewMode] = useState<ReviewMode>('first_review');
   const [workflowId, setWorkflowId] = useState('');
   const [assignedContributorIds, setAssignedContributorIds] = useState<string[]>([]);
   const [scheduledPublishAt, setScheduledPublishAt] = useState('');
@@ -54,17 +55,17 @@ export function CreateTask({
   const contributorOptions = canManageAssignedContributors
     ? getAssignableContributorsForTask(workspaceUsers, taskType, selectedCreatorId, appSettings)
     : [];
-  const taskTypeOptions = (appSettings?.taskTypes || ['video', 'ai packet', 'sales material', 'website material', 'campaign', 'others']).map(t => {
-    const id = typeof t === 'object' && t !== null ? t.id : String(t);
+  const taskTypeOptions = getTaskTypeConfigs(appSettings).map(config => {
+    const id = config.id;
     return {
       value: id,
       label: getTaskTypeLabel(id, appSettings)
     };
   });
   const reviewModeOptions = [
-    { value: 'full_review', label: 'Full Review' },
-    { value: 'quick_look', label: 'Quick Look' },
-    { value: 'direct_to_ad', label: 'Direct to Art Director' },
+    { value: 'content_review', label: 'Content Rev.' },
+    { value: 'first_review', label: 'First Rev.' },
+    { value: 'final_review', label: 'Final Rev. (Art Director)' },
   ];
   const workflowOptions = (appSettings.workflows || [])
     .filter(workflow => workflow.active !== false)
@@ -86,6 +87,13 @@ export function CreateTask({
     const availableContributorIds = new Set(contributorOptions.map(user => user.id));
     setAssignedContributorIds(prev => prev.filter(userId => availableContributorIds.has(userId)));
   }, [selectedCreatorId, taskType, canManageAssignedContributors, workspaceUsers.map(user => user.id).join('|')]);
+
+  useEffect(() => {
+    if (isAssignmentUploadMode || taskTypeOptions.length === 0) return;
+    if (!taskTypeOptions.some(option => option.value === taskType)) {
+      setTaskType(taskTypeOptions[0].value as TaskType);
+    }
+  }, [isAssignmentUploadMode, taskType, taskTypeOptions.map(option => option.value).join('|')]);
 
   useEffect(() => {
     if (!assignmentTask) return;
@@ -111,7 +119,7 @@ export function CreateTask({
     }
     const creator = users[selectedCreatorId] || (selectedCreatorId === currentUser.id ? currentUser : undefined);
     const isContentCreator = isContentCreatorProfile(isAssignmentUploadMode ? currentUser : creator);
-    const defaultMode = getEffectiveReviewMode(taskType, isContentCreator, 'full_review');
+    const defaultMode = getEffectiveReviewMode(taskType, isContentCreator, 'first_review');
     setReviewMode(defaultMode);
     const workflow = getWorkflowForTaskType(appSettings, taskType);
     setWorkflowId(workflow?.id || '');

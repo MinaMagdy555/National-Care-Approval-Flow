@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Expand, GitBranch, Layers, Minimize2, Plus, Route, Settings2, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { useAppStore } from '../lib/store';
-import { TaskTypeConfig, WorkflowDefinition, WorkflowNodeSubPhase, WorkflowNodeType, WorkflowPhaseDefinition } from '../lib/types';
+import { WorkflowDefinition, WorkflowNodeSubPhase, WorkflowNodeType, WorkflowPhaseDefinition } from '../lib/types';
 import { cleanTaskTypeKey, normalizeSettingId } from '../lib/appSettings';
 import { cn } from '../lib/utils';
 import { CustomSelect } from './CustomSelect';
@@ -186,14 +186,6 @@ function makeGroupId() {
   return `group_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
-function taskTypeId(config: string | TaskTypeConfig) {
-  return typeof config === 'object' && config !== null ? config.id : String(config);
-}
-
-function taskTypeLabel(config: string | TaskTypeConfig) {
-  return typeof config === 'object' && config !== null ? config.label : String(config);
-}
-
 function getPhasePosition(phase: WorkflowPhaseDefinition, index: number) {
   return {
     x: typeof phase.nodeX === 'number' ? phase.nodeX : 360 + index * 290,
@@ -224,6 +216,7 @@ function makePhase(name = 'New Step', parentPhaseId: string | null = null, x = 3
   return {
     id: makePhaseId(name),
     name,
+    phaseKind: nodeType === 'step' ? 'work' : undefined,
     reviewStyle: 'quick_look',
     mode: 'sequential',
     userIds: [],
@@ -341,6 +334,7 @@ export function WorkflowBuilderPage() {
   const workflows = appSettings.workflows || [];
   const [selectedWorkflowId, setSelectedWorkflowId] = useState(workflows[0]?.id || '');
   const [newWorkflowName, setNewWorkflowName] = useState('');
+  const [newWorkflowTaskType, setNewWorkflowTaskType] = useState('');
   const [editingPhaseId, setEditingPhaseId] = useState<string | null>(null);
   const [phaseEditSnapshot, setPhaseEditSnapshot] = useState<WorkflowPhaseDefinition | null>(null);
   const [dragging, setDragging] = useState<{ id: string; dx: number; dy: number; startX: number; startY: number; movingIds?: string[]; origins?: Record<string, { x: number; y: number }> } | null>(null);
@@ -361,12 +355,9 @@ export function WorkflowBuilderPage() {
   const workflowOptions = useMemo(() => (
     workflows.map(workflow => ({
       workflow,
-      taskTypeCount: (appSettings.taskTypes || []).filter(config => {
-        const id = cleanTaskTypeKey(taskTypeId(config));
-        return appSettings.taskTypeWorkflowIds?.[id] === workflow.id;
-      }).length,
+      taskTypeCount: (workflow.taskTypeIds || []).length,
     }))
-  ), [workflows, appSettings.taskTypes, appSettings.taskTypeWorkflowIds]);
+  ), [workflows]);
 
   const updateWorkflow = (workflowId: string, updater: (workflow: WorkflowDefinition) => WorkflowDefinition) => {
     updateAppSettings(settings => ({
@@ -378,6 +369,29 @@ export function WorkflowBuilderPage() {
   const updateSelectedWorkflow = (updater: (workflow: WorkflowDefinition) => WorkflowDefinition) => {
     if (!selectedWorkflowIdSafe) return;
     updateWorkflow(selectedWorkflowIdSafe, workflow => ({ ...updater(workflow), updatedAt: new Date().toISOString() }));
+  };
+
+  const addTaskTypeToSelectedWorkflow = () => {
+    const label = newWorkflowTaskType.trim();
+    const id = cleanTaskTypeKey(label);
+    if (!selectedWorkflow || !id) return;
+    const existsOnAnotherWorkflow = workflows.some(workflow => workflow.id !== selectedWorkflow.id && (workflow.taskTypeIds || []).some(item => cleanTaskTypeKey(item) === id));
+    if (existsOnAnotherWorkflow) {
+      window.alert('This task type already belongs to another workflow. Remove it there before reusing it.');
+      return;
+    }
+    updateSelectedWorkflow(workflow => ({
+      ...workflow,
+      taskTypeIds: Array.from(new Set([...(workflow.taskTypeIds || []), id])),
+    }));
+    setNewWorkflowTaskType('');
+  };
+
+  const removeTaskTypeFromSelectedWorkflow = (taskTypeId: string) => {
+    updateSelectedWorkflow(workflow => ({
+      ...workflow,
+      taskTypeIds: (workflow.taskTypeIds || []).filter(id => cleanTaskTypeKey(id) !== cleanTaskTypeKey(taskTypeId)),
+    }));
   };
 
   const updatePhase = (phaseId: string, updater: (phase: WorkflowPhaseDefinition) => WorkflowPhaseDefinition) => {
@@ -665,6 +679,7 @@ export function WorkflowBuilderPage() {
           deletedWorkflowIds: nextDeletedWorkflowIds,
           defaultWorkflowId: settings.defaultWorkflowId === workflowId ? (nextWorkflows[0]?.id || null) : settings.defaultWorkflowId,
           taskTypeWorkflowIds: nextAssignments,
+          taskTypes: (settings.taskTypes || []).filter(item => typeof item !== 'object' || item === null || item.workflowId !== workflowId),
         };
       });
       setSelectedWorkflowId(nextSelectedWorkflowId);
@@ -1020,13 +1035,20 @@ export function WorkflowBuilderPage() {
                 </div>
               </div>
               <div className="mt-4 border-t border-slate-100 pt-4">
-                <h3 className="mb-2 text-xs font-black uppercase tracking-wider text-slate-500">Use For Task Types</h3>
+                <h3 className="mb-1 text-xs font-black uppercase tracking-wider text-slate-500">Task Types Using This Workflow</h3>
+                <p className="mb-3 text-xs font-semibold text-slate-500">A task type belongs to one workflow. Only these types appear while assigning a task.</p>
                 <div className="flex flex-wrap gap-2">
-                  {(appSettings.taskTypes || []).map(config => {
-                    const id = cleanTaskTypeKey(taskTypeId(config));
-                    const active = appSettings.taskTypeWorkflowIds?.[id] === selectedWorkflow.id;
-                    return <button key={id} type="button" onClick={() => updateAppSettings(settings => ({ ...settings, taskTypeWorkflowIds: { ...(settings.taskTypeWorkflowIds || {}), [id]: active ? '' : selectedWorkflow.id } }))} className={cn("rounded-full border px-3 py-1 text-xs font-black", active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50")}>{taskTypeLabel(config)}{active ? ` uses ${selectedWorkflow.name}` : ''}</button>;
-                  })}
+                  {(selectedWorkflow.taskTypeIds || []).map(id => (
+                    <span key={id} className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
+                      {id.replace(/_/g, ' ')}
+                      <button type="button" onClick={() => removeTaskTypeFromSelectedWorkflow(id)} className="rounded-full text-emerald-700 hover:text-rose-600" title={`Remove ${id} from this workflow`}><X className="h-3.5 w-3.5" /></button>
+                    </span>
+                  ))}
+                  {(selectedWorkflow.taskTypeIds || []).length === 0 && <span className="text-xs font-semibold text-slate-400">No task types yet.</span>}
+                </div>
+                <div className="mt-3 flex max-w-xl gap-2">
+                  <input value={newWorkflowTaskType} onChange={event => setNewWorkflowTaskType(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addTaskTypeToSelectedWorkflow(); } }} placeholder="Add task type, e.g. Campaign" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20" />
+                  <button type="button" onClick={addTaskTypeToSelectedWorkflow} disabled={!newWorkflowTaskType.trim()} className="inline-flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"><Plus className="h-3.5 w-3.5" /> Add type</button>
                 </div>
               </div>
             </div>
@@ -1218,6 +1240,31 @@ export function WorkflowBuilderPage() {
 
               {editingPhase.nodeType === 'step' && (
                 <>
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Step Type
+                    <CustomSelect
+                      value={editingPhase.phaseKind || 'work'}
+                      options={[
+                        { value: 'work', label: 'Work step' },
+                        { value: 'content_review', label: 'Content revision' },
+                        { value: 'first_review', label: 'First revision' },
+                        { value: 'final_review', label: 'Final revision (Art Director)' },
+                        { value: 'decision', label: 'Decision / routing step' },
+                      ]}
+                      onChange={value => updatePhase(editingPhase.id, phase => {
+                        const phaseKind = value as WorkflowPhaseDefinition['phaseKind'];
+                        if (phaseKind === 'final_review') {
+                          return { ...phase, phaseKind, reviewStyle: 'final_approval', roleIds: ['art_director'], responsibilityIds: ['art_director'] };
+                        }
+                        return {
+                          ...phase,
+                          phaseKind,
+                          reviewStyle: phaseKind === 'first_review' ? 'full_review' : phaseKind === 'content_review' ? 'quick_look' : phase.reviewStyle,
+                        };
+                      })}
+                      buttonClassName="mt-1 rounded-xl px-3 py-2.5 text-sm font-black"
+                    />
+                    {editingPhase.phaseKind === 'final_review' && <span className="mt-1 block normal-case text-xs font-semibold text-rose-600">Final revision is locked to Art Director responsibility.</span>}
+                  </label>
                   <div>
                     <span className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Step Flow</span>
                     <div className="grid gap-2 sm:grid-cols-2">
@@ -1231,7 +1278,7 @@ export function WorkflowBuilderPage() {
                       </button>
                     </div>
                   </div>
-                  <TokenPanel title="Responsibilities" items={appSettings.responsibilities.map(responsibility => ({ id: responsibility.id, label: responsibility.label }))} selectedIds={editingPhase.responsibilityIds || []} onToggle={id => updatePhase(editingPhase.id, phase => ({ ...phase, responsibilityIds: toggleValue(phase.responsibilityIds || [], id) }))} />
+                  <TokenPanel title="Responsibilities" items={appSettings.responsibilities.map(responsibility => ({ id: responsibility.id, label: responsibility.label }))} selectedIds={editingPhase.responsibilityIds || []} disabled={editingPhase.phaseKind === 'final_review'} onToggle={id => updatePhase(editingPhase.id, phase => ({ ...phase, responsibilityIds: toggleValue(phase.responsibilityIds || [], id) }))} />
 
                   <div className="grid gap-3 sm:grid-cols-2">
                     <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Start Delay Days
@@ -1362,14 +1409,14 @@ export function WorkflowBuilderPage() {
   );
 }
 
-function TokenPanel({ title, items, selectedIds, onToggle }: { title: string; items: Array<{ id: string; label: string }>; selectedIds: string[]; onToggle: (id: string) => void }) {
+function TokenPanel({ title, items, selectedIds, onToggle, disabled = false }: { title: string; items: Array<{ id: string; label: string }>; selectedIds: string[]; onToggle: (id: string) => void; disabled?: boolean }) {
   return (
     <div>
       <span className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">{title}</span>
       <div className="flex max-h-44 flex-wrap gap-1.5 overflow-y-auto rounded-xl border border-slate-100 bg-white p-2">
         {items.map(item => {
           const active = selectedIds.includes(item.id);
-          return <button key={item.id} type="button" onClick={() => onToggle(item.id)} className={cn("rounded-full border px-2 py-1 text-[11px] font-bold", active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50")}>{item.label}</button>;
+          return <button key={item.id} type="button" disabled={disabled} onClick={() => onToggle(item.id)} className={cn("rounded-full border px-2 py-1 text-[11px] font-bold", active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50", disabled && "cursor-not-allowed opacity-60")}>{item.label}</button>;
         })}
       </div>
     </div>

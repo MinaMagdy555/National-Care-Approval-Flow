@@ -1,7 +1,9 @@
 export type Role = 'team_member' | 'reviewer' | 'art_director' | 'team_leader' | 'manager' | 'developer' | 'marketing_manager' | 'admin';
 export type Environment = 'production' | 'demo' | 'archived';
-export type ReviewMode = 'full_review' | 'quick_look' | 'direct_to_ad';
-export type WorkflowReviewStyle = 'full_review' | 'quick_look' | 'final_approval';
+// Legacy values are retained only so previously saved tasks can be migrated safely.
+// New workflow nodes use the three review stages below.
+export type ReviewMode = 'content_review' | 'first_review' | 'final_review' | 'full_review' | 'quick_look' | 'direct_to_ad';
+export type WorkflowReviewStyle = 'content_review' | 'first_review' | 'final_review' | 'full_review' | 'quick_look' | 'final_approval';
 export type WorkflowPhaseMode = 'sequential' | 'parallel';
 export type WorkflowNodeType = 'step' | 'note' | 'section';
 export type Priority = string;
@@ -107,6 +109,8 @@ export interface WorkflowNodeSubPhase {
 export interface WorkflowPhaseDefinition {
   id: string;
   name: string;
+  /** Work steps never use review queues. Review stages are explicit and named. */
+  phaseKind?: 'work' | 'content_review' | 'first_review' | 'final_review' | 'decision';
   reviewStyle: WorkflowReviewStyle;
   mode: WorkflowPhaseMode;
   userIds: string[];
@@ -147,6 +151,8 @@ export interface WorkflowDefinition {
   updatedAt?: string;
   rootNodeX?: number | null;
   rootNodeY?: number | null;
+  /** Task types are created and owned by workflows, never by a separate global list. */
+  taskTypeIds?: string[];
 }
 
 export interface WorkflowPhaseHistoryEntry {
@@ -189,6 +195,10 @@ export interface AppSettings {
   dailyReportAutoSendEnabled?: boolean;
   dailyReportAutoSendTime?: string | null;
   dailyReportReceiverUserIds?: string[];
+  /** One-time shared-data migration marker for clearing stale legacy notifications. */
+  notificationResetVersion?: number;
+  /** One-time migration that removes the placeholder task types from the early prototype. */
+  taskTypeCleanupVersion?: number;
   updatedAt: string;
 }
 
@@ -313,6 +323,12 @@ export interface Task {
   workflowCurrentPhaseIndex?: number | null;
   workflowPhaseApprovals?: Record<string, string[]>;
   workflowPhaseHistory?: WorkflowPhaseHistoryEntry[];
+  /** More than one phase can be active after a parallel branch. */
+  workflowActivePhaseIds?: string[];
+  /** Assignment-time optional steps intentionally omitted from this task's workflow. */
+  workflowSkippedPhaseIds?: string[];
+  /** A Voice Over node can be routed to external Shaza or AI plus a content owner. */
+  workflowNodeAIAssigneeIds?: Record<string, string>;
   environment: Environment;
   createdBy: string; // user id
   handledBy: string[]; // user ids
@@ -327,6 +343,8 @@ export interface Task {
   assignmentDate?: string | null;
   workflowNodeAssigneeIds?: Record<string, string[]>;
   deadlineAt?: string | null;
+  /** Prevents repeated general deadline reminders for the same deadline. */
+  deadlineReminderSentAt?: string | null;
   assignmentUploadedAt?: string | null;
   scheduledPublishAt?: string | null;
   publishNote?: string | null;

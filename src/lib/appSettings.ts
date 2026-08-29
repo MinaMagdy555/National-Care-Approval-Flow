@@ -1,4 +1,4 @@
-import { AppSettings, Priority, PriorityOption, PriorityTone, ResponsibilityOption, Role, TaskType, User, TaskTypeConfig, CustomWorkingHours, WorkflowDefinition } from './types';
+import { AppSettings, Priority, PriorityOption, PriorityTone, ResponsibilityOption, Role, TaskType, User, TaskTypeConfig, CustomWorkingHours, WorkflowDefinition, WorkflowPhaseDefinition } from './types';
 
 export const MINA_ID = '83e02bb4-11f9-41b0-becb-33e6c4c52b2a';
 export const MARWA_ID = 'd65ea68d-1749-45b9-b0f9-1fdaf23b8f94';
@@ -33,10 +33,19 @@ function campaignPhase(
   roleIds: Role[] = [],
   returnToPhaseId: string | null = null,
   subPhases: WorkflowDefinition['phases'][number]['subPhases'] = [],
+  skipRule: WorkflowDefinition['phases'][number]['skipRule'] = 'none',
 ): WorkflowDefinition['phases'][number] {
+  const phaseKind = reviewStyle === 'final_approval'
+    ? 'final_review'
+    : reviewStyle === 'full_review'
+      ? 'first_review'
+      : /content.*review/i.test(name)
+        ? 'content_review'
+        : 'work';
   return {
     id,
     name,
+    phaseKind,
     reviewStyle,
     mode,
     userIds: [],
@@ -47,6 +56,7 @@ function campaignPhase(
     delayDays: null,
     maxRevisionRounds: null,
     skipCondition: '',
+    skipRule,
     returnToPhaseId,
     requiredApprovals: null,
     parentPhaseId,
@@ -115,7 +125,7 @@ function campaignNote(
   };
 }
 
-export const defaultWorkflows: WorkflowDefinition[] = [
+const seededWorkflows: WorkflowDefinition[] = [
   {
     id: SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID,
     name: 'Social Media Campaigns',
@@ -125,6 +135,7 @@ export const defaultWorkflows: WorkflowDefinition[] = [
     updatedAt: now,
     rootNodeX: 520,
     rootNodeY: 30,
+    taskTypeIds: ['campaign'],
     phases: [
       campaignPhase(
         'campaign_structure',
@@ -197,6 +208,11 @@ export const defaultWorkflows: WorkflowDefinition[] = [
         ['voice_over'],
         'Optional voice-over step for Shaza when campaign reels need VO.',
         'sequential',
+        'quick_look',
+        [],
+        null,
+        [],
+        'manual',
       ),
       campaignPhase(
         'montage',
@@ -246,7 +262,7 @@ export const defaultWorkflows: WorkflowDefinition[] = [
         'content_team_review',
         'Content Team Review',
         'final_creative',
-        ['final_creative', 'mockups', 'content_team_review_loop'],
+        ['final_creative', 'mockups'],
         450,
         1240,
         ['content_creator'],
@@ -258,7 +274,7 @@ export const defaultWorkflows: WorkflowDefinition[] = [
         'senior_video_editor_review',
         'Senior Video Editor Review',
         'final_creative',
-        ['final_creative', 'mockups', 'content_team_review_loop'],
+        ['final_creative', 'mockups'],
         750,
         1240,
         ['senior_brand_designer_video_editor'],
@@ -297,7 +313,7 @@ export const defaultWorkflows: WorkflowDefinition[] = [
       ),
       campaignPhase(
         'content_team_review_loop',
-        'Content Team Review Loop',
+        'Recheck Revised Assets',
         'making_internal_edits',
         ['making_internal_edits'],
         260,
@@ -324,7 +340,7 @@ export const defaultWorkflows: WorkflowDefinition[] = [
       ),
       campaignPhase(
         'submit_to_art_director',
-        'Senior Video Editor Submits to Art Director',
+        'Submit Campaign for Art Director Approval',
         'notify_senior_video_editor',
         ['notify_senior_video_editor'],
         940,
@@ -337,7 +353,7 @@ export const defaultWorkflows: WorkflowDefinition[] = [
       ),
       campaignPhase(
         'art_director_review',
-        'Art Director Review',
+        'Final Art Director Approval',
         'submit_to_art_director',
         ['submit_to_art_director', 'making_art_director_edits'],
         940,
@@ -356,7 +372,7 @@ export const defaultWorkflows: WorkflowDefinition[] = [
         940,
         2010,
         ['art_director'],
-        'Decision point: approved campaigns move to ready for posting; rejected campaigns go back for edits.',
+        'Decision point: approved campaigns move to ready for posting; returned campaigns go back for edits.',
         'sequential',
         'final_approval',
         ['art_director'],
@@ -515,14 +531,18 @@ export const defaultWorkflows: WorkflowDefinition[] = [
   },
 ];
 
-export function getDefaultWorkflowIdForTaskType(taskType: string) {
+// Only the production campaign workflow is introduced to a new workspace.
+// Older generic presets are retained above solely for old task snapshots.
+export const defaultWorkflows: WorkflowDefinition[] = seededWorkflows.filter(
+  workflow => workflow.id === SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID,
+);
+
+export function getDefaultWorkflowIdForTaskType(taskType: string): string | null {
   const clean = cleanTaskTypeKey(taskType);
   if (clean === 'campaign' || clean === 'social media campaign' || clean === 'social media campaigns') {
     return SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
   }
-  return ['video', 'ai packet', 'ai packets', 'new product', 'new products', 'new product add', 'new products add'].includes(clean)
-    ? FULL_REVIEW_WORKFLOW_ID
-    : QUICK_LOOK_WORKFLOW_ID;
+  return null;
 }
 
 export const defaultResponsibilities: ResponsibilityOption[] = [
@@ -576,25 +596,12 @@ export const defaultAppSettings: AppSettings = {
     assignedWork: 'Assign a Task',
   },
   customPermissions: [],
-  taskTypes: [
-    'video',
-    'ai packet',
-    'new product',
-    'new products',
-    'sales material',
-    'website material',
-    'campaign',
-    'write content',
-    'write caption',
-    'reels voice over script',
-    'others'
-  ],
+  // Task types now belong to a workflow and are created in Workflow Builder.
+  taskTypes: [],
   workflows: defaultWorkflows,
   deletedWorkflowIds: [],
-  defaultWorkflowId: QUICK_LOOK_WORKFLOW_ID,
-  taskTypeWorkflowIds: {
-    campaign: SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID,
-  },
+  defaultWorkflowId: SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID,
+  taskTypeWorkflowIds: {},
   campaignPlatforms: ['Instagram', 'LinkedIn', 'TikTok', 'Snapchat'],
   hiddenColumns: [],
   customWorkingHours: [],
@@ -645,8 +652,36 @@ function getTaskTypeLabelSimple(type: string): string {
 }
 
 export function getTaskTypeConfigs(settings: AppSettings): TaskTypeConfig[] {
-  const types = settings.taskTypes || [];
-  return types.map(t => {
+  const canonicalTaskTypeId = (id: string) => {
+    const normalized = cleanTaskTypeKey(id);
+    return normalized === 'social media campaign' || normalized === 'social media campaigns'
+      ? 'campaign'
+      : id;
+  };
+  const workflowTypes = (settings.workflows || []).flatMap(workflow => (
+    (workflow.taskTypeIds || []).map(id => ({ id: canonicalTaskTypeId(id), workflowId: workflow.id }))
+  ));
+  const mappedLegacyTypes = Object.entries(settings.taskTypeWorkflowIds || {})
+    .filter(([, workflowId]) => (settings.workflows || []).some(workflow => workflow.id === workflowId))
+    .map(([id, workflowId]) => ({ id: canonicalTaskTypeId(id), workflowId }));
+  const explicitWorkflowTypes = (settings.taskTypes || [])
+    .filter((item): item is TaskTypeConfig => (
+      typeof item === 'object' && item !== null && Boolean((item as TaskTypeConfig).workflowId)
+    ))
+    .map(item => ({ ...item, id: canonicalTaskTypeId(item.id) }));
+  const types: Array<string | TaskTypeConfig> = [
+    ...workflowTypes.map(item => ({ id: item.id, label: getTaskTypeLabelSimple(item.id), suggestedJobTitles: [], isDetailedReview: false, workflowId: item.workflowId })),
+    ...mappedLegacyTypes.map(item => ({ id: item.id, label: getTaskTypeLabelSimple(item.id), suggestedJobTitles: [], isDetailedReview: false, workflowId: item.workflowId })),
+    ...explicitWorkflowTypes,
+  ];
+  const seen = new Set<string>();
+  return types.filter(item => {
+    const id = typeof item === 'string' ? item : item.id;
+    const key = cleanTaskTypeKey(id);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map(t => {
     if (typeof t === 'object' && t !== null) {
       return {
         id: (t as any).id,
@@ -694,6 +729,18 @@ export function getTaskTypeConfigs(settings: AppSettings): TaskTypeConfig[] {
 }
 
 export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSettings {
+  const taskTypeCleanupVersion = typeof settings?.taskTypeCleanupVersion === 'number'
+    ? settings.taskTypeCleanupVersion
+    : 0;
+  // Version 2 also removes legacy TaskTypeConfig objects. Version 1 removed
+  // only their workflow mapping, leaving old testing types selectable in some
+  // persisted workspaces.
+  const shouldRemovePrototypeTaskTypes = taskTypeCleanupVersion < 2;
+  const prototypeTaskTypeIds = new Set([
+    'video', 'ai packet', 'new product', 'new products', 'sales material',
+    'website material', 'write content', 'write caption', 'reels voice over script', 'others',
+  ]);
+  const isPrototypeTaskType = (id: string) => prototypeTaskTypeIds.has(cleanTaskTypeKey(id));
   const priorities = Array.isArray(settings?.priorities) && settings.priorities.length > 0
     ? settings.priorities
     : defaultAppSettings.priorities;
@@ -723,15 +770,50 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     ? Array.from(new Set(settings.deletedWorkflowIds.filter((id): id is string => typeof id === 'string' && Boolean(id))))
     : [];
   const deletedWorkflowIdSet = new Set(deletedWorkflowIds);
-  const incomingWorkflows = Array.isArray(settings?.workflows) ? settings.workflows : [];
+  // Seed defaults only for a genuinely new workspace. Once a workflow has been
+  // deleted, an explicitly saved workflow list must never recreate it.
+  const incomingWorkflows = Array.isArray(settings?.workflows)
+    ? settings.workflows.filter(workflow => ![FULL_REVIEW_WORKFLOW_ID, QUICK_LOOK_WORKFLOW_ID].includes(workflow.id))
+    : defaultWorkflows;
   const workflowsById = new Map<string, WorkflowDefinition>();
-  [...defaultWorkflows, ...incomingWorkflows].forEach(workflow => {
+  incomingWorkflows.forEach(workflow => {
     if (!workflow?.id || deletedWorkflowIdSet.has(workflow.id)) return;
+    const isSocialCampaignWorkflow = workflow.id === SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
+    const campaignPhaseNames: Record<string, string> = {
+      content_team_review_loop: 'Recheck Revised Assets',
+      submit_to_art_director: 'Submit Campaign for Art Director Approval',
+      art_director_review: 'Final Art Director Approval',
+    };
+    const campaignPhaseKinds: Record<string, WorkflowPhaseDefinition['phaseKind']> = {
+      content_team_review: 'content_review',
+      content_team_review_loop: 'content_review',
+      senior_video_editor_review: 'first_review',
+      art_director_review: 'final_review',
+      approved: 'final_review',
+    };
     workflowsById.set(workflow.id, {
       ...workflow,
       active: workflow.active !== false,
+      taskTypeIds: Array.from(new Set([
+        ...(Array.isArray(workflow.taskTypeIds)
+        ? workflow.taskTypeIds.map(cleanTaskTypeKey).filter(id => Boolean(id) && (!shouldRemovePrototypeTaskTypes || !isPrototypeTaskType(id)))
+        : []),
+        ...(isSocialCampaignWorkflow ? ['campaign'] : []),
+      ])),
       phases: Array.isArray(workflow.phases) ? workflow.phases.map(phase => ({
         ...phase,
+        name: isSocialCampaignWorkflow ? (campaignPhaseNames[phase.id] || phase.name) : phase.name,
+        phaseKind: campaignPhaseKinds[phase.id] || phase.phaseKind || (
+          phase.reviewStyle === 'final_approval' || (phase.roleIds || []).includes('art_director')
+            ? 'final_review'
+            : phase.reviewStyle === 'full_review'
+              ? 'first_review'
+              : /content.*review/i.test(phase.name || '')
+                ? 'content_review'
+                : /review|approval/i.test(phase.name || '')
+                  ? 'first_review'
+                  : 'work'
+        ),
         reviewStyle: phase.reviewStyle || 'quick_look',
         mode: phase.mode || 'parallel',
         userIds: Array.isArray(phase.userIds) ? phase.userIds : [],
@@ -776,7 +858,7 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     ...(settings?.taskTypeWorkflowIds || {}),
   };
   Object.entries(taskTypeWorkflowIds).forEach(([key, workflowId]) => {
-    if (!workflowId || deletedWorkflowIdSet.has(workflowId) || !workflowIds.has(workflowId)) {
+    if (!workflowId || deletedWorkflowIdSet.has(workflowId) || !workflowIds.has(workflowId) || (shouldRemovePrototypeTaskTypes && isPrototypeTaskType(key))) {
       delete taskTypeWorkflowIds[key];
     }
   });
@@ -785,7 +867,7 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     taskTypeWorkflowIds['social media campaign'] = SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
     taskTypeWorkflowIds['social media campaigns'] = SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
   }
-  const requestedDefaultWorkflowId = settings?.defaultWorkflowId || QUICK_LOOK_WORKFLOW_ID;
+  const requestedDefaultWorkflowId = settings?.defaultWorkflowId || SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
   const defaultWorkflowId = workflowIds.has(requestedDefaultWorkflowId)
     ? requestedDefaultWorkflowId
     : workflows[0]?.id || null;
@@ -844,7 +926,17 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     viewAllWorkloadUserIds,
     customPermissions: Array.isArray(settings?.customPermissions) ? settings.customPermissions : [],
     customWorkingHours: Array.isArray(settings?.customWorkingHours) ? settings.customWorkingHours : [],
-    taskTypes: Array.isArray(settings?.taskTypes) ? settings.taskTypes : defaultAppSettings.taskTypes || [],
+    // Standalone string task types were only test data. Keep only workflow-linked
+    // objects while the UI derives the available types from workflows themselves.
+    taskTypes: Array.isArray(settings?.taskTypes)
+      ? settings.taskTypes.filter(item => {
+        if (typeof item !== 'object' || item === null) return false;
+        const config = item as TaskTypeConfig;
+        return Boolean(config.workflowId) &&
+          workflowIds.has(config.workflowId!) &&
+          (!shouldRemovePrototypeTaskTypes || !isPrototypeTaskType(String(config.id || '')));
+      })
+      : [],
     workflows,
     deletedWorkflowIds,
     defaultWorkflowId,
@@ -855,6 +947,10 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     dailyReportAutoSendEnabled,
     dailyReportAutoSendTime,
     dailyReportReceiverUserIds,
+    notificationResetVersion: typeof (settings as any)?.notificationResetVersion === 'number'
+      ? (settings as any).notificationResetVersion
+      : 0,
+    taskTypeCleanupVersion: 2,
     updatedAt: settings?.updatedAt || defaultAppSettings.updatedAt,
   };
 }
