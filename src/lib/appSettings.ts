@@ -624,6 +624,24 @@ export function normalizeTaskTypeId(value: string) {
     .replace(/\s+/g, ' ') || `custom_${Date.now().toString(36)}`;
 }
 
+export function makeTaskTypeIdForWorkflowName(name: string, fallbackId = 'workflow') {
+  const fromName = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (fromName) return fromName;
+
+  return fallbackId
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim() || 'workflow';
+}
+
 export function cleanTaskTypeKey(type: string): string {
   if (!type) return '';
   return type.toLowerCase().replace(/_/g, ' ').trim();
@@ -658,9 +676,14 @@ export function getTaskTypeConfigs(settings: AppSettings): TaskTypeConfig[] {
       ? 'campaign'
       : id;
   };
-  const workflowTypes = (settings.workflows || []).flatMap(workflow => (
-    (workflow.taskTypeIds || []).map(id => ({ id: canonicalTaskTypeId(id), workflowId: workflow.id }))
-  ));
+  const workflowTypes = (settings.workflows || [])
+    .filter(workflow => workflow.active !== false)
+    .flatMap(workflow => {
+      const taskTypeIds = Array.isArray(workflow.taskTypeIds) && workflow.taskTypeIds.length > 0
+        ? workflow.taskTypeIds
+        : [makeTaskTypeIdForWorkflowName(workflow.name, workflow.id)];
+      return taskTypeIds.map(id => ({ id: canonicalTaskTypeId(id), workflowId: workflow.id }));
+    });
   const mappedLegacyTypes = Object.entries(settings.taskTypeWorkflowIds || {})
     .filter(([, workflowId]) => (settings.workflows || []).some(workflow => workflow.id === workflowId))
     .map(([id, workflowId]) => ({ id: canonicalTaskTypeId(id), workflowId }));
@@ -779,6 +802,14 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
   incomingWorkflows.forEach(workflow => {
     if (!workflow?.id || deletedWorkflowIdSet.has(workflow.id)) return;
     const isSocialCampaignWorkflow = workflow.id === SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
+    const savedTaskTypeIds = Array.isArray(workflow.taskTypeIds)
+      ? workflow.taskTypeIds.map(cleanTaskTypeKey).filter(id => Boolean(id) && (!shouldRemovePrototypeTaskTypes || !isPrototypeTaskType(id)))
+      : [];
+    const requiredWorkflowTaskTypeIds = isSocialCampaignWorkflow
+      ? ['campaign']
+      : savedTaskTypeIds.length === 0
+        ? [makeTaskTypeIdForWorkflowName(workflow.name, workflow.id)]
+        : [];
     const campaignPhaseNames: Record<string, string> = {
       content_team_review_loop: 'Recheck Revised Assets',
       submit_to_art_director: 'Submit Campaign for Art Director Approval',
@@ -795,10 +826,8 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
       ...workflow,
       active: workflow.active !== false,
       taskTypeIds: Array.from(new Set([
-        ...(Array.isArray(workflow.taskTypeIds)
-        ? workflow.taskTypeIds.map(cleanTaskTypeKey).filter(id => Boolean(id) && (!shouldRemovePrototypeTaskTypes || !isPrototypeTaskType(id)))
-        : []),
-        ...(isSocialCampaignWorkflow ? ['campaign'] : []),
+        ...savedTaskTypeIds,
+        ...requiredWorkflowTaskTypeIds,
       ])),
       phases: Array.isArray(workflow.phases) ? workflow.phases.map(phase => ({
         ...phase,
@@ -867,6 +896,14 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     taskTypeWorkflowIds['social media campaign'] = SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
     taskTypeWorkflowIds['social media campaigns'] = SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
   }
+  workflows.forEach(workflow => {
+    if (workflow.active === false) return;
+    (workflow.taskTypeIds || []).forEach(taskTypeId => {
+      const clean = cleanTaskTypeKey(taskTypeId);
+      if (!clean || deletedWorkflowIdSet.has(workflow.id)) return;
+      taskTypeWorkflowIds[clean] = workflow.id;
+    });
+  });
   const requestedDefaultWorkflowId = settings?.defaultWorkflowId || SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
   const defaultWorkflowId = workflowIds.has(requestedDefaultWorkflowId)
     ? requestedDefaultWorkflowId

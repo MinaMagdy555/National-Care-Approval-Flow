@@ -303,7 +303,7 @@ export function AssignedWorkSection({
 
   useEffect(() => {
     const availableTypes = getTaskTypeConfigs(appSettings);
-    if (availableTypes.length > 0 && !availableTypes.some(config => config.id === taskType)) {
+    if (availableTypes.length > 0 && !availableTypes.some(config => cleanTaskTypeKey(config.id) === cleanTaskTypeKey(taskType))) {
       setTaskType(availableTypes[0].id);
     }
   }, [appSettings, taskType]);
@@ -448,7 +448,8 @@ export function AssignedWorkSection({
     setContentRevisionAssigneeIds([]);
     setIsTemporarySelfTask(false);
     setSubmittedOnBehalfOfIds([]);
-    setTaskType('video');
+    const nextTaskType = getTaskTypeConfigs(appSettings)[0]?.id || '';
+    setTaskType(nextTaskType);
     setShowAllUsers(false);
     setAssigneeIds([]);
     setWorkflowNodeAssigneeIds({});

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Expand, GitBranch, Layers, Minimize2, Plus, Route, Settings2, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { WorkflowDefinition, WorkflowNodeSubPhase, WorkflowNodeType, WorkflowPhaseDefinition } from '../lib/types';
-import { cleanTaskTypeKey, normalizeSettingId } from '../lib/appSettings';
+import { cleanTaskTypeKey, makeTaskTypeIdForWorkflowName, normalizeSettingId, SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID } from '../lib/appSettings';
 import { cn } from '../lib/utils';
 import { CustomSelect } from './CustomSelect';
 
@@ -172,6 +172,15 @@ function toggleValue<T extends string>(values: T[], value: T) {
 
 function makeWorkflowId(value: string) {
   return `workflow_${normalizeSettingId(value)}_${Date.now().toString(36)}`;
+}
+
+function getWorkflowTaskTypeIds(workflow: WorkflowDefinition) {
+  const savedIds = (workflow.taskTypeIds || []).map(cleanTaskTypeKey).filter(Boolean);
+  const fallbackId = workflow.id === SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID
+    ? 'campaign'
+    : makeTaskTypeIdForWorkflowName(workflow.name, workflow.id);
+
+  return Array.from(new Set(savedIds.length > 0 ? savedIds : [fallbackId]));
 }
 
 function makePhaseId(value: string) {
@@ -355,7 +364,7 @@ export function WorkflowBuilderPage() {
   const workflowOptions = useMemo(() => (
     workflows.map(workflow => ({
       workflow,
-      taskTypeCount: (workflow.taskTypeIds || []).length,
+      taskTypeCount: getWorkflowTaskTypeIds(workflow).length,
     }))
   ), [workflows]);
 
@@ -382,7 +391,7 @@ export function WorkflowBuilderPage() {
     }
     updateSelectedWorkflow(workflow => ({
       ...workflow,
-      taskTypeIds: Array.from(new Set([...(workflow.taskTypeIds || []), id])),
+      taskTypeIds: Array.from(new Set([...getWorkflowTaskTypeIds(workflow), id])),
     }));
     setNewWorkflowTaskType('');
   };
@@ -478,12 +487,23 @@ export function WorkflowBuilderPage() {
     const name = newWorkflowName.trim();
     if (!name) return;
     const now = new Date().toISOString();
+    const taskTypeId = makeTaskTypeIdForWorkflowName(name);
+    const taskTypeKey = cleanTaskTypeKey(taskTypeId);
+    const duplicateWorkflowTaskType = workflows.some(workflow => (
+      cleanTaskTypeKey(workflow.name) === taskTypeKey ||
+      (workflow.taskTypeIds || []).some(id => cleanTaskTypeKey(id) === taskTypeKey)
+    ));
+    if (duplicateWorkflowTaskType) {
+      window.alert('A workflow or task type with this name already exists.');
+      return;
+    }
     const firstPhase = makePhase('First step', null, 370, 170);
     const workflow: WorkflowDefinition = {
       id: makeWorkflowId(name),
       name,
       description: '',
       active: true,
+      taskTypeIds: [taskTypeId],
       phases: [firstPhase],
       createdAt: now,
       updatedAt: now,
@@ -492,6 +512,10 @@ export function WorkflowBuilderPage() {
       ...settings,
       workflows: [...(settings.workflows || []), workflow],
       defaultWorkflowId: settings.defaultWorkflowId || workflow.id,
+      taskTypeWorkflowIds: {
+        ...(settings.taskTypeWorkflowIds || {}),
+        [taskTypeId]: workflow.id,
+      },
     }));
     setSelectedWorkflowId(workflow.id);
     setNewWorkflowName('');
@@ -859,6 +883,7 @@ export function WorkflowBuilderPage() {
     h: 100,
   };
   const phases = selectedWorkflow?.phases || [];
+  const selectedWorkflowTaskTypeIds = selectedWorkflow ? getWorkflowTaskTypeIds(selectedWorkflow) : [];
   const stepCount = phases.filter(phase => (phase.nodeType || 'step') === 'step').length;
   const canDeleteWorkflowNode = (phase: WorkflowPhaseDefinition) => phase.nodeType !== 'step' || stepCount > 1;
   const phaseStepNumbers = getPhaseStepNumbers(phases);
@@ -1038,13 +1063,15 @@ export function WorkflowBuilderPage() {
                 <h3 className="mb-1 text-xs font-black uppercase tracking-wider text-slate-500">Task Types Using This Workflow</h3>
                 <p className="mb-3 text-xs font-semibold text-slate-500">A task type belongs to one workflow. Only these types appear while assigning a task.</p>
                 <div className="flex flex-wrap gap-2">
-                  {(selectedWorkflow.taskTypeIds || []).map(id => (
+                  {selectedWorkflowTaskTypeIds.map(id => (
                     <span key={id} className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
                       {id.replace(/_/g, ' ')}
-                      <button type="button" onClick={() => removeTaskTypeFromSelectedWorkflow(id)} className="rounded-full text-emerald-700 hover:text-rose-600" title={`Remove ${id} from this workflow`}><X className="h-3.5 w-3.5" /></button>
+                      {selectedWorkflowTaskTypeIds.length > 1 && (
+                        <button type="button" onClick={() => removeTaskTypeFromSelectedWorkflow(id)} className="rounded-full text-emerald-700 hover:text-rose-600" title={`Remove ${id} from this workflow`}><X className="h-3.5 w-3.5" /></button>
+                      )}
                     </span>
                   ))}
-                  {(selectedWorkflow.taskTypeIds || []).length === 0 && <span className="text-xs font-semibold text-slate-400">No task types yet.</span>}
+                  {selectedWorkflowTaskTypeIds.length === 0 && <span className="text-xs font-semibold text-slate-400">No task types yet.</span>}
                 </div>
                 <div className="mt-3 flex max-w-xl gap-2">
                   <input value={newWorkflowTaskType} onChange={event => setNewWorkflowTaskType(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addTaskTypeToSelectedWorkflow(); } }} placeholder="Add task type, e.g. Campaign" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20" />
