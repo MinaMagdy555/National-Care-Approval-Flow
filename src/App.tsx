@@ -599,11 +599,6 @@ function WorkspaceContent() {
               </div>
             </div>
           )}
-          {(persistenceMode === 'drive' || persistenceMode === 'neon') && persistenceError && (
-            <div className="mx-4 mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900 sm:mx-6 lg:mx-8">
-              <span className="font-black">Shared sync paused.</span> {persistenceError}
-            </div>
-          )}
           {((persistenceMode === 'drive' && driveStatus === 'ready') || persistenceMode === 'neon') && !persistenceError && localMigrationCount > 0 && (
             <div className="mx-4 mt-4 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 sm:mx-6 lg:mx-8 lg:flex-row lg:items-center lg:justify-between">
               <p className="text-sm font-bold">
