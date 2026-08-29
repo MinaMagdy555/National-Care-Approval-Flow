@@ -95,17 +95,6 @@ function toggleValue(values: string[], value: string) {
   return values.includes(value) ? values.filter(item => item !== value) : [...values, value];
 }
 
-const MEMBER_ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
-  { value: 'team_member', label: 'Team Member' },
-  { value: 'reviewer', label: 'Reviewer' },
-  { value: 'art_director', label: 'Art Director' },
-  { value: 'team_leader', label: 'Team Leader' },
-  { value: 'manager', label: 'Manager' },
-  { value: 'developer', label: 'Developer' },
-  { value: 'marketing_manager', label: 'Marketing Manager' },
-  { value: 'admin', label: 'Admin' },
-];
-
 function splitMemberResponsibilities(value?: string) {
   return (value || '').split(',').map(item => item.trim()).filter(Boolean);
 }
@@ -832,8 +821,8 @@ export function AssignedWorkSection({
       {activeTab === 'task_types' && canCreate && mode === 'create' ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 space-y-6">
           <div>
-            <h4 className="text-base font-black text-slate-900">Configure Task Types & Workflows</h4>
-            <p className="text-xs font-semibold text-slate-500">Configure suggested roles, detailed review flows, and naming of task types.</p>
+            <h4 className="text-base font-black text-slate-900">Configure Workflow Task Types</h4>
+            <p className="text-xs font-semibold text-slate-500">Configure task type names, suggested positions, and reviewer ownership.</p>
           </div>
 
           {/* Add form */}
@@ -885,7 +874,7 @@ export function AssignedWorkSection({
 
             <div className="grid gap-4 md:grid-cols-3 pt-2">
               <div className="space-y-1.5">
-                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Full Reviewers (Custom)</label>
+                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">First Reviewers (Custom)</label>
                 <div className="flex flex-wrap gap-1.5">
                   {seedUsers.map(user => {
                     const active = taskTypeFullReviewers.includes(user.id);
@@ -911,7 +900,7 @@ export function AssignedWorkSection({
               </div>
 
               <div className="space-y-1.5">
-                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Quick Look Reviewers (Custom)</label>
+                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Content Reviewers (Custom)</label>
                 <div className="flex flex-wrap gap-1.5">
                   {seedUsers.map(user => {
                     const active = taskTypeQuickLookReviewers.includes(user.id);
@@ -971,7 +960,7 @@ export function AssignedWorkSection({
                   onChange={event => setTaskTypeDetailed(event.target.checked)}
                   className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                 />
-                Detailed Review Workflow (Request Edits Form)
+                Revision request form
               </label>
             </div>
           </div>
@@ -1038,7 +1027,7 @@ export function AssignedWorkSection({
 
                         <div className="grid gap-3 md:grid-cols-3 pt-1">
                           <div className="space-y-1">
-                            <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Full Reviewers (Custom)</label>
+                            <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">First Reviewers (Custom)</label>
                             <div className="flex flex-wrap gap-1.5">
                               {seedUsers.map(user => {
                                 const active = editingFullReviewers.includes(user.id);
@@ -1064,7 +1053,7 @@ export function AssignedWorkSection({
                           </div>
 
                           <div className="space-y-1">
-                            <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Quick Look Reviewers (Custom)</label>
+                            <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Content Reviewers (Custom)</label>
                             <div className="flex flex-wrap gap-1.5">
                               {seedUsers.map(user => {
                                 const active = editingQuickLookReviewers.includes(user.id);
@@ -1124,7 +1113,7 @@ export function AssignedWorkSection({
                               onChange={event => setEditingDetailed(event.target.checked)}
                               className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                             />
-                            Detailed Review Workflow
+                            Revision request form
                           </label>
                         </div>
                       </div>
@@ -1151,7 +1140,7 @@ export function AssignedWorkSection({
                                 ? "bg-amber-50 text-amber-700 border border-amber-200/50"
                                 : "bg-slate-50 text-slate-500 border border-slate-200/50"
                             )}>
-                              {config.isDetailedReview ? 'Detailed Review' : 'Simple Feedback'}
+                              {config.isDetailedReview ? 'Revision form' : 'Simple feedback'}
                             </span>
                           </div>
 
@@ -1162,7 +1151,7 @@ export function AssignedWorkSection({
                             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
                               {config.fullReviewerUserIds && config.fullReviewerUserIds.length > 0 && (
                                 <div className="flex items-center gap-1">
-                                  <span className="font-black text-blue-600 uppercase tracking-wider text-[9px]">Full Reviewers:</span>
+                                  <span className="font-black text-blue-600 uppercase tracking-wider text-[9px]">First Reviewers:</span>
                                   <span className="font-bold text-slate-700 bg-blue-50/50 px-1.5 py-0.5 rounded border border-blue-100/50">
                                     {config.fullReviewerUserIds.map(uid => users[uid]?.name || uid).join(', ')}
                                   </span>
@@ -1170,7 +1159,7 @@ export function AssignedWorkSection({
                               )}
                               {config.quickLookUserIds && config.quickLookUserIds.length > 0 && (
                                 <div className="flex items-center gap-1">
-                                  <span className="font-black text-amber-600 uppercase tracking-wider text-[9px]">Quick Look:</span>
+                                  <span className="font-black text-amber-600 uppercase tracking-wider text-[9px]">Content Reviewers:</span>
                                   <span className="font-bold text-slate-700 bg-amber-50/50 px-1.5 py-0.5 rounded border border-amber-100/50">
                                     {config.quickLookUserIds.map(uid => users[uid]?.name || uid).join(', ')}
                                   </span>

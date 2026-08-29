@@ -81,6 +81,32 @@ function fetchUrlTitle(targetUrl: string): Promise<string | null> {
   });
 }
 
+const NEON_TRANSFER_QUOTA_ERROR_MESSAGE =
+  'Shared database transfer limit has been reached. Shared data is paused until the Neon quota is restored.';
+
+function getNeonApiError(error: unknown) {
+  const message = error instanceof Error ? error.message : 'Unknown Neon error';
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes('data transfer quota') ||
+    normalized.includes('transfer quota') ||
+    normalized.includes('quota exceeded') ||
+    normalized.includes('exceeded the data transfer') ||
+    normalized.includes('http status 402')
+  ) {
+    return {
+      status: 402,
+      body: {
+        error: NEON_TRANSFER_QUOTA_ERROR_MESSAGE,
+        code: 'NEON_TRANSFER_QUOTA_EXCEEDED',
+      },
+    };
+  }
+
+  return { status: 500, body: { error: message } };
+}
+
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
@@ -110,6 +136,33 @@ export default defineConfig(({mode}) => {
               `;
 
               if (req.method === 'GET') {
+                const urlObj = new URL(req.url || '', 'http://localhost');
+                if (urlObj.searchParams.get('meta') === '1' || urlObj.searchParams.get('meta') === 'true') {
+                  const rows = await sql`
+                    SELECT updated_at
+                    FROM app_state
+                    WHERE id = 'current'
+                    LIMIT 1
+                  `;
+                  res.statusCode = 200;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ updatedAt: rows[0]?.updated_at || null }));
+                  return;
+                }
+
+                if (urlObj.searchParams.get('settings') === '1' || urlObj.searchParams.get('settings') === 'true') {
+                  const rows = await sql`
+                    SELECT state->'settings' AS settings, updated_at
+                    FROM app_state
+                    WHERE id = 'current'
+                    LIMIT 1
+                  `;
+                  res.statusCode = 200;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ settings: rows[0]?.settings || null, updatedAt: rows[0]?.updated_at || null }));
+                  return;
+                }
+
                 const rows = await sql`
                   SELECT state, updated_at
                   FROM app_state
@@ -143,13 +196,20 @@ export default defineConfig(({mode}) => {
                       ON CONFLICT (id)
                       DO UPDATE SET state = EXCLUDED.state, updated_at = now()
                     `;
+                    const rows = await sql`
+                      SELECT updated_at
+                      FROM app_state
+                      WHERE id = 'current'
+                      LIMIT 1
+                    `;
                     res.statusCode = 200;
                     res.setHeader('Content-Type', 'application/json');
-                    res.end(JSON.stringify({ ok: true }));
+                    res.end(JSON.stringify({ ok: true, updatedAt: rows[0]?.updated_at || null }));
                   } catch (error) {
-                    res.statusCode = 500;
+                    const { status, body } = getNeonApiError(error);
+                    res.statusCode = status;
                     res.setHeader('Content-Type', 'application/json');
-                    res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown Neon error' }));
+                    res.end(JSON.stringify(body));
                   }
                 });
                 return;
@@ -160,9 +220,10 @@ export default defineConfig(({mode}) => {
               res.setHeader('Content-Type', 'application/json');
               res.end(JSON.stringify({ error: 'Method not allowed' }));
             } catch (error) {
-              res.statusCode = 500;
+              const { status, body } = getNeonApiError(error);
+              res.statusCode = status;
               res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown Neon error' }));
+              res.end(JSON.stringify(body));
             }
           });
 

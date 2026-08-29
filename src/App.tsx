@@ -50,6 +50,10 @@ function getRouteFromUrl(): AppRoute {
 
 function writeRouteToUrl(route: AppRoute, mode: 'push' | 'replace' = 'push') {
   const params = new URLSearchParams();
+  const existingParams = new URLSearchParams(window.location.search);
+  if (existingParams.get('codexPreview') === '1') {
+    params.set('codexPreview', '1');
+  }
   if (route.view !== 'dashboard' || route.taskId) params.set('view', route.view);
   if (route.taskId) params.set('task', route.taskId);
   if (route.assignmentId) params.set('assignment', route.assignmentId);
@@ -596,8 +600,8 @@ function WorkspaceContent() {
             </div>
           )}
           {(persistenceMode === 'drive' || persistenceMode === 'neon') && persistenceError && (
-            <div className="mx-4 mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700 sm:mx-6 lg:mx-8">
-              Shared data error: {persistenceError}
+            <div className="mx-4 mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900 sm:mx-6 lg:mx-8">
+              <span className="font-black">Shared sync paused.</span> {persistenceError}
             </div>
           )}
           {((persistenceMode === 'drive' && driveStatus === 'ready') || persistenceMode === 'neon') && !persistenceError && localMigrationCount > 0 && (

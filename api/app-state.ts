@@ -8,7 +8,16 @@ type ApiResponse = {
   setHeader: (name: string, value: string) => void;
 };
 
+type ApiRequest = {
+  method?: string;
+  body?: unknown;
+  query?: Record<string, string | string[] | undefined>;
+  url?: string;
+};
+
 const STATE_ID = 'current';
+const NEON_TRANSFER_QUOTA_ERROR_MESSAGE =
+  'Shared database transfer limit has been reached. Shared data is paused until the Neon quota is restored.';
 
 function getSql() {
   const databaseUrl = process.env.DATABASE_URL;
@@ -102,12 +111,88 @@ async function getWorkflowTombstoneIds(sql: ReturnType<typeof neon>) {
     .filter((id): id is string => typeof id === 'string' && Boolean(id));
 }
 
-export default async function handler(req: { method?: string; body?: unknown }, res: ApiResponse) {
+function requestWantsMeta(req: ApiRequest) {
+  const queryValue = req.query?.meta;
+  if (queryValue === '1' || queryValue === 'true') return true;
+  if (Array.isArray(queryValue) && queryValue.some(value => value === '1' || value === 'true')) return true;
+
+  if (!req.url) return false;
+  try {
+    const parsed = new URL(req.url, 'https://national-care.local');
+    return parsed.searchParams.get('meta') === '1' || parsed.searchParams.get('meta') === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function requestWantsSettings(req: ApiRequest) {
+  const queryValue = req.query?.settings;
+  if (queryValue === '1' || queryValue === 'true') return true;
+  if (Array.isArray(queryValue) && queryValue.some(value => value === '1' || value === 'true')) return true;
+
+  if (!req.url) return false;
+  try {
+    const parsed = new URL(req.url, 'https://national-care.local');
+    return parsed.searchParams.get('settings') === '1' || parsed.searchParams.get('settings') === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function getApiErrorResponse(error: unknown) {
+  const message = error instanceof Error ? error.message : 'Unknown Neon error';
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes('data transfer quota') ||
+    normalized.includes('transfer quota') ||
+    normalized.includes('quota exceeded') ||
+    normalized.includes('exceeded the data transfer') ||
+    normalized.includes('http status 402')
+  ) {
+    return {
+      status: 402,
+      body: {
+        error: NEON_TRANSFER_QUOTA_ERROR_MESSAGE,
+        code: 'NEON_TRANSFER_QUOTA_EXCEEDED',
+      },
+    };
+  }
+
+  return { status: 500, body: { error: message } };
+}
+
+export default async function handler(req: ApiRequest, res: ApiResponse) {
   try {
     const sql = getSql();
     await ensureSchema(sql);
 
     if (req.method === 'GET') {
+      if (requestWantsMeta(req)) {
+        const rows = await sql`
+          SELECT updated_at
+          FROM app_state
+          WHERE id = ${STATE_ID}
+          LIMIT 1
+        `;
+        res.status(200).json({ updatedAt: rows[0]?.updated_at || null });
+        return;
+      }
+
+      if (requestWantsSettings(req)) {
+        const rows = await sql`
+          SELECT state->'settings' AS settings, updated_at
+          FROM app_state
+          WHERE id = ${STATE_ID}
+          LIMIT 1
+        `;
+        const tombstoneIds = await getWorkflowTombstoneIds(sql);
+        const state = applyWorkflowTombstones({ settings: rows[0]?.settings || null }, tombstoneIds);
+        const settings = isRecord(state) ? state.settings || null : null;
+        res.status(200).json({ settings, updatedAt: rows[0]?.updated_at || null });
+        return;
+      }
+
       const rows = await sql`
         SELECT state, updated_at
         FROM app_state
@@ -144,14 +229,20 @@ export default async function handler(req: { method?: string; body?: unknown }, 
         ON CONFLICT (id)
         DO UPDATE SET state = EXCLUDED.state, updated_at = now()
       `;
-      res.status(200).json({ ok: true });
+      const rows = await sql`
+        SELECT updated_at
+        FROM app_state
+        WHERE id = ${STATE_ID}
+        LIMIT 1
+      `;
+      res.status(200).json({ ok: true, updatedAt: rows[0]?.updated_at || null });
       return;
     }
 
     res.setHeader('Allow', 'GET, PUT');
     res.status(405).json({ error: 'Method not allowed' });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown Neon error';
-    res.status(500).json({ error: message });
+    const { status, body } = getApiErrorResponse(error);
+    res.status(status).json(body);
   }
 }

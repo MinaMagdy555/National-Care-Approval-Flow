@@ -3,7 +3,7 @@ import { AccountProfile, AppSettings, AuthStatus, User, Role, Environment, Task,
 import { initialUsers, initialTasks, userRoleLabels } from './mockData';
 import { supabase } from './supabaseClient';
 import { clearAppState, loadAppState, saveAppState } from './localDb';
-import { fetchNeonAppState, saveNeonAppState, USE_NEON_DATA } from './neonDb';
+import { fetchNeonAppSettings, fetchNeonAppStateMeta, fetchNeonAppStateResponse, saveNeonAppState, USE_NEON_DATA } from './neonDb';
 import { isTaskArchived, shouldAutoArchiveTask } from './archiveUtils';
 import { sanitizeHandledBy } from './handlerUtils';
 import {
@@ -174,6 +174,16 @@ function getSharedDataErrorMessage(error: unknown, fallback: string) {
   const message = getErrorMessage(error, fallback);
   const normalizedMessage = message.toLowerCase();
   const isNetworkError = normalizedMessage.includes('failed to fetch') || normalizedMessage.includes('networkerror') || normalizedMessage.includes('network error');
+  const isNeonQuotaError =
+    normalizedMessage.includes('data transfer quota') ||
+    normalizedMessage.includes('transfer limit') ||
+    normalizedMessage.includes('transfer quota') ||
+    normalizedMessage.includes('quota exceeded') ||
+    normalizedMessage.includes('http status 402');
+
+  if (isNeonQuotaError) {
+    return 'Shared database transfer limit has been reached. Shared data is paused until the Neon quota is restored.';
+  }
 
   if (isNetworkError) {
     return USE_NEON_DATA
@@ -417,6 +427,10 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
     publishNote: task.publishNote ?? null,
     publishedAt: task.publishedAt ?? null,
     publishReminderSentAt: task.publishReminderSentAt ?? null,
+    platform: task.platform ?? null,
+    weekReminderSentAt: task.weekReminderSentAt ?? null,
+    budgetAmount: task.budgetAmount ?? null,
+    budgetCurrency: task.budgetCurrency ?? null,
     versions,
     comments: Array.isArray(task.comments)
       ? task.comments.map(comment => coerceTaskComment(comment, task.createdBy || initialUsers[0]?.id || 'unknown_user')).filter(Boolean)
@@ -430,6 +444,19 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
     isOvertime: task.isOvertime || false,
     needsContentRevision: task.needsContentRevision || false,
     contentRevisionAssigneeIds: Array.isArray(task.contentRevisionAssigneeIds) ? task.contentRevisionAssigneeIds : ((task as any).contentRevisionAssigneeId ? [(task as any).contentRevisionAssigneeId] : []),
+    activeWorkBy: task.activeWorkBy ?? null,
+    activeWorkStartedAt: task.activeWorkStartedAt ?? null,
+    activeWorkFinishedAt: task.activeWorkFinishedAt ?? null,
+    activeWorkNote: task.activeWorkNote ?? null,
+    isTemporarySelfTask: task.isTemporarySelfTask ?? null,
+    selfAssignedBy: task.selfAssignedBy ?? null,
+    submittedOnBehalfOfIds: Array.isArray(task.submittedOnBehalfOfIds) ? task.submittedOnBehalfOfIds : [],
+    previousStatusBeforeHold: task.previousStatusBeforeHold ?? null,
+    activeWorkSetById: task.activeWorkSetById ?? null,
+    activeWorkSetAt: task.activeWorkSetAt ?? null,
+    activeWorkFinishedById: task.activeWorkFinishedById ?? null,
+    workflowPhaseAvailableAt: task.workflowPhaseAvailableAt ?? null,
+    workflowPhaseRevisionCounts: task.workflowPhaseRevisionCounts && typeof task.workflowPhaseRevisionCounts === 'object' ? task.workflowPhaseRevisionCounts : {},
     createdAt: task.createdAt || now,
     updatedAt: task.updatedAt || task.createdAt || now,
   };
@@ -842,6 +869,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const pendingNotificationBroadcastIdsRef = useRef<Set<string>>(new Set());
   const pendingSettingsBroadcastRef = useRef(false);
   const pendingDailyReportBroadcastIdsRef = useRef<Set<string>>(new Set());
+  const lastNeonUpdatedAtRef = useRef<string | null>(null);
+  const nextNeonRetryAtRef = useRef(0);
   const linkedMetadataBackfillAttemptsRef = useRef<Set<string>>(new Set());
   const dailyReportMigratedRef = useRef(false);
   const [accountProfiles, setAccountProfiles] = useState<AccountProfile[]>([]);
@@ -978,9 +1007,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const fetchSettings = async () => {
     if (USE_NEON_DATA) {
       try {
-        const neonState = await fetchNeonAppState();
-        if (neonState?.settings) {
-          setAppSettings(prev => mergeAppSettingsPreservingWorkflowDeletions(neonState.settings, prev));
+        const neonSettings = await fetchNeonAppSettings();
+        if (neonSettings) {
+          setAppSettings(prev => mergeAppSettingsPreservingWorkflowDeletions(neonSettings, prev));
           return;
         }
       } catch (err) {
@@ -1238,10 +1267,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     hasLoadedPersistedState.current = false;
     setIsPersistedStateReady(false);
 
-    Promise.all([fetchNeonAppState(), loadAppState()])
-      .then(([neonState, localState]) => {
+    Promise.all([fetchNeonAppStateResponse(), loadAppState()])
+      .then(([neonResponse, localState]) => {
         if (!isMounted) return;
 
+        const neonState = neonResponse.state;
+        lastNeonUpdatedAtRef.current = neonResponse.updatedAt;
         const sharedTasks = reviveWorkspaceTasks(
           Array.isArray(neonState?.tasks) && neonState.tasks.length > 0 ? neonState.tasks : initialTasks,
           usersObj
@@ -1262,6 +1293,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
 
         sharedDataLoadFailedRef.current = false;
+        nextNeonRetryAtRef.current = 0;
         setAppSettings(sharedSettings);
         setTasks(sharedTasks);
         setNotifications(sharedNotifications);
@@ -1271,11 +1303,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
           : null);
         setPersistenceError(null);
       })
-      .catch(error => {
+      .catch(async error => {
         console.error('Failed to load Neon app state', error);
         if (!isMounted) return;
 
         sharedDataLoadFailedRef.current = true;
+        nextNeonRetryAtRef.current = Date.now() + 5 * 60 * 1000;
+        const localState = await loadAppState().catch(localError => {
+          console.error('Failed to load local fallback app state after Neon error', localError);
+          return null;
+        });
+        if (!isMounted) return;
+
+        const localTasks = Array.isArray(localState?.tasks) && localState.tasks.length > 0
+          ? localState.tasks.filter(task => !isGuestSeedTask(task) && !isPlaceholderTask(task))
+          : initialTasks;
+        const localNotifications = Array.isArray(localState?.notifications)
+          ? removeGuestSeedNotifications(localState.notifications)
+          : [];
+        const localReports = Array.isArray(localState?.dailyReports)
+          ? localState.dailyReports.map(coerceDailyReport).filter(Boolean) as DailyReport[]
+          : [];
+        let combinedReports = localReports;
+        if (!dailyReportMigratedRef.current) {
+          dailyReportMigratedRef.current = true;
+          const migratedReports = migrateDailyReportsFromLocalStorage();
+          if (migratedReports.length > 0) {
+            combinedReports = mergeDailyReportsIntoState(localReports, migratedReports);
+          }
+        }
+
+        setAppSettings(prev => mergeAppSettingsPreservingWorkflowDeletions(localState?.settings, prev));
+        setTasks(reviveWorkspaceTasks(localTasks, usersObj));
+        setNotifications(localNotifications);
+        setDailyReports(combinedReports);
         setLocalMigrationState(null);
         setPersistenceError(getSharedDataErrorMessage(error, 'Failed to load Neon app state.'));
       })
@@ -1361,14 +1422,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isNeonWorkspaceActive || !isPersistedStateReady || sharedDataLoadFailedRef.current) return;
 
+    const pendingTaskIds = Array.from(pendingTaskBroadcastIdsRef.current);
+    const pendingNotificationIds = Array.from(pendingNotificationBroadcastIdsRef.current);
+    const pendingDailyReportIds = Array.from(pendingDailyReportBroadcastIdsRef.current);
+    const hasPendingSettings = pendingSettingsBroadcastRef.current;
+    if (pendingTaskIds.length === 0 && pendingNotificationIds.length === 0 && pendingDailyReportIds.length === 0 && !hasPendingSettings) return;
+
+    pendingTaskBroadcastIdsRef.current.clear();
+    pendingNotificationBroadcastIdsRef.current.clear();
+    pendingDailyReportBroadcastIdsRef.current.clear();
+    pendingSettingsBroadcastRef.current = false;
+
     saveNeonAppState({ tasks, notifications, settings: appSettings, dailyReports })
-      .then(() => {
+      .then(result => {
+        lastNeonUpdatedAtRef.current = result.updatedAt || lastNeonUpdatedAtRef.current;
+        nextNeonRetryAtRef.current = 0;
         setPersistenceError(null);
       })
       .catch(error => {
         console.error('Failed to save Neon app state', error);
+        pendingTaskIds.forEach(taskId => pendingTaskBroadcastIdsRef.current.add(taskId));
+        pendingNotificationIds.forEach(notificationId => pendingNotificationBroadcastIdsRef.current.add(notificationId));
+        pendingDailyReportIds.forEach(reportId => pendingDailyReportBroadcastIdsRef.current.add(reportId));
+        if (hasPendingSettings) pendingSettingsBroadcastRef.current = true;
         sharedDataLoadFailedRef.current = true;
+        nextNeonRetryAtRef.current = Date.now() + 5 * 60 * 1000;
+        void saveAppState({ tasks, notifications, settings: appSettings, dailyReports })
+          .catch(localError => console.error('Failed to save local fallback app state after Neon error', localError));
         setPersistenceError(getSharedDataErrorMessage(error, 'Failed to save Neon app state.'));
+      });
+  }, [tasks, notifications, appSettings, dailyReports, isNeonWorkspaceActive, isPersistedStateReady]);
+
+  useEffect(() => {
+    if (!isNeonWorkspaceActive || !isPersistedStateReady || !sharedDataLoadFailedRef.current) return;
+
+    saveAppState({ tasks, notifications, settings: appSettings, dailyReports })
+      .catch(error => {
+        console.error('Failed to save local fallback app state while Neon is paused', error);
+        setPersistenceError(getErrorMessage(error, 'Failed to save local fallback app state.'));
       });
   }, [tasks, notifications, appSettings, dailyReports, isNeonWorkspaceActive, isPersistedStateReady]);
 
@@ -1431,13 +1522,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     const syncLatestSharedData = async () => {
       if (!hasLoadedPersistedState.current || isPolling) return;
+      if (sharedDataLoadFailedRef.current && Date.now() < nextNeonRetryAtRef.current) return;
 
       isPolling = true;
       try {
-        const latestState = await fetchNeonAppState();
+        const latestMeta = await fetchNeonAppStateMeta();
+        if (!isMounted) return;
+        if (latestMeta.updatedAt && latestMeta.updatedAt === lastNeonUpdatedAtRef.current) {
+          sharedDataLoadFailedRef.current = false;
+          nextNeonRetryAtRef.current = 0;
+          setPersistenceError(null);
+          return;
+        }
+
+        const latestResponse = await fetchNeonAppStateResponse();
+        const latestState = latestResponse.state;
         if (!isMounted || !latestState) return;
 
+        lastNeonUpdatedAtRef.current = latestResponse.updatedAt || latestMeta.updatedAt || lastNeonUpdatedAtRef.current;
         sharedDataLoadFailedRef.current = false;
+        nextNeonRetryAtRef.current = 0;
         setTasks(prev => mergeTasksIntoState(prev.filter(task => !isGuestSeedTask(task) && !isPlaceholderTask(task)), reviveWorkspaceTasks(latestState.tasks || [], usersObj)));
         setNotifications(prev => mergeNotificationsIntoState(removeGuestSeedNotifications(prev), removeGuestSeedNotifications(latestState.notifications || [])));
         if (Array.isArray(latestState.dailyReports)) {
@@ -1451,6 +1555,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         console.error('Failed to sync latest Neon data', error);
         if (isMounted) {
           sharedDataLoadFailedRef.current = true;
+          nextNeonRetryAtRef.current = Date.now() + 5 * 60 * 1000;
           setPersistenceError(getSharedDataErrorMessage(error, 'Failed to sync latest Neon data.'));
         }
       } finally {
@@ -1561,10 +1666,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       })();
       const minutesUntilSend = targetMinutes - currentMinutes;
-      // A report scheduled for 17:29 warns its owner at 17:15. The warning is
-      // private to that owner; one signed-in member must never notify or send
-      // another member's report from their browser session.
-      if (minutesUntilSend === 14 && !alreadyWarned) {
+      // Warn the signed-in owner once shortly before auto-send, so the report
+      // never goes out silently while they still have a chance to review it.
+      if (minutesUntilSend > 0 && minutesUntilSend <= 20 && !alreadyWarned) {
         try {
           window.sessionStorage.setItem('national-care-daily-report-auto-warning', warningKey);
         } catch {
@@ -2268,8 +2372,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     if (!manualUser && USE_NEON_DATA) {
       try {
-        const neonState = await fetchNeonAppState();
-        const sharedSettings = mergeAppSettingsPreservingWorkflowDeletions(neonState?.settings, appSettings);
+        const neonSettings = await fetchNeonAppSettings();
+        const sharedSettings = mergeAppSettingsPreservingWorkflowDeletions(neonSettings, appSettings);
         setAppSettings(sharedSettings);
         toolManagedUsers = sharedSettings.manualUsers || [];
         manualUser = toolManagedUsers.find(user => {
@@ -2552,9 +2656,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     
     try {
       if (isNeonWorkspaceActive && hasLoadedPersistedState.current && !sharedDataLoadFailedRef.current) {
-        await saveNeonAppState(nextState);
+        const result = await saveNeonAppState(nextState);
+        lastNeonUpdatedAtRef.current = result.updatedAt || lastNeonUpdatedAtRef.current;
+        nextNeonRetryAtRef.current = 0;
       } else if (isDriveWorkspaceReady && hasLoadedPersistedState.current && !sharedDataLoadFailedRef.current) {
         await upsertDriveSettings(merged);
+      } else if (isNeonWorkspaceActive && hasLoadedPersistedState.current && sharedDataLoadFailedRef.current) {
+        await saveAppState(nextState);
       } else if (isLocalWorkspaceActive && hasLoadedPersistedState.current) {
         await saveAppState(nextState);
       }
@@ -2565,9 +2673,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
         updated_at: new Date().toISOString()
       });
 
-      setPersistenceError(null);
+      if (isNeonWorkspaceActive && sharedDataLoadFailedRef.current) {
+        setPersistenceError(prev => prev || getSharedDataErrorMessage(
+          new Error('Shared database transfer limit has been reached.'),
+          'Shared database transfer limit has been reached.'
+        ));
+      } else {
+        setPersistenceError(null);
+      }
     } catch (error) {
       console.error('Failed to save app settings', error);
+      if (isNeonWorkspaceActive) {
+        sharedDataLoadFailedRef.current = true;
+        nextNeonRetryAtRef.current = Date.now() + 5 * 60 * 1000;
+        await saveAppState(nextState).catch(localError => {
+          console.error('Failed to save local fallback settings after Neon error', localError);
+        });
+      }
       setPersistenceError(getSharedDataErrorMessage(error, 'Failed to save app settings.'));
     }
   };
@@ -2720,6 +2842,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteTask = (taskId: string) => {
+    queueTaskBroadcast(taskId);
     setTasks(prev => prev.filter(task => task.id !== taskId));
     if (isDriveWorkspaceReady) {
       deleteDriveTask(taskId).catch(error => console.error('Failed to delete task from Drive', error));
@@ -2751,6 +2874,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const existingIds = new Set(prev.map(notification => notification.id));
         return [...localMigrationState.notifications.filter(notification => !existingIds.has(notification.id)), ...prev];
       });
+      if (isNeonWorkspaceActive) {
+        uploadedTasks.forEach(task => queueTaskBroadcast(task.id));
+        localMigrationState.notifications.forEach(notification => queueNotificationBroadcast(notification.id));
+      }
       setLocalMigrationState(null);
       await clearAppState();
     } catch (error) {
