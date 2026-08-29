@@ -202,25 +202,39 @@ export function getActiveWorkflowPhaseForUser(
 
 export function getPhaseOwnerRole(phase: WorkflowPhaseDefinition | null | undefined): Role | null {
   if (!phase) return null;
-  if (phase.phaseKind === 'final_review' || phase.reviewStyle === 'final_approval' || (phase.roleIds || []).includes('art_director')) return 'art_director';
-  if (phase.phaseKind === 'first_review') return 'reviewer';
+  const roleIds = phase.roleIds || [];
+  // Explicit ownership always wins over a visual review style. For example,
+  // the senior owns the "Submit Campaign for Art Director Approval" step,
+  // even though that step leads into final approval.
+  if (roleIds.includes('art_director')) return 'art_director';
+  if (roleIds.includes('reviewer')) return 'reviewer';
+  if (roleIds.includes('team_member') || (phase.responsibilityIds || []).includes('content_creator')) return 'team_member';
+  if (roleIds.includes('team_leader')) return 'team_leader';
   if (phase.phaseKind === 'content_review') return 'team_member';
-  if ((phase.roleIds || []).includes('team_member') || (phase.responsibilityIds || []).includes('content_creator')) return 'team_member';
-  if ((phase.roleIds || []).includes('team_leader')) return 'team_leader';
+  if (phase.phaseKind === 'first_review') return 'reviewer';
+  if (phase.phaseKind === 'final_review' || phase.reviewStyle === 'final_approval') return 'art_director';
   return 'reviewer';
+}
+
+export function canSkipWorkflowPhase(phase: WorkflowPhaseDefinition | null | undefined) {
+  if (!phase || phase.skipRule !== 'manual') return false;
+  // Final Art Director approval is never optional. A workflow can mark other
+  // steps as manual skips, but it cannot silently bypass the final approver.
+  return getPhaseOwnerRole(phase) !== 'art_director';
 }
 
 export function getStatusForWorkflowPhase(phase: WorkflowPhaseDefinition | null | undefined): TaskStatus {
   if (!phase) return 'approved_by_art_director';
-  if (phase.phaseKind === 'final_review' || phase.reviewStyle === 'final_approval' || (phase.roleIds || []).includes('art_director')) return 'sent_to_art_director';
-  if (phase.phaseKind === 'first_review' || phase.reviewStyle === 'full_review') return 'waiting_reviewer_full_review';
+  const ownerRole = getPhaseOwnerRole(phase);
+  if (ownerRole === 'art_director') return 'sent_to_art_director';
   if (phase.phaseKind === 'content_review') return 'waiting_content_revision';
+  if (ownerRole === 'reviewer' || phase.phaseKind === 'first_review' || phase.reviewStyle === 'full_review') return 'waiting_reviewer_full_review';
   return 'assigned_work';
 }
 
 export function getReviewModeForWorkflowPhase(phase: WorkflowPhaseDefinition | null | undefined): ReviewMode {
   if (!phase) return 'first_review';
-  if (phase.phaseKind === 'final_review' || phase.reviewStyle === 'final_approval') return 'final_review';
+  if (getPhaseOwnerRole(phase) === 'art_director') return 'final_review';
   if (phase.phaseKind === 'content_review') return 'content_review';
   return 'first_review';
 }

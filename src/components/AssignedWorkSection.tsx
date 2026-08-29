@@ -13,7 +13,7 @@ import { ThemedTimePicker } from './ThemedTimePicker';
 import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
 import { getActivePriorityOptions, getPriorityTone, isDeadlineInsideBusinessHours, getWorkingHoursForUser, priorityToneClasses, MINA_ID, DINA_ID, normalizeTaskTypeId, cleanTaskTypeKey, getTaskTypeConfigs } from '../lib/appSettings';
-import { getWorkflowForTaskType, userCanViewFullWorkspace } from '../lib/workflowUtils';
+import { canSkipWorkflowPhase, getPhaseOwnerRole, getWorkflowForTaskType, userCanViewFullWorkspace } from '../lib/workflowUtils';
 
 const CONTROL_CLASS = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10';
 const SELECT_BUTTON_CLASS = 'rounded-xl border-slate-200 px-3 py-2.5 text-sm font-black text-slate-900 shadow-sm hover:bg-slate-50 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10';
@@ -206,6 +206,7 @@ export function AssignedWorkSection({
   const [linkInput, setLinkInput] = useState('');
   const [assignmentDateError, setAssignmentDateError] = useState('');
   const [deadlineError, setDeadlineError] = useState('');
+  const [workflowAssignmentError, setWorkflowAssignmentError] = useState('');
 
   // Task type management states
   const [taskTypeName, setTaskTypeName] = useState('');
@@ -468,6 +469,7 @@ export function AssignedWorkSection({
     setLinkInput('');
     setAssignmentDateError('');
     setDeadlineError('');
+    setWorkflowAssignmentError('');
   };
 
   const taskTypeConfigs = getTaskTypeConfigs(appSettings);
@@ -685,6 +687,19 @@ export function AssignedWorkSection({
         setDeadlineError(validation.message);
         return;
       }
+    }
+
+    const hasRequiredFinalApprovalOwner = workflowSteps
+      .filter(phase => getPhaseOwnerRole(phase) === 'art_director')
+      .every(phase => {
+        const manuallyAssignedIds = workflowNodeAssigneeIds[phase.id] || [];
+        if (manuallyAssignedIds.some(userId => Boolean(users[userId]))) return true;
+        if ((phase.userIds || []).some(userId => Boolean(users[userId]))) return true;
+        return userList.some(user => user.id !== 'guest' && user.role === 'art_director');
+      });
+    if (!hasRequiredFinalApprovalOwner) {
+      setWorkflowAssignmentError('This workflow requires an Art Director before it can be assigned. Add or update that member in Members Roles and Positions.');
+      return;
     }
 
     const input = {
@@ -1419,11 +1434,17 @@ export function AssignedWorkSection({
                     {workflowSteps.map((phase, index) => {
                       const phaseResponsibilityLabels = (phase.responsibilityIds || []).map(id => appSettings.responsibilities.find(item => item.id === id)?.label || id.replace(/_/g, ' '));
                       const isSkipped = workflowSkippedPhaseIds.includes(phase.id);
+                      const canSkipPhase = canSkipWorkflowPhase(phase);
                       const isVoiceOver = (phase.responsibilityIds || []).includes('voice_over');
                       const phaseUsers = assigneeOptions.filter(user => {
-                        if ((phase.responsibilityIds || []).length === 0) return true;
-                        return phase.responsibilityIds.some(responsibilityId => userMatchesResponsibilityLabel(user, responsibilityId, appSettings));
+                        const isExplicitPhaseMember = (phase.userIds || []).includes(user.id);
+                        const hasRoleRestriction = (phase.roleIds || []).length > 0;
+                        const hasResponsibilityRestriction = (phase.responsibilityIds || []).length > 0;
+                        const matchesRole = isExplicitPhaseMember || !hasRoleRestriction || (phase.roleIds || []).includes(user.role);
+                        const matchesResponsibility = isExplicitPhaseMember || !hasResponsibilityRestriction || phase.responsibilityIds.some(responsibilityId => userMatchesResponsibilityLabel(user, responsibilityId, appSettings));
+                        return matchesRole && matchesResponsibility;
                       });
+                      const requiresConfiguredOwners = (phase.roleIds || []).length > 0 || (phase.responsibilityIds || []).length > 0;
                       const selectedIds = workflowNodeAssigneeIds[phase.id] || [];
                       return (
                         <div key={phase.id} className={cn("rounded-xl border bg-white p-3", isSkipped ? "border-slate-200 opacity-65" : "border-indigo-100")}>
@@ -1434,7 +1455,7 @@ export function AssignedWorkSection({
                               {phase.nodeNote && <p className="mt-1 text-xs font-semibold text-slate-500">{phase.nodeNote}</p>}
                             </div>
                             <div className="flex flex-wrap justify-end gap-1.5">
-                              {phase.skipRule === 'manual' && (
+                              {canSkipPhase && (
                                 <button type="button" onClick={() => setWorkflowSkippedPhaseIds(prev => isSkipped ? prev.filter(id => id !== phase.id) : [...prev, phase.id])} className={cn("rounded-lg border px-2 py-1 text-[10px] font-black", isSkipped ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700")}>
                                   {isSkipped ? 'Include step' : 'Skip optional step'}
                                 </button>
@@ -1473,15 +1494,18 @@ export function AssignedWorkSection({
                             </div>
                           ) : (
                             <UserMultiSelect
-                              users={phaseUsers.length > 0 ? phaseUsers : assigneeOptions}
+                              users={phaseUsers.length > 0 || requiresConfiguredOwners ? phaseUsers : assigneeOptions}
                               selectedIds={selectedIds}
                               onChange={ids => setWorkflowNodeAssigneeIds(prev => ({ ...prev, [phase.id]: ids }))}
-                              emptyText="No members match this node responsibility"
+                              emptyText={getPhaseOwnerRole(phase) === 'art_director' ? 'No Art Director is configured for this required final approval step' : 'No members match this node responsibility'}
                             />
                           ))}
                         </div>
                       );
                     })}
+                    {workflowAssignmentError && (
+                      <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700">{workflowAssignmentError}</p>
+                    )}
                   </div>
                 )}
 

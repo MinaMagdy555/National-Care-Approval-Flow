@@ -32,6 +32,7 @@ import {
   canReviewRouteUpdateStatus,
   canManageWorkflowBuilder,
   canUserActAsCurrentOwner,
+  canSkipWorkflowPhase,
   cloneWorkflow,
   computePhaseAvailableAt,
   evaluateSkipRule,
@@ -127,6 +128,12 @@ const GUEST_USER: User = {
   role: 'team_member',
   jobTitle: 'Not signed in',
 };
+
+function sanitizeWorkflowSkippedPhaseIds(workflow: WorkflowDefinition | null | undefined, phaseIds?: string[]) {
+  if (!workflow || !Array.isArray(phaseIds)) return [];
+  const phasesById = new Map(workflow.phases.map(phase => [phase.id, phase]));
+  return uniqueIds(phaseIds).filter(phaseId => canSkipWorkflowPhase(phasesById.get(phaseId)));
+}
 
 export function getDefaultDailyReportReceivers(userList: User[]) {
   return userList.filter(user => (
@@ -383,7 +390,10 @@ function coerceTask(task: Partial<Task> & { id?: string }): Task | null {
     workflowPhaseApprovals: task.workflowPhaseApprovals && typeof task.workflowPhaseApprovals === 'object' ? task.workflowPhaseApprovals : {},
     workflowPhaseHistory: Array.isArray(task.workflowPhaseHistory) ? task.workflowPhaseHistory : [],
     workflowActivePhaseIds: Array.isArray(task.workflowActivePhaseIds) ? task.workflowActivePhaseIds : (task.workflowCurrentPhaseId ? [task.workflowCurrentPhaseId] : []),
-    workflowSkippedPhaseIds: Array.isArray(task.workflowSkippedPhaseIds) ? task.workflowSkippedPhaseIds : [],
+    workflowSkippedPhaseIds: sanitizeWorkflowSkippedPhaseIds(
+      task.workflowSnapshot,
+      Array.isArray(task.workflowSkippedPhaseIds) ? task.workflowSkippedPhaseIds : [],
+    ),
     environment: task.environment || 'production',
     createdBy: task.createdBy || initialUsers[0]?.id || 'unknown_user',
     handledBy: sanitizeHandledBy(Array.isArray(task.handledBy) ? task.handledBy : [task.createdBy || initialUsers[0]?.id || 'unknown_user']),
@@ -3635,7 +3645,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       assignmentDate: input.assignmentDate || null,
       workflowNodeAssigneeIds: input.workflowNodeAssigneeIds || {},
       workflowNodeAIAssigneeIds: input.workflowNodeAIAssigneeIds || {},
-      workflowSkippedPhaseIds: input.workflowSkippedPhaseIds || [],
+      workflowSkippedPhaseIds: sanitizeWorkflowSkippedPhaseIds(workflow, input.workflowSkippedPhaseIds),
       deadlineAt: input.deadlineAt || null,
       assignmentUploadedAt: null,
       scheduledPublishAt: null,
@@ -3773,7 +3783,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         assignmentDate: input.assignmentDate || null,
         workflowNodeAssigneeIds: input.workflowNodeAssigneeIds || {},
         workflowNodeAIAssigneeIds: input.workflowNodeAIAssigneeIds || {},
-        workflowSkippedPhaseIds: input.workflowSkippedPhaseIds || [],
+        workflowSkippedPhaseIds: sanitizeWorkflowSkippedPhaseIds(workflow, input.workflowSkippedPhaseIds),
         deadlineAt: input.deadlineAt || null,
         isOvertime: input.isOvertime || false,
         needsContentRevision: input.needsContentRevision || false,
