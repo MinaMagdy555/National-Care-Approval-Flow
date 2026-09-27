@@ -1,5 +1,5 @@
-import { AppSettings, Task, User, WorkflowDefinition, WorkflowPhaseDefinition, WorkflowPhaseHistoryEntry } from './types';
-import { getWorkflowParentIds as getPhaseParentIds, getWorkflowSuccessors as successors, getWorkflowEntryPhases as initialCandidates, isWorkflowStep as isStepPhase, getWorkflowDownstreamIds } from './workflowGraph';
+import { AppSettings, Task, User, WorkflowDefinition, WorkflowPhaseDefinition, WorkflowPhaseHistoryEntry } from './types.js';
+import { getWorkflowParentIds as getPhaseParentIds, getWorkflowSuccessors as successors, getWorkflowEntryPhases as initialCandidates, isWorkflowStep as isStepPhase, getWorkflowDownstreamIds } from './workflowGraph.js';
 import {
   computePhaseAvailableAt,
   isWorkflowPhaseSkippedForTask,
@@ -13,7 +13,7 @@ import {
   getWorkflowPhaseIndex,
   resolveWorkflowPhaseOwnerIds,
   uniqueIds,
-} from './workflowUtils';
+} from './workflowUtils.js';
 
 /**
  * Pure workflow runtime. The store actions delegate every routing, ownership
@@ -30,8 +30,8 @@ import {
  *   latest history action per phase decides whether it counts as completed.
  */
 
-export { getPhaseAssignableOwnerIds, resolveWorkflowPhaseOwnerIds } from './workflowUtils';
-export { getWorkflowParentIds as getPhaseParentIds, workflowHasExplicitEdges } from './workflowGraph';
+export { getPhaseAssignableOwnerIds, resolveWorkflowPhaseOwnerIds } from './workflowUtils.js';
+export { getWorkflowParentIds as getPhaseParentIds, workflowHasExplicitEdges } from './workflowGraph.js';
 
 type TaskRouteFields = Pick<Task, 'assignmentLinks' | 'versions' | 'workflowSkippedPhaseIds' | 'needsContentRevision'>;
 

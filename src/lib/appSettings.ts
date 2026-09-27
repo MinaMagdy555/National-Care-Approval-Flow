@@ -1,6 +1,6 @@
-import { applyMemberDeletions } from './memberIdentity';
-import { normalizeReviewPhase } from './reviewPolicy';
-import { AppSettings, Priority, PriorityOption, PriorityTone, ResponsibilityOption, Role, TaskType, User, TaskTypeConfig, CustomWorkingHours, WorkflowDefinition, WorkflowPhaseDefinition } from './types';
+import { applyMemberDeletions } from './memberIdentity.js';
+import { normalizeReviewPhase } from './reviewPolicy.js';
+import { AppSettings, Priority, PriorityOption, PriorityTone, ResponsibilityOption, Role, TaskType, User, TaskTypeConfig, CustomWorkingHours, WorkflowDefinition, WorkflowPhaseDefinition } from './types.js';
 
 export const MINA_ID = '83e02bb4-11f9-41b0-becb-33e6c4c52b2a';
 export const MARWA_ID = 'd65ea68d-1749-45b9-b0f9-1fdaf23b8f94';

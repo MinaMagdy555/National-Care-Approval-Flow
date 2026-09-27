@@ -1,10 +1,10 @@
-import type { AppSettings, Task, User, WorkflowDefinition } from './types';
-import { findWorkflowTaskTypeCollisions, getTaskTypeConfigs, normalizeWorkflowTaskTypeId } from './appSettings';
-import { getWorkflowExecutionDefinition, validateWorkflowGraph } from './workflowGraph';
-import { isMandatoryFinalReview, resolveWorkflowPhaseOwnerIds } from './workflowUtils';
-import { normalizeReviewPhase } from './reviewPolicy';
-import { resolveFixedArtDirector, resolveTaskFinalArtDirector } from './finalApprovalPolicy';
-import { getVoiceOverDeliveryOwnerId, hasVoiceOverProviderSelection, isVoiceOverPhase, validateVoiceOverAssignment, validateVoiceOverTaskChanges } from './voiceOverPolicy';
+import type { AppSettings, Task, User, WorkflowDefinition } from './types.js';
+import { findWorkflowTaskTypeCollisions, getTaskTypeConfigs, normalizeWorkflowTaskTypeId } from './appSettings.js';
+import { getWorkflowExecutionDefinition, validateWorkflowGraph } from './workflowGraph.js';
+import { isMandatoryFinalReview, resolveWorkflowPhaseOwnerIds } from './workflowUtils.js';
+import { normalizeReviewPhase } from './reviewPolicy.js';
+import { resolveFixedArtDirector, resolveTaskFinalArtDirector } from './finalApprovalPolicy.js';
+import { getVoiceOverDeliveryOwnerId, hasVoiceOverProviderSelection, isVoiceOverPhase, validateVoiceOverAssignment, validateVoiceOverTaskChanges } from './voiceOverPolicy.js';
 
 export type WorkflowAssignmentResult = { ok: boolean; message?: string };
 

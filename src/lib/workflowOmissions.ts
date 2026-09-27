@@ -1,12 +1,12 @@
-import type { AppSettings, Task, User, WorkflowPhaseDefinition } from './types';
-import { canEditTask } from './taskPolicy';
-import { isLeaderboardUser } from './workAssignmentUtils';
-import { canManageWorkflowBuilder, canSkipWorkflowPhase, CLOSED_STATUSES, RETURNED_STATUSES, getPhaseAssignableOwnerIds, getPhaseOwnerRole, getReviewModeForWorkflowPhase, getStatusForWorkflowPhase, isMandatoryFinalReview, resolveWorkflowPhaseOwnerIds, uniqueIds } from './workflowUtils';
-import { appendStartedEntries, computeWorkflowOmissions, splitHandoffsByDelay } from './workflowRuntime';
-import { getWorkflowDownstreamIds } from './workflowGraph';
-import { isContentReviewPhase } from './reviewPolicy';
-import { validateVoiceOverAssignment, isVoiceOverPhase, hasVoiceOverProviderSelection } from './voiceOverPolicy';
-import type { WorkflowAssignmentResult } from './workflowAssignment';
+import type { AppSettings, Task, User, WorkflowPhaseDefinition } from './types.js';
+import { canEditTask } from './taskPolicy.js';
+import { isLeaderboardUser } from './workAssignmentUtils.js';
+import { canManageWorkflowBuilder, canSkipWorkflowPhase, CLOSED_STATUSES, RETURNED_STATUSES, getPhaseAssignableOwnerIds, getPhaseOwnerRole, getReviewModeForWorkflowPhase, getStatusForWorkflowPhase, isMandatoryFinalReview, resolveWorkflowPhaseOwnerIds, uniqueIds } from './workflowUtils.js';
+import { appendStartedEntries, computeWorkflowOmissions, splitHandoffsByDelay } from './workflowRuntime.js';
+import { getWorkflowDownstreamIds } from './workflowGraph.js';
+import { isContentReviewPhase } from './reviewPolicy.js';
+import { validateVoiceOverAssignment, isVoiceOverPhase, hasVoiceOverProviderSelection } from './voiceOverPolicy.js';
+import type { WorkflowAssignmentResult } from './workflowAssignment.js';
 
 export function canManageWorkflowOmissions(user: User, settings: AppSettings, task?: Task, users: User[] = [], now = new Date()): boolean {
   const manager = user.id !== 'guest' && (canManageWorkflowBuilder(user, settings) || isLeaderboardUser(user.id)

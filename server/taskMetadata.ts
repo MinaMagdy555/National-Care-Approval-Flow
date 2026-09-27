@@ -1,9 +1,9 @@
-import { ensureSchema, getMemberTombstones, getSql } from '../api/app-state';
-import { createWorkspaceAuth, type WorkspaceRequest } from './workspaceAuth';
-import { applyMemberDeletions, visibleMemberRoster } from '../src/lib/memberIdentity';
-import { mergeAppSettings } from '../src/lib/appSettings';
-import { canViewTask } from '../src/lib/taskPolicy';
-import type { Task } from '../src/lib/types';
+import { ensureSchema, getMemberTombstones, getSql } from '../api/app-state.js';
+import { createWorkspaceAuth, type WorkspaceRequest } from './workspaceAuth.js';
+import { applyMemberDeletions, visibleMemberRoster } from '../src/lib/memberIdentity.js';
+import { mergeAppSettings } from '../src/lib/appSettings.js';
+import { canViewTask } from '../src/lib/taskPolicy.js';
+import type { Task } from '../src/lib/types.js';
 
 function linkIdentity(raw: string): string {
   try {

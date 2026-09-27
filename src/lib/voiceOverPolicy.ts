@@ -1,4 +1,4 @@
-import type { Task, User, VoiceOverProvider, WorkflowPhaseDefinition } from './types';
+import type { Task, User, VoiceOverProvider, WorkflowPhaseDefinition } from './types.js';
 
 export const VOICE_OVER_PROVIDER_OPTIONS: Array<{ value: VoiceOverProvider; label: string }> = [
   { value: 'voice_over_shaza', label: 'Shaza' },

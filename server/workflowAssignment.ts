@@ -1,11 +1,11 @@
-import type { AppSettings, Task, User } from '../src/lib/types';
-import { prepareWorkflowAssignmentOwners, resolveWorkflowAssignment } from '../src/lib/workflowAssignment';
-import { getWorkflowExecutionDefinition } from '../src/lib/workflowGraph';
-import { ReportAccessError } from './reportAccess';
-import { computeWorkflowInitialization } from '../src/lib/workflowRuntime';
-import { canManageWorkflowBuilder, isMandatoryFinalReview } from '../src/lib/workflowUtils';
-import { validateVoiceOverTaskChanges } from '../src/lib/voiceOverPolicy';
-import { resolveFixedArtDirector, resolveTaskFinalArtDirector } from '../src/lib/finalApprovalPolicy';
+import type { AppSettings, Task, User } from '../src/lib/types.js';
+import { prepareWorkflowAssignmentOwners, resolveWorkflowAssignment } from '../src/lib/workflowAssignment.js';
+import { getWorkflowExecutionDefinition } from '../src/lib/workflowGraph.js';
+import { ReportAccessError } from './reportAccess.js';
+import { computeWorkflowInitialization } from '../src/lib/workflowRuntime.js';
+import { canManageWorkflowBuilder, isMandatoryFinalReview } from '../src/lib/workflowUtils.js';
+import { validateVoiceOverTaskChanges } from '../src/lib/voiceOverPolicy.js';
+import { resolveFixedArtDirector, resolveTaskFinalArtDirector } from '../src/lib/finalApprovalPolicy.js';
 
 export function workflowAssignmentChanged(prior: Task | undefined, task: Task): boolean {
   return !prior || prior.workflowId !== task.workflowId || JSON.stringify(prior.workflowSnapshot && getWorkflowExecutionDefinition(prior.workflowSnapshot)) !== JSON.stringify(task.workflowSnapshot && getWorkflowExecutionDefinition(task.workflowSnapshot));

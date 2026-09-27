@@ -1,4 +1,4 @@
-import type { ReviewMode, WorkflowDefinition, WorkflowPhaseDefinition } from './types';
+import type { ReviewMode, WorkflowDefinition, WorkflowPhaseDefinition } from './types.js';
 
 export type CanonicalReviewMode = Extract<ReviewMode, 'content_review' | 'first_review' | 'final_review'>;
 

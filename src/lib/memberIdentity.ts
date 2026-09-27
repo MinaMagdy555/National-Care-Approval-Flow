@@ -1,4 +1,4 @@
-import type { AppSettings, DeletedMember, User } from './types';
+import type { AppSettings, DeletedMember, User } from './types.js';
 
 export const normalizeMemberEmail = (value?: string) => (value || '').trim().toLowerCase();
 

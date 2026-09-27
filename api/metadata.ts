@@ -1,6 +1,6 @@
 import https from 'https';
-import { createTaskMetadataAuthorizer } from '../server/taskMetadata';
-import type { WorkspaceRequest } from '../server/workspaceAuth';
+import { createTaskMetadataAuthorizer } from '../server/taskMetadata.js';
+import type { WorkspaceRequest } from '../server/workspaceAuth.js';
 
 function permittedMetadataUrl(raw: string): boolean {
   try { const url = new URL(raw); return url.protocol === 'https:' && ['drive.google.com', 'docs.google.com'].includes(url.hostname) && !url.port && !url.username && !url.password; }

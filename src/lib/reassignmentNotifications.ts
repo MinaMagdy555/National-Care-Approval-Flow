@@ -1,8 +1,8 @@
-import type { AppSettings, Notification, Task, User } from './types';
-import { CLOSED_STATUSES, RETURNED_STATUSES, getPhaseAssignableOwnerIds, resolveWorkflowPhaseOwnerIds } from './workflowUtils';
-import { hasStartedPhase } from './workSessions';
-import { computePhaseHandoffs } from './workflowRuntime';
-import { getDeadlineOwnerIds } from './deadlinePolicy';
+import type { AppSettings, Notification, Task, User } from './types.js';
+import { CLOSED_STATUSES, RETURNED_STATUSES, getPhaseAssignableOwnerIds, resolveWorkflowPhaseOwnerIds } from './workflowUtils.js';
+import { hasStartedPhase } from './workSessions.js';
+import { computePhaseHandoffs } from './workflowRuntime.js';
+import { getDeadlineOwnerIds } from './deadlinePolicy.js';
 
 export function getReassignmentNotifications(prior: Task, next: Task, settings: AppSettings, users: User[]): Notification[] {
   const notifications: Notification[] = [];

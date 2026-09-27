@@ -1,6 +1,6 @@
-import type { AppSettings, DailyReportEntry, Task, User } from './types';
-import { formatDeadlineInput, parseDeadlineInput } from './deadlinePolicy';
-import { getTaskWorkSessions } from './workSessions';
+import type { AppSettings, DailyReportEntry, Task, User } from './types.js';
+import { formatDeadlineInput, parseDeadlineInput } from './deadlinePolicy.js';
+import { getTaskWorkSessions } from './workSessions.js';
 
 export const cairoDate = (now = new Date()) => formatDeadlineInput(now).slice(0, 10);
 export const cairoTime = (iso?: string | null) => iso && Number.isFinite(Date.parse(iso)) ? formatDeadlineInput(new Date(iso)).slice(11, 16) : '';

@@ -1,18 +1,18 @@
-import { getReassignmentNotifications, getHandoffNotifications, mergeHandoffNotifications } from '../src/lib/reassignmentNotifications';
-import { canManageWorkflowBuilder } from '../src/lib/workflowUtils';
-import { preserveDeadlineState, projectDeadlineNotifications } from '../src/lib/deadlinePolicy';
-import { canViewTask, projectTaskNotifications } from '../src/lib/taskPolicy';
-import { mergeAuthorizedTasks, mergeAuthorizedTaskNotifications } from '../server/taskAccess';
-import { createWorkspaceAuth, isSameOriginRequest, withoutPrivateSettings, safeUser } from '../server/workspaceAuth';
-import { mergeAuthorizedReports, mergeReportNotifications, projectReports, projectReportNotifications, ReportAccessError } from '../server/reportAccess';
-import { visibleMemberRoster } from '../src/lib/memberIdentity';
-import { canRemoveMember } from '../src/lib/memberDeletion';
-import { applyMemberDeletions, mergeMemberDeletions } from '../src/lib/memberIdentity';
-import { findMemberDeletionBlockers } from '../src/lib/memberDeletion';
-import { canManageAppSettings, mergeAppSettings } from '../src/lib/appSettings';
-import type { DeletedMember, Task, User, DailyReport, Notification } from '../src/lib/types';
+import { getReassignmentNotifications, getHandoffNotifications, mergeHandoffNotifications } from '../src/lib/reassignmentNotifications.js';
+import { canManageWorkflowBuilder } from '../src/lib/workflowUtils.js';
+import { preserveDeadlineState, projectDeadlineNotifications } from '../src/lib/deadlinePolicy.js';
+import { canViewTask, projectTaskNotifications } from '../src/lib/taskPolicy.js';
+import { mergeAuthorizedTasks, mergeAuthorizedTaskNotifications } from '../server/taskAccess.js';
+import { createWorkspaceAuth, isSameOriginRequest, withoutPrivateSettings, safeUser } from '../server/workspaceAuth.js';
+import { mergeAuthorizedReports, mergeReportNotifications, projectReports, projectReportNotifications, ReportAccessError } from '../server/reportAccess.js';
+import { visibleMemberRoster } from '../src/lib/memberIdentity.js';
+import { canRemoveMember } from '../src/lib/memberDeletion.js';
+import { applyMemberDeletions, mergeMemberDeletions } from '../src/lib/memberIdentity.js';
+import { findMemberDeletionBlockers } from '../src/lib/memberDeletion.js';
+import { canManageAppSettings, mergeAppSettings } from '../src/lib/appSettings.js';
+import type { DeletedMember, Task, User, DailyReport, Notification } from '../src/lib/types.js';
 import { neon } from '@neondatabase/serverless';
-import { filterResetNotifications, NotificationResetRecord, planNotificationReset } from '../src/lib/notificationReset';
+import { filterResetNotifications, NotificationResetRecord, planNotificationReset } from '../src/lib/notificationReset.js';
 
 type ApiResponse = {
   status: (code: number) => {

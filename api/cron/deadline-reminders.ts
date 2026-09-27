@@ -1,12 +1,12 @@
-import { planDailyReports } from '../../src/lib/dailyReportScheduler';
+import { planDailyReports } from '../../src/lib/dailyReportScheduler.js';
 import { timingSafeEqual } from 'node:crypto';
-import { ensureSchema, getMemberTombstones, getSql } from '../app-state';
-import { createWorkspaceAuth, type WorkspaceRequest } from '../../server/workspaceAuth';
-import { mergeAppSettings } from '../../src/lib/appSettings';
-import { applyMemberDeletions, visibleMemberRoster } from '../../src/lib/memberIdentity';
-import { planDeadlineReminders } from '../../src/lib/deadlinePolicy';
-import type { PersistedAppState } from '../../src/lib/localDb';
-import type { User } from '../../src/lib/types';
+import { ensureSchema, getMemberTombstones, getSql } from '../app-state.js';
+import { createWorkspaceAuth, type WorkspaceRequest } from '../../server/workspaceAuth.js';
+import { mergeAppSettings } from '../../src/lib/appSettings.js';
+import { applyMemberDeletions, visibleMemberRoster } from '../../src/lib/memberIdentity.js';
+import { planDeadlineReminders } from '../../src/lib/deadlinePolicy.js';
+import type { PersistedAppState } from '../../src/lib/localDb.js';
+import type { User } from '../../src/lib/types.js';
 
 type Response = { setHeader(name: string, value: string): void; status(code: number): { json(value: unknown): void } };
 

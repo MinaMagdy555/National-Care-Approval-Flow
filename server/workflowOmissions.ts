@@ -1,8 +1,8 @@
-import type { AppSettings, Task, User } from '../src/lib/types';
-import { reconcileWorkflowOmissions, validateWorkflowOmissionSelection } from '../src/lib/workflowOmissions';
-import { computeWorkflowAdvance } from '../src/lib/workflowRuntime';
-import { getWorkflowExecutionDefinition } from '../src/lib/workflowGraph';
-import { ReportAccessError } from './reportAccess';
+import type { AppSettings, Task, User } from '../src/lib/types.js';
+import { reconcileWorkflowOmissions, validateWorkflowOmissionSelection } from '../src/lib/workflowOmissions.js';
+import { computeWorkflowAdvance } from '../src/lib/workflowRuntime.js';
+import { getWorkflowExecutionDefinition } from '../src/lib/workflowGraph.js';
+import { ReportAccessError } from './reportAccess.js';
 
 const sorted = (ids: string[] = []) => JSON.stringify([...new Set(ids)].sort());
 const approvalsShape = (task: Task) => JSON.stringify(Object.entries(task.workflowPhaseApprovals || {}).filter(([, ids]) => ids.length).sort(([a], [b]) => a.localeCompare(b)).map(([id, ids]) => [id, sorted(ids)]));

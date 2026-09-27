@@ -1,5 +1,5 @@
-import { AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID, MARWA_ID, MINA_ID, defaultAppSettings, getPriorityWeightFromSettings, isAssignableHandlerWithSettings } from './appSettings';
-import { AppSettings, AssignmentPeriod, Priority, Task, User } from './types';
+import { AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID, MARWA_ID, MINA_ID, defaultAppSettings, getPriorityWeightFromSettings, isAssignableHandlerWithSettings } from './appSettings.js';
+import { AppSettings, AssignmentPeriod, Priority, Task, User } from './types.js';
 
 export const LEADERBOARD_USER_IDS: readonly string[] = [MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID];
 

@@ -1,6 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import type { AppSettings, User } from '../src/lib/types';
-import { isMemberDeleted, normalizeMemberEmail, visibleMemberRoster } from '../src/lib/memberIdentity';
+import type { AppSettings, User } from '../src/lib/types.js';
+import { isMemberDeleted, normalizeMemberEmail, visibleMemberRoster } from '../src/lib/memberIdentity.js';
 
 export interface WorkspaceRequest {
   method?: string;

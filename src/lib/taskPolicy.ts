@@ -1,9 +1,9 @@
-import type { AppSettings, Notification, Task, User } from './types';
-import { getDeadlineOwnerIds } from './deadlinePolicy';
-import { isMemberDeleted } from './memberIdentity';
-import { getReportSeniorId, isReportLeader } from './reportPolicy';
-import { canManageWorkflowBuilder, CLOSED_STATUSES } from './workflowUtils';
-import { canManageWorkAssignment } from './workAssignmentUtils';
+import type { AppSettings, Notification, Task, User } from './types.js';
+import { getDeadlineOwnerIds } from './deadlinePolicy.js';
+import { isMemberDeleted } from './memberIdentity.js';
+import { getReportSeniorId, isReportLeader } from './reportPolicy.js';
+import { canManageWorkflowBuilder, CLOSED_STATUSES } from './workflowUtils.js';
+import { canManageWorkAssignment } from './workAssignmentUtils.js';
 
 export function hasTaskWorkHistory(task: Task, userId: string): boolean {
   if (!userId || userId === 'guest') return false;

@@ -1,5 +1,5 @@
-import type { WorkflowDefinition, WorkflowPhaseDefinition } from './types';
-import { normalizeReviewPhase } from './reviewPolicy';
+import type { WorkflowDefinition, WorkflowPhaseDefinition } from './types.js';
+import { normalizeReviewPhase } from './reviewPolicy.js';
 
 export const WORKFLOW_ROOT_ID = 'workflow-root';
 export const WORKFLOW_UNLINKED_ID = '__unlinked__';

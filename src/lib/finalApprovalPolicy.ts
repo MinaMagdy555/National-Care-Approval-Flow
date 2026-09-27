@@ -1,5 +1,5 @@
-import type { AppSettings, Task, User, WorkflowPhaseDefinition } from './types';
-import { isMemberDeleted } from './memberIdentity';
+import type { AppSettings, Task, User, WorkflowPhaseDefinition } from './types.js';
+import { isMemberDeleted } from './memberIdentity.js';
 
 /** Template/snapshot configuration may select one real AD; task overrides never select the final approver. */
 export function resolveFixedArtDirector(phase: WorkflowPhaseDefinition, settings: AppSettings, users: User[]): { ok: boolean; ownerId?: string; message?: string } {

@@ -1,5 +1,5 @@
-import type { AppSettings, DailyReport, User } from './types';
-import { isMemberDeleted } from './memberIdentity';
+import type { AppSettings, DailyReport, User } from './types.js';
+import { isMemberDeleted } from './memberIdentity.js';
 
 type ReportIdentity = Pick<DailyReport, 'userId'>;
 type ReportVisibility = Pick<DailyReport, 'userId' | 'sentAt'>;

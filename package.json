@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "prebuild": "tsx scripts/validate-env.ts",
+    "prebuild": "tsx scripts/validate-env.ts && npm run test:api-runtime",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test": "tsx --test \"tests/**/*.test.ts\""
+    "test": "tsx --test \"tests/**/*.test.ts\"",
+    "test:api-runtime": "node scripts/check-api-runtime.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

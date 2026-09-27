@@ -1,4 +1,4 @@
-import { Task } from './types';
+import { Task } from './types.js';
 
 const ARCHIVE_AFTER_DAYS = 90;
 

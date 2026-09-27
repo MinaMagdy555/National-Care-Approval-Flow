@@ -1,9 +1,9 @@
-import type { AppSettings, Task, User } from '../src/lib/types';
-import { canReassignWorkflowTask } from '../src/lib/workAssignmentUtils';
-import { getCompletedPhaseIdsFromHistory } from '../src/lib/workflowRuntime';
-import { isMandatoryFinalReview, resolveWorkflowPhaseOwnerIds } from '../src/lib/workflowUtils';
-import { canStartTaskWork, reconcileWorkSessions } from '../src/lib/workSessions';
-import { ReportAccessError } from './reportAccess';
+import type { AppSettings, Task, User } from '../src/lib/types.js';
+import { canReassignWorkflowTask } from '../src/lib/workAssignmentUtils.js';
+import { getCompletedPhaseIdsFromHistory } from '../src/lib/workflowRuntime.js';
+import { isMandatoryFinalReview, resolveWorkflowPhaseOwnerIds } from '../src/lib/workflowUtils.js';
+import { canStartTaskWork, reconcileWorkSessions } from '../src/lib/workSessions.js';
+import { ReportAccessError } from './reportAccess.js';
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 

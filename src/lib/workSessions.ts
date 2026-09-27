@@ -1,5 +1,5 @@
-import type { AppSettings, Task, User } from './types';
-import { CLOSED_STATUSES, RETURNED_STATUSES, getCurrentOwnerUserIds, getPhaseAssignableOwnerIds, resolveWorkflowPhaseOwnerIds } from './workflowUtils';
+import type { AppSettings, Task, User } from './types.js';
+import { CLOSED_STATUSES, RETURNED_STATUSES, getCurrentOwnerUserIds, getPhaseAssignableOwnerIds, resolveWorkflowPhaseOwnerIds } from './workflowUtils.js';
 
 export function getTaskWorkSessions(task: Task, settings: AppSettings, users: User[]): NonNullable<Task['workSessions']> {
   const sessions = [...(task.workSessions || [])];

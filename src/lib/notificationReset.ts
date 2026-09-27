@@ -1,4 +1,4 @@
-import type { AppSettings, Notification } from './types';
+import type { AppSettings, Notification } from './types.js';
 
 export interface NotificationResetRecord {
   version: 3;

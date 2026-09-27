@@ -1,9 +1,9 @@
-import type { AppSettings, DeletedMember, MemberDeletionResult, Task, User, WorkflowPhaseDefinition } from './types';
-import { isLeaderboardUser } from './workAssignmentUtils';
-import { CLOSED_STATUSES, RETURNED_STATUSES, isWorkflowPhaseSkippedForTask, getCurrentOwnerUserIds, resolveWorkflowPhaseOwnerIds } from './workflowUtils';
-import { getCompletedPhaseIdsFromHistory, getPhaseParentIds, workflowHasExplicitEdges } from './workflowRuntime';
-import { isMemberDeleted, memberDeletionIdentities } from './memberIdentity';
-import { getVoiceOverDeliveryOwnerId, hasVoiceOverProviderSelection } from './voiceOverPolicy';
+import type { AppSettings, DeletedMember, MemberDeletionResult, Task, User, WorkflowPhaseDefinition } from './types.js';
+import { isLeaderboardUser } from './workAssignmentUtils.js';
+import { CLOSED_STATUSES, RETURNED_STATUSES, isWorkflowPhaseSkippedForTask, getCurrentOwnerUserIds, resolveWorkflowPhaseOwnerIds } from './workflowUtils.js';
+import { getCompletedPhaseIdsFromHistory, getPhaseParentIds, workflowHasExplicitEdges } from './workflowRuntime.js';
+import { isMemberDeleted, memberDeletionIdentities } from './memberIdentity.js';
+import { getVoiceOverDeliveryOwnerId, hasVoiceOverProviderSelection } from './voiceOverPolicy.js';
 
 export function canRemoveMember(actor: Pick<User, 'id' | 'role' | 'isAdmin'>): boolean {
   return actor.id !== 'guest' && Boolean(actor.isAdmin || actor.role === 'admin' || isLeaderboardUser(actor.id));

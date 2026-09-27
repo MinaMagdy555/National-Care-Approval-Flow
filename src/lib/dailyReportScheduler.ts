@@ -1,7 +1,7 @@
-import type { AppSettings, DailyReport, Notification, Task, User } from './types';
-import { buildActualWorkEntries, cairoDate, cairoTime, mergeWorkReportEntries } from './dailyReportWork';
-import { getDailyReportReceiverIds, isReportExempt } from './reportPolicy';
-import { isMemberDeleted } from './memberIdentity';
+import type { AppSettings, DailyReport, Notification, Task, User } from './types.js';
+import { buildActualWorkEntries, cairoDate, cairoTime, mergeWorkReportEntries } from './dailyReportWork.js';
+import { getDailyReportReceiverIds, isReportExempt } from './reportPolicy.js';
+import { isMemberDeleted } from './memberIdentity.js';
 
 export function planDailyReports(tasks: Task[], reports: DailyReport[], settings: AppSettings, users: User[], now = new Date(), ownerIds?: string[]) {
   const next = new Map(reports.map(report => [report.id, report]));

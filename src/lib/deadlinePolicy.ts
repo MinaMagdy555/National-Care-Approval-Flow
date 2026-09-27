@@ -1,7 +1,7 @@
-import type { AppSettings, Notification, Task, User } from './types';
-import { isMemberDeleted } from './memberIdentity';
-import { getReportSeniorId, isReportLeader } from './reportPolicy';
-import { CLOSED_STATUSES, RETURNED_STATUSES, getCurrentOwnerUserIds, getPhaseAssignableOwnerIds, isPhaseAvailable, uniqueIds } from './workflowUtils';
+import type { AppSettings, Notification, Task, User } from './types.js';
+import { isMemberDeleted } from './memberIdentity.js';
+import { getReportSeniorId, isReportLeader } from './reportPolicy.js';
+import { CLOSED_STATUSES, RETURNED_STATUSES, getCurrentOwnerUserIds, getPhaseAssignableOwnerIds, isPhaseAvailable, uniqueIds } from './workflowUtils.js';
 
 const HOUR = 60 * 60 * 1000;
 const cairo = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });

@@ -1,12 +1,12 @@
-import type { AppSettings, Task, User, WorkflowDefinition, WorkflowPhaseHistoryEntry } from '../src/lib/types';
-import { resolveTaskFinalArtDirector } from '../src/lib/finalApprovalPolicy';
-import { getValidatedFinalApproverMap } from './workflowAssignment';
-import { canManageWorkflowBuilder, CLOSED_STATUSES, RETURNED_STATUSES, getCurrentOwnerUserIds, getStatusForWorkflowPhase, isMandatoryFinalReview, isPhaseAvailable } from '../src/lib/workflowUtils';
-import { computeWorkflowAdvance, computeWorkflowInitialization, computeWorkflowReturn, getCompletedPhaseIdsFromHistory } from '../src/lib/workflowRuntime';
-import { getWorkflowExecutionDefinition, getWorkflowSuccessors } from '../src/lib/workflowGraph';
-import { reconcileWorkflowOmissions } from '../src/lib/workflowOmissions';
-import { ReportAccessError } from './reportAccess';
-import { normalizeReviewPhase } from '../src/lib/reviewPolicy';
+import type { AppSettings, Task, User, WorkflowDefinition, WorkflowPhaseHistoryEntry } from '../src/lib/types.js';
+import { resolveTaskFinalArtDirector } from '../src/lib/finalApprovalPolicy.js';
+import { getValidatedFinalApproverMap } from './workflowAssignment.js';
+import { canManageWorkflowBuilder, CLOSED_STATUSES, RETURNED_STATUSES, getCurrentOwnerUserIds, getStatusForWorkflowPhase, isMandatoryFinalReview, isPhaseAvailable } from '../src/lib/workflowUtils.js';
+import { computeWorkflowAdvance, computeWorkflowInitialization, computeWorkflowReturn, getCompletedPhaseIdsFromHistory } from '../src/lib/workflowRuntime.js';
+import { getWorkflowExecutionDefinition, getWorkflowSuccessors } from '../src/lib/workflowGraph.js';
+import { reconcileWorkflowOmissions } from '../src/lib/workflowOmissions.js';
+import { ReportAccessError } from './reportAccess.js';
+import { normalizeReviewPhase } from '../src/lib/reviewPolicy.js';
 
 const ids = (value: string[] = []) => JSON.stringify([...new Set(value)].sort());
 const active = (task: Task) => task.workflowActivePhaseIds ?? (task.workflowCurrentPhaseId ? [task.workflowCurrentPhaseId] : []);

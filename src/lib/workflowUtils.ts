@@ -1,10 +1,10 @@
-import { AppSettings, BusinessCalendarSettings, ReviewMode, Role, Task, TaskStatus, User, WorkflowDefinition, WorkflowPhaseDefinition } from './types';
-import { isTaskArchived } from './archiveUtils';
-import { AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID, MARWA_ID, MINA_ID, defaultAppSettings, cleanTaskTypeKey, normalizeWorkflowTaskTypeId, getDefaultWorkflowIdForTaskType, getResponsibilityForLabel, getTaskTypeConfigs } from './appSettings';
-import { canViewTask } from './taskPolicy';
-import { isContentReviewPhase, normalizeReviewMode, normalizeReviewPhase } from './reviewPolicy';
-import { getVoiceOverDeliveryOwnerId, hasVoiceOverProviderSelection } from './voiceOverPolicy';
-import { resolveTaskFinalArtDirector } from './finalApprovalPolicy';
+import { AppSettings, BusinessCalendarSettings, ReviewMode, Role, Task, TaskStatus, User, WorkflowDefinition, WorkflowPhaseDefinition } from './types.js';
+import { isTaskArchived } from './archiveUtils.js';
+import { AHMED_SOBEEH_ID, DINA_ID, FAWZY_ID, MARWA_ID, MINA_ID, defaultAppSettings, cleanTaskTypeKey, normalizeWorkflowTaskTypeId, getDefaultWorkflowIdForTaskType, getResponsibilityForLabel, getTaskTypeConfigs } from './appSettings.js';
+import { canViewTask } from './taskPolicy.js';
+import { isContentReviewPhase, normalizeReviewMode, normalizeReviewPhase } from './reviewPolicy.js';
+import { getVoiceOverDeliveryOwnerId, hasVoiceOverProviderSelection } from './voiceOverPolicy.js';
+import { resolveTaskFinalArtDirector } from './finalApprovalPolicy.js';
 
 export const REVIEWER_WAITING_STATUSES: TaskStatus[] = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'];
 export const ART_DIRECTOR_WAITING_STATUSES: TaskStatus[] = ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'];

@@ -1,5 +1,5 @@
-import type { AppSettings, DailyReport, Notification, User } from '../src/lib/types';
-import { canEditDailyReport, canViewDailyReport, getDailyReportReceiverIds } from '../src/lib/reportPolicy';
+import type { AppSettings, DailyReport, Notification, User } from '../src/lib/types.js';
+import { canEditDailyReport, canViewDailyReport, getDailyReportReceiverIds } from '../src/lib/reportPolicy.js';
 
 export class ReportAccessError extends Error { status = 403; }
 

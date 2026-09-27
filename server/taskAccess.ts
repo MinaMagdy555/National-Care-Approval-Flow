@@ -1,12 +1,12 @@
-import { validateTaskReassignment } from './taskReassignment';
-import type { AppSettings, Notification, Task, User } from '../src/lib/types';
-import { canDeleteTask, canEditTask, canViewTask } from '../src/lib/taskPolicy';
-import { isDeadlineNotification } from '../src/lib/deadlinePolicy';
-import { isReportNotification, ReportAccessError } from './reportAccess';
-import { canSetActiveWorkForMember } from '../src/lib/workAssignmentUtils';
-import { getValidatedFinalApproverMap, validateTaskWorkflowAssignment } from './workflowAssignment';
-import { validateTaskWorkflowOmissions } from './workflowOmissions';
-import { validateWorkflowTransition } from './workflowTransitions';
+import { validateTaskReassignment } from './taskReassignment.js';
+import type { AppSettings, Notification, Task, User } from '../src/lib/types.js';
+import { canDeleteTask, canEditTask, canViewTask } from '../src/lib/taskPolicy.js';
+import { isDeadlineNotification } from '../src/lib/deadlinePolicy.js';
+import { isReportNotification, ReportAccessError } from './reportAccess.js';
+import { canSetActiveWorkForMember } from '../src/lib/workAssignmentUtils.js';
+import { getValidatedFinalApproverMap, validateTaskWorkflowAssignment } from './workflowAssignment.js';
+import { validateTaskWorkflowOmissions } from './workflowOmissions.js';
+import { validateWorkflowTransition } from './workflowTransitions.js';
 
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
