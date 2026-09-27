@@ -2,9 +2,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Expand, GitBranch, Layers, Minimize2, Plus, Route, Settings2, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { WorkflowDefinition, WorkflowNodeSubPhase, WorkflowNodeType, WorkflowPhaseDefinition } from '../lib/types';
-import { cleanTaskTypeKey, makeTaskTypeIdForWorkflowName, normalizeSettingId, SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID } from '../lib/appSettings';
+import { findWorkflowTaskTypeCollisions, makeTaskTypeIdForWorkflowName, normalizeSettingId, normalizeWorkflowTaskTypeId, SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID } from '../lib/appSettings';
 import { cn } from '../lib/utils';
 import { CustomSelect } from './CustomSelect';
+import { isContentReviewPhase, normalizeReviewPhase } from '../lib/reviewPolicy';
+import { isMandatoryFinalReview } from '../lib/workflowUtils';
+import { validateWorkflowGraph, WORKFLOW_ROOT_ID, WORKFLOW_UNLINKED_ID } from '../lib/workflowGraph';
+import { getVoiceOverProvider, isVoiceOverPhase, VOICE_OVER_PROVIDER_OPTIONS } from '../lib/voiceOverPolicy';
+import { resolveFixedArtDirector } from '../lib/finalApprovalPolicy';
 
 const NODE_W = 236;
 const NODE_H = 112;
@@ -13,8 +18,8 @@ const SECTION_H = 240;
 const CANVAS_W = 3400;
 const CANVAS_H = 2500;
 const DEFAULT_SECTION_COLOR = '#8b5cf6';
-const ROOT_ID = 'workflow-root';
-const UNLINKED_PARENT_ID = '__unlinked__';
+const ROOT_ID = WORKFLOW_ROOT_ID;
+const UNLINKED_PARENT_ID = WORKFLOW_UNLINKED_ID;
 
 type ResponsibilityVisual = {
   key: string;
@@ -175,7 +180,7 @@ function makeWorkflowId(value: string) {
 }
 
 function getWorkflowTaskTypeIds(workflow: WorkflowDefinition) {
-  const savedIds = (workflow.taskTypeIds || []).map(cleanTaskTypeKey).filter(Boolean);
+  const savedIds = (workflow.taskTypeIds || []).map(normalizeWorkflowTaskTypeId).filter(Boolean);
   const fallbackId = workflow.id === SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID
     ? 'campaign'
     : makeTaskTypeIdForWorkflowName(workflow.name, workflow.id);
@@ -226,7 +231,7 @@ function makePhase(name = 'New Step', parentPhaseId: string | null = null, x = 3
     id: makePhaseId(name),
     name,
     phaseKind: nodeType === 'step' ? 'work' : undefined,
-    reviewStyle: 'quick_look',
+    reviewStyle: 'first_review',
     mode: 'sequential',
     userIds: [],
     roleIds: [],
@@ -252,6 +257,22 @@ function makePhase(name = 'New Step', parentPhaseId: string | null = null, x = 3
     nodeNote: '',
     sectionColor: nodeType === 'section' ? DEFAULT_SECTION_COLOR : null,
     subPhases: nodeType === 'step' ? [makeSubPhase('What this step needs')] : [],
+  };
+}
+
+function makeFinalReviewPhase(parentPhaseId: string, returnToPhaseId: string, x: number, y: number): WorkflowPhaseDefinition {
+  return {
+    ...makePhase('Final Review', parentPhaseId, x, y),
+    phaseKind: 'final_review',
+    reviewStyle: 'final_review',
+    userIds: [],
+    roleIds: ['art_director'],
+    responsibilityIds: ['art_director'],
+    isReviewDecision: true,
+    failToPhaseId: returnToPhaseId,
+    returnToPhaseId,
+    disabled: false,
+    skipRule: 'none',
   };
 }
 
@@ -339,7 +360,7 @@ function getPhaseStepNumbers(phases: WorkflowPhaseDefinition[]) {
 }
 
 export function WorkflowBuilderPage() {
-  const { appSettings, canManageSettings, updateAppSettings } = useAppStore();
+  const { appSettings, userList, canManageSettings, updateAppSettings } = useAppStore();
   const workflows = appSettings.workflows || [];
   const [selectedWorkflowId, setSelectedWorkflowId] = useState(workflows[0]?.id || '');
   const [newWorkflowName, setNewWorkflowName] = useState('');
@@ -360,6 +381,7 @@ export function WorkflowBuilderPage() {
   const selectedWorkflow = workflows.find(workflow => workflow.id === selectedWorkflowId) || workflows[0];
   const selectedWorkflowIdSafe = selectedWorkflow?.id || '';
   const editingPhase = selectedWorkflow?.phases.find(phase => phase.id === editingPhaseId) || null;
+  const editingPhaseIsRequiredFinalReview = isMandatoryFinalReview(editingPhase);
 
   const workflowOptions = useMemo(() => (
     workflows.map(workflow => ({
@@ -382,13 +404,8 @@ export function WorkflowBuilderPage() {
 
   const addTaskTypeToSelectedWorkflow = () => {
     const label = newWorkflowTaskType.trim();
-    const id = cleanTaskTypeKey(label);
+    const id = normalizeWorkflowTaskTypeId(label);
     if (!selectedWorkflow || !id) return;
-    const existsOnAnotherWorkflow = workflows.some(workflow => workflow.id !== selectedWorkflow.id && (workflow.taskTypeIds || []).some(item => cleanTaskTypeKey(item) === id));
-    if (existsOnAnotherWorkflow) {
-      window.alert('This task type already belongs to another workflow. Remove it there before reusing it.');
-      return;
-    }
     updateSelectedWorkflow(workflow => ({
       ...workflow,
       taskTypeIds: Array.from(new Set([...getWorkflowTaskTypeIds(workflow), id])),
@@ -399,7 +416,7 @@ export function WorkflowBuilderPage() {
   const removeTaskTypeFromSelectedWorkflow = (taskTypeId: string) => {
     updateSelectedWorkflow(workflow => ({
       ...workflow,
-      taskTypeIds: (workflow.taskTypeIds || []).filter(id => cleanTaskTypeKey(id) !== cleanTaskTypeKey(taskTypeId)),
+      taskTypeIds: (workflow.taskTypeIds || []).filter(id => normalizeWorkflowTaskTypeId(id) !== normalizeWorkflowTaskTypeId(taskTypeId)),
     }));
   };
 
@@ -429,6 +446,7 @@ export function WorkflowBuilderPage() {
 
   const deleteNode = (phase: WorkflowPhaseDefinition) => {
     if (!selectedWorkflow) return;
+    if (isMandatoryFinalReview(phase)) return;
     const stepCount = selectedWorkflow.phases.filter(item => (item.nodeType || 'step') === 'step').length;
     if ((phase.nodeType || 'step') === 'step' && stepCount <= 1) return;
     updateSelectedWorkflow(workflow => ({
@@ -488,23 +506,33 @@ export function WorkflowBuilderPage() {
     if (!name) return;
     const now = new Date().toISOString();
     const taskTypeId = makeTaskTypeIdForWorkflowName(name);
-    const taskTypeKey = cleanTaskTypeKey(taskTypeId);
+    const taskTypeKey = normalizeWorkflowTaskTypeId(taskTypeId);
     const duplicateWorkflowTaskType = workflows.some(workflow => (
-      cleanTaskTypeKey(workflow.name) === taskTypeKey ||
-      (workflow.taskTypeIds || []).some(id => cleanTaskTypeKey(id) === taskTypeKey)
+      normalizeWorkflowTaskTypeId(workflow.name) === taskTypeKey ||
+      getWorkflowTaskTypeIds(workflow).some(id => normalizeWorkflowTaskTypeId(id) === taskTypeKey)
     ));
     if (duplicateWorkflowTaskType) {
       window.alert('A workflow or task type with this name already exists.');
       return;
     }
-    const firstPhase = makePhase('First step', null, 370, 170);
+    const workPhase = makePhase('Work', ROOT_ID, 370, 170);
+    const firstReviewPhase: WorkflowPhaseDefinition = {
+      ...makePhase('First Review', workPhase.id, 680, 170),
+      phaseKind: 'first_review',
+      reviewStyle: 'first_review',
+      roleIds: ['reviewer'],
+      isReviewDecision: true,
+      failToPhaseId: workPhase.id,
+      returnToPhaseId: workPhase.id,
+    };
+    const finalReviewPhase = makeFinalReviewPhase(firstReviewPhase.id, workPhase.id, 990, 170);
     const workflow: WorkflowDefinition = {
       id: makeWorkflowId(name),
       name,
       description: '',
       active: true,
       taskTypeIds: [taskTypeId],
-      phases: [firstPhase],
+      phases: [workPhase, firstReviewPhase, finalReviewPhase],
       createdAt: now,
       updatedAt: now,
     };
@@ -585,7 +613,7 @@ export function WorkflowBuilderPage() {
 
     if (!linkDrag.moved) {
       if (linkDrag.fromId === ROOT_ID) {
-        addNode(null, undefined, 'step');
+        addNode(ROOT_ID, undefined, 'step');
       } else {
         const sourcePhase = selectedWorkflow?.phases.find(phase => phase.id === linkDrag.fromId);
         if (sourcePhase) addNode(sourcePhase.id, sourcePhase, 'step');
@@ -657,7 +685,7 @@ export function WorkflowBuilderPage() {
 
   const addCampaignTemplate = () => {
     const now = new Date().toISOString();
-    const phases = [
+    const phases: WorkflowPhaseDefinition[] = [
       makeCampaignTemplatePhase('Campaign brief', 360, 120, ['team_leader'], 'Define category, platforms, timing, and campaign duration.'),
       makeCampaignTemplatePhase('Campaign structure', 660, 120, ['content_creator'], 'Build the structure: posts, reels, stories, and required assets.'),
       makeCampaignTemplatePhase('Structure meeting', 960, 120, ['team_leader', 'content_creator'], 'Team leader and content agree on the final structure.'),
@@ -669,7 +697,12 @@ export function WorkflowBuilderPage() {
       makeCampaignTemplatePhase('Make edits', 2460, 120, ['graphic_designer', 'video_editor', 'content_creator'], 'Apply requested edits until no comments remain.'),
       makeCampaignTemplatePhase('Ready for posting', 2760, 120, ['art_director', 'team_leader'], 'Notify the art director and team leader that the campaign is ready.'),
     ];
-    const withParents = phases.map((phase, index) => ({ ...phase, parentPhaseId: index === 0 ? null : phases[index - 1].id }));
+    phases.push(makeFinalReviewPhase(phases[phases.length - 1].id, phases[phases.length - 1].id, 3060, 120));
+    const withParents = phases.map((phase, index) => ({
+      ...phase,
+      parentPhaseId: index === 0 ? ROOT_ID : phases[index - 1].id,
+      parentPhaseIds: index === 0 ? [ROOT_ID] : [phases[index - 1].id],
+    }));
     const workflow: WorkflowDefinition = {
       id: makeWorkflowId('Campaign Workflow'),
       name: 'Campaign Workflow',
@@ -883,9 +916,20 @@ export function WorkflowBuilderPage() {
     h: 100,
   };
   const phases = selectedWorkflow?.phases || [];
+  const selectedWorkflowValidation = selectedWorkflow ? validateWorkflowGraph(selectedWorkflow) : null;
+  const fixedArtDirectorByPhaseId = new Map<string, ReturnType<typeof resolveFixedArtDirector>>(phases
+    .filter(isMandatoryFinalReview)
+    .map(phase => [phase.id, resolveFixedArtDirector(phase, appSettings, userList)] as const));
+  const fixedArtDirectorIssues = Array.from(fixedArtDirectorByPhaseId.entries()).filter(([, result]) => !result.ok);
+  const selectedWorkflowCollisions = selectedWorkflow
+    ? findWorkflowTaskTypeCollisions(workflows).filter(collision => collision.workflowIds.includes(selectedWorkflow.id))
+    : [];
+  const selectedWorkflowIsDisabled = selectedWorkflow?.active === false;
+  const selectedWorkflowIssueCount = (selectedWorkflowValidation?.issues.length || 0) + selectedWorkflowCollisions.length + fixedArtDirectorIssues.length + (selectedWorkflowIsDisabled ? 1 : 0);
+  const selectedWorkflowCanAssign = Boolean(selectedWorkflowValidation?.valid && selectedWorkflowCollisions.length === 0 && fixedArtDirectorIssues.length === 0 && !selectedWorkflowIsDisabled);
   const selectedWorkflowTaskTypeIds = selectedWorkflow ? getWorkflowTaskTypeIds(selectedWorkflow) : [];
   const stepCount = phases.filter(phase => (phase.nodeType || 'step') === 'step').length;
-  const canDeleteWorkflowNode = (phase: WorkflowPhaseDefinition) => phase.nodeType !== 'step' || stepCount > 1;
+  const canDeleteWorkflowNode = (phase: WorkflowPhaseDefinition) => !isMandatoryFinalReview(phase) && (phase.nodeType !== 'step' || stepCount > 1);
   const phaseStepNumbers = getPhaseStepNumbers(phases);
   const groupBounds = Array.from(new Set(phases.map(phase => phase.groupId).filter(Boolean) as string[])).map(groupId => {
     const groupPhases = phases.filter(phase => phase.groupId === groupId && phase.nodeType !== 'section');
@@ -1080,6 +1124,70 @@ export function WorkflowBuilderPage() {
               </div>
             </div>
 
+            {selectedWorkflowValidation && (
+              <div
+                role={selectedWorkflowCanAssign ? 'status' : 'alert'}
+                className={cn(
+                  "rounded-xl border p-4 shadow-sm",
+                  selectedWorkflowCanAssign
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                    : "border-rose-200 bg-rose-50 text-rose-900",
+                )}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-black">{selectedWorkflowCanAssign ? 'Ready for task assignment' : 'Workflow draft needs attention'}</h3>
+                    <p className="mt-1 text-xs font-semibold opacity-80">
+                      {selectedWorkflowCanAssign
+                        ? 'The saved graph has a reachable start and required Final Review.'
+                        : 'Draft changes are saved, but this workflow cannot be used for a new task until these issues are fixed.'}
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-current/20 bg-white/70 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide">
+                    {selectedWorkflowCanAssign ? 'Valid' : `${selectedWorkflowIssueCount} ${selectedWorkflowIssueCount === 1 ? 'issue' : 'issues'}`}
+                  </span>
+                </div>
+                {!selectedWorkflowCanAssign && (
+                  <ul className="mt-3 space-y-2">
+                    {selectedWorkflowValidation.issues.map((issue, index) => {
+                      const issuePhase = issue.phaseId ? phases.find(phase => phase.id === issue.phaseId) : null;
+                      return (
+                        <li key={`${issue.code}-${issue.phaseId || index}`} className="flex flex-col gap-2 rounded-lg border border-rose-200 bg-white/80 px-3 py-2 text-xs font-bold sm:flex-row sm:items-center sm:justify-between">
+                          <span>{issue.message}</span>
+                          {issuePhase && (
+                            <button type="button" onClick={() => openPhaseEditor(issuePhase)} className="shrink-0 rounded-lg border border-rose-200 bg-white px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-rose-700 hover:bg-rose-50">
+                              Open step
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
+                    {fixedArtDirectorIssues.map(([phaseId, result]) => (
+                      <li key={`fixed-art-director-${phaseId}`} className="flex flex-col gap-2 rounded-lg border border-rose-200 bg-white/80 px-3 py-2 text-xs font-bold sm:flex-row sm:items-center sm:justify-between">
+                        <span>{result.message}</span>
+                        <button type="button" onClick={() => {
+                          const phase = phases.find(item => item.id === phaseId);
+                          if (phase) openPhaseEditor(phase);
+                        }} className="shrink-0 rounded-lg border border-rose-200 bg-white px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-rose-700 hover:bg-rose-50">
+                          Open step
+                        </button>
+                      </li>
+                    ))}
+                    {selectedWorkflowCollisions.map(collision => (
+                      <li key={`task-type-collision-${collision.taskTypeId}`} className="rounded-lg border border-rose-200 bg-white/80 px-3 py-2 text-xs font-bold">
+                        Task type “{collision.taskTypeId}” belongs to more than one active workflow. Remove it from one workflow before assigning new tasks.
+                      </li>
+                    ))}
+                    {selectedWorkflowIsDisabled && (
+                      <li className="rounded-lg border border-rose-200 bg-white/80 px-3 py-2 text-xs font-bold">
+                        This workflow is disabled. Enable it before assigning new tasks with its task types.
+                      </li>
+                    )}
+                  </ul>
+                )}
+              </div>
+            )}
+
             <div className={cn("overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm", isCanvasFullscreen && "fixed inset-0 z-50 rounded-none border-0")}>
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
                 <div>
@@ -1090,7 +1198,7 @@ export function WorkflowBuilderPage() {
                   <button type="button" onClick={() => groupSelectedNodes()} disabled={selectedNodeIds.length < 2} className="inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-black text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-40"><Layers className="h-4 w-4" /> Group</button>
                   <button type="button" onClick={() => setIsDrawingSection(value => !value)} className={cn("inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-black", isDrawingSection ? "border-violet-300 bg-violet-600 text-white" : "border-violet-200 bg-white text-violet-700 hover:bg-violet-50")}><Layers className="h-4 w-4" /> {isDrawingSection ? 'Draw Section' : 'Add Section'}</button>
                   <button type="button" onClick={() => addNode(null, undefined, 'note')} className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-black text-amber-700 hover:bg-amber-100"><Plus className="h-4 w-4" /> Add Note</button>
-                  <button type="button" onClick={() => addNode(null)} className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-black text-white hover:bg-indigo-700"><Plus className="h-4 w-4" /> Add Step</button>
+                  <button type="button" onClick={() => addNode(ROOT_ID)} className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-black text-white hover:bg-indigo-700"><Plus className="h-4 w-4" /> Add Step</button>
                 </div>
               </div>
               <div data-node-canvas="true" className={cn("relative select-none overflow-auto bg-slate-50", isCanvasFullscreen ? "h-[calc(100vh-73px)]" : "h-[680px]", isDrawingSection && "cursor-crosshair")} onMouseDown={handleCanvasMouseDown} onMouseMove={handleCanvasMove} onMouseUp={handleCanvasMouseUp} onMouseLeave={() => { setDragging(null); setLinkDrag(null); setSelectionBox(null); setSectionBox(null); }}>
@@ -1172,6 +1280,8 @@ export function WorkflowBuilderPage() {
                     const responsibilityVisuals = getNodeResponsibilityVisuals(phase.responsibilityIds || [], appSettings.responsibilities);
                     const colorBar = isSection ? '#8b5cf6' : isNote ? '#f59e0b' : getNodeColorBar(responsibilityVisuals);
                     const stepNumber = phaseStepNumbers.get(phase.id) || index + 1;
+                    const requiredFinalReview = isMandatoryFinalReview(phase);
+                    const fixedArtDirector = requiredFinalReview ? fixedArtDirectorByPhaseId.get(phase.id) : null;
                     if (isSection) {
                       return (
                         <div key={phase.id} data-node-id={phase.id} onDoubleClick={() => openPhaseEditor(phase)} onMouseDown={event => startNodeDrag(event, phase, index)} className={cn("absolute z-0 cursor-grab rounded-2xl border-2 border-dashed p-4 shadow-sm transition-shadow hover:shadow-md", dragging?.id === phase.id && "ring-2 ring-violet-300", selected && "ring-2 ring-violet-300")} style={{ left: pos.x, top: pos.y, width: nodeSize.w, height: nodeSize.h, borderColor: phase.sectionColor || DEFAULT_SECTION_COLOR, backgroundColor: `${phase.sectionColor || DEFAULT_SECTION_COLOR}1A` }}>
@@ -1184,8 +1294,8 @@ export function WorkflowBuilderPage() {
                             {selected && <span className="rounded-lg border border-violet-300 bg-violet-600 px-2 py-1 text-[10px] font-black text-white">Selected</span>}
                           </div>
                           <div className="absolute bottom-3 right-3 flex gap-1">
-                            <button type="button" onClick={() => openPhaseEditor(phase)} className="rounded-lg border border-violet-200 bg-white px-2 py-1 text-[10px] font-black text-violet-700">Edit</button>
-                            <button type="button" onClick={() => deleteNode(phase)} disabled={!canDeleteWorkflowNode(phase)} className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-[10px] font-black text-rose-600 disabled:opacity-40">Delete</button>
+                            <button type="button" onMouseDown={event => event.stopPropagation()} onClick={() => openPhaseEditor(phase)} className="rounded-lg border border-violet-200 bg-white px-2 py-1 text-[10px] font-black text-violet-700">Edit</button>
+                            <button type="button" onMouseDown={event => event.stopPropagation()} onClick={() => deleteNode(phase)} disabled={!canDeleteWorkflowNode(phase)} className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-[10px] font-black text-rose-600 disabled:opacity-40">Delete</button>
                           </div>
                         </div>
                       );
@@ -1198,10 +1308,18 @@ export function WorkflowBuilderPage() {
                           {!isNote && <span className={cn("rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-wide", phase.mode === 'parallel' ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-50 text-slate-600")}>{phase.mode === 'parallel' ? 'Parallel' : 'After Previous'}</span>}
                           {phase.groupId && <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-violet-700">Grouped</span>}
                           {phase.disabled && <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-rose-700">Disabled</span>}
+                          {requiredFinalReview && <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-violet-700">Required Final Review</span>}
                           {!isNote && <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-slate-600">{getSubPhaseLabel(subPhaseCount)}</span>}
                         </div>
                         <div className="truncate text-sm font-black text-slate-950">{phase.name}</div>
                         <p className="mt-1 line-clamp-2 text-[11px] font-semibold leading-snug text-slate-500">{phase.nodeNote || (isNote ? 'Free canvas note' : 'No node note yet')}</p>
+                        {fixedArtDirector && (
+                          <p className={cn("mt-1 text-[10px] font-black", fixedArtDirector.ok ? "text-violet-700" : "text-rose-700")}>
+                            {fixedArtDirector.ok && fixedArtDirector.ownerId
+                              ? `Fixed approver: ${userList.find(user => user.id === fixedArtDirector.ownerId)?.name || fixedArtDirector.ownerId}`
+                              : 'Art Director configuration required'}
+                          </p>
+                        )}
                         {!isNote && (
                           <div className="mt-2">
                             <div className="mb-1 text-[9px] font-black uppercase tracking-wide text-slate-400">Responsible For</div>
@@ -1217,9 +1335,9 @@ export function WorkflowBuilderPage() {
                         )}
                         <div className="mt-3 flex flex-wrap gap-1">
                           {selected && <span className="rounded-lg border border-indigo-300 bg-indigo-600 px-2 py-1 text-[10px] font-black text-white">Selected</span>}
-                          <button type="button" onClick={() => openPhaseEditor(phase)} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-600 hover:text-indigo-600">Edit</button>
-                          <button type="button" onClick={() => updatePhase(phase.id, item => ({ ...item, disabled: !item.disabled }))} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-600">{phase.disabled ? 'Enable' : 'Disable'}</button>
-                          <button type="button" onClick={() => deleteNode(phase)} disabled={!canDeleteWorkflowNode(phase)} className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-[10px] font-black text-rose-600 disabled:opacity-40">Delete</button>
+                          <button type="button" onMouseDown={event => event.stopPropagation()} onClick={() => openPhaseEditor(phase)} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-600 hover:text-indigo-600">Edit</button>
+                          <button type="button" onMouseDown={event => event.stopPropagation()} onClick={() => updatePhase(phase.id, item => ({ ...item, disabled: !item.disabled }))} disabled={requiredFinalReview && !phase.disabled} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-600 disabled:cursor-not-allowed disabled:opacity-40">{requiredFinalReview && !phase.disabled ? 'Required' : phase.disabled ? 'Enable' : 'Disable'}</button>
+                          <button type="button" onMouseDown={event => event.stopPropagation()} onClick={() => deleteNode(phase)} disabled={!canDeleteWorkflowNode(phase)} className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-[10px] font-black text-rose-600 disabled:opacity-40">Delete</button>
                         </div>
                         {!isNote && <button type="button" onMouseDown={event => startConnectorDrag(event, phase.id, pos.x + nodeSize.w, pos.y + nodeSize.h / 2)} onClick={event => event.preventDefault()} className="absolute right-2 top-1/2 z-20 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-indigo-200 bg-white text-indigo-600 shadow hover:bg-indigo-50"><Plus className="h-4 w-4" /></button>}
                       </div>
@@ -1269,29 +1387,64 @@ export function WorkflowBuilderPage() {
                 <>
                   <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Step Type
                     <CustomSelect
-                      value={editingPhase.phaseKind || 'work'}
+                      value={normalizeReviewPhase(editingPhase).phaseKind || 'work'}
                       options={[
                         { value: 'work', label: 'Work step' },
-                        { value: 'content_review', label: 'Content revision' },
-                        { value: 'first_review', label: 'First revision' },
-                        { value: 'final_review', label: 'Final revision (Art Director)' },
+                        { value: 'content_review', label: 'Content Review (optional)' },
+                        { value: 'first_review', label: 'First Review' },
+                        { value: 'final_review', label: 'Final Review' },
                         { value: 'decision', label: 'Decision / routing step' },
                       ]}
                       onChange={value => updatePhase(editingPhase.id, phase => {
                         const phaseKind = value as WorkflowPhaseDefinition['phaseKind'];
                         if (phaseKind === 'final_review') {
-                          return { ...phase, phaseKind, reviewStyle: 'final_approval', roleIds: ['art_director'], responsibilityIds: ['art_director'] };
+                          return {
+                            ...phase,
+                            phaseKind,
+                            reviewStyle: 'final_review',
+                            userIds: [],
+                            roleIds: ['art_director'],
+                            responsibilityIds: ['art_director'],
+                            disabled: false,
+                            skipRule: 'none',
+                          };
                         }
                         return {
                           ...phase,
                           phaseKind,
-                          reviewStyle: phaseKind === 'first_review' ? 'full_review' : phaseKind === 'content_review' ? 'quick_look' : phase.reviewStyle,
+                          reviewStyle: phaseKind === 'first_review' ? 'first_review' : phaseKind === 'content_review' ? 'content_review' : phase.reviewStyle,
                         };
                       })}
+                      disabled={editingPhaseIsRequiredFinalReview}
                       buttonClassName="mt-1 rounded-xl px-3 py-2.5 text-sm font-black"
                     />
-                    {editingPhase.phaseKind === 'final_review' && <span className="mt-1 block normal-case text-xs font-semibold text-rose-600">Final revision is locked to Art Director responsibility.</span>}
+                    {editingPhaseIsRequiredFinalReview && <span className="mt-1 block normal-case text-xs font-semibold text-violet-700">Final Review is required and locked to the Art Director.</span>}
                   </label>
+                  {editingPhaseIsRequiredFinalReview && (() => {
+                    const fixedArtDirector = resolveFixedArtDirector(editingPhase, appSettings, userList);
+                    return (
+                      <div
+                        role={fixedArtDirector.ok ? 'status' : 'alert'}
+                        aria-label={`${editingPhase.name} fixed Art Director`}
+                        className={cn(
+                          "rounded-xl border px-3 py-2",
+                          fixedArtDirector.ok ? "border-violet-200 bg-violet-50 text-violet-900" : "border-rose-200 bg-rose-50 text-rose-800",
+                        )}
+                      >
+                        <div className="text-[10px] font-black uppercase tracking-wider">Fixed approver</div>
+                        <div className="mt-1 text-sm font-black">
+                          {fixedArtDirector.ok && fixedArtDirector.ownerId
+                            ? userList.find(user => user.id === fixedArtDirector.ownerId)?.name || fixedArtDirector.ownerId
+                            : 'Art Director configuration required'}
+                        </div>
+                        <p className="mt-1 text-xs font-semibold">
+                          {fixedArtDirector.ok
+                            ? 'The actual Art Director is assigned automatically. Task creators cannot change this owner.'
+                            : fixedArtDirector.message}
+                        </p>
+                      </div>
+                    );
+                  })()}
                   <div>
                     <span className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Step Flow</span>
                     <div className="grid gap-2 sm:grid-cols-2">
@@ -1305,7 +1458,21 @@ export function WorkflowBuilderPage() {
                       </button>
                     </div>
                   </div>
-                  <TokenPanel title="Responsibilities" items={appSettings.responsibilities.map(responsibility => ({ id: responsibility.id, label: responsibility.label }))} selectedIds={editingPhase.responsibilityIds || []} disabled={editingPhase.phaseKind === 'final_review'} onToggle={id => updatePhase(editingPhase.id, phase => ({ ...phase, responsibilityIds: toggleValue(phase.responsibilityIds || [], id) }))} />
+                  <TokenPanel title="Responsibilities" items={appSettings.responsibilities.map(responsibility => ({ id: responsibility.id, label: responsibility.label }))} selectedIds={editingPhaseIsRequiredFinalReview ? ['art_director'] : editingPhase.responsibilityIds || []} disabled={editingPhaseIsRequiredFinalReview} onToggle={id => updatePhase(editingPhase.id, phase => ({ ...phase, responsibilityIds: toggleValue(phase.responsibilityIds || [], id) }))} />
+
+                  {isVoiceOverPhase(editingPhase) && (
+                    <div role="group" aria-label={`${editingPhase.name} default voice over provider`} className="rounded-xl border border-violet-200 bg-violet-50/60 p-3">
+                      <span className="block text-[10px] font-black uppercase tracking-wider text-violet-700">Default Voice Over Provider</span>
+                      <CustomSelect
+                        value={getVoiceOverProvider({}, editingPhase) || ''}
+                        onChange={value => updatePhase(editingPhase.id, phase => ({ ...phase, userIds: value ? [value] : [] }))}
+                        options={VOICE_OVER_PROVIDER_OPTIONS}
+                        placeholder="Choose Shaza or AI"
+                        buttonClassName="mt-1 rounded-xl px-3 py-2.5 text-sm font-black"
+                      />
+                      <p className="mt-1.5 text-xs font-semibold text-violet-700">Each task still names the workspace member responsible for delivering the audio.</p>
+                    </div>
+                  )}
 
                   <div className="grid gap-3 sm:grid-cols-2">
                     <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Start Delay Days
@@ -1319,12 +1486,18 @@ export function WorkflowBuilderPage() {
                       />
                     </label>
                     <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Skip Rule
-                      <CustomSelect
-                        value={editingPhase.skipRule || 'none'}
-                        options={skipRuleOptions}
-                        onChange={value => updatePhase(editingPhase.id, phase => ({ ...phase, skipRule: value as WorkflowPhaseDefinition['skipRule'] }))}
-                        buttonClassName="mt-1 rounded-xl px-3 py-2.5 text-sm font-black"
-                      />
+                      {isContentReviewPhase(editingPhase) ? (
+                        <span className="mt-1 block rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2.5 text-sm font-black normal-case text-indigo-700">Chosen for each task</span>
+                      ) : editingPhaseIsRequiredFinalReview ? (
+                        <span className="mt-1 block rounded-xl border border-violet-100 bg-violet-50 px-3 py-2.5 text-sm font-black normal-case text-violet-700">Required</span>
+                      ) : (
+                        <CustomSelect
+                          value={editingPhase.skipRule || 'none'}
+                          options={skipRuleOptions}
+                          onChange={value => updatePhase(editingPhase.id, phase => ({ ...phase, skipRule: value as WorkflowPhaseDefinition['skipRule'] }))}
+                          buttonClassName="mt-1 rounded-xl px-3 py-2.5 text-sm font-black"
+                        />
+                      )}
                     </label>
                     <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Fail / Return Target
                       <CustomSelect
@@ -1420,7 +1593,7 @@ export function WorkflowBuilderPage() {
               <div className="flex flex-wrap justify-between gap-2 border-t border-slate-100 pt-4">
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={() => unlinkNode(editingPhase.id)} disabled={editingPhase.parentPhaseId === UNLINKED_PARENT_ID && (editingPhase.parentPhaseIds || []).length === 0} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-black text-slate-700 disabled:opacity-40">Break Link</button>
-                  <button type="button" onClick={() => updatePhase(editingPhase.id, phase => ({ ...phase, disabled: !phase.disabled }))} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-black text-slate-700">{editingPhase.disabled ? 'Enable Node' : 'Disable Node'}</button>
+                  <button type="button" onClick={() => updatePhase(editingPhase.id, phase => ({ ...phase, disabled: !phase.disabled }))} disabled={editingPhaseIsRequiredFinalReview && !editingPhase.disabled} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-black text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">{editingPhaseIsRequiredFinalReview && !editingPhase.disabled ? 'Required Node' : editingPhase.disabled ? 'Enable Node' : 'Disable Node'}</button>
                   <button type="button" onClick={() => deleteNode(editingPhase)} disabled={!canDeleteWorkflowNode(editingPhase)} className="rounded-xl border border-rose-200 bg-white px-4 py-2.5 text-sm font-black text-rose-600 disabled:opacity-40"><Trash2 className="mr-2 inline h-4 w-4" />Delete Node</button>
                 </div>
                 <div className="flex gap-2">

@@ -1,8 +1,10 @@
+import { WorkflowRoadmap } from './WorkflowRoadmap';
 import React, { useMemo, useState } from 'react';
 import { AlertTriangle, CalendarClock, Check, ChevronLeft, ChevronRight, Clock, Trash2, ExternalLink } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { Task } from '../lib/types';
-import { canManageWorkflow, canUserAccessTask, parsePublishDate } from '../lib/workflowUtils';
+import { canManageWorkflow, parsePublishDate } from '../lib/workflowUtils';
+import { canEditTask, canViewTask } from '../lib/taskPolicy';
 import { isTaskArchived } from '../lib/archiveUtils';
 import { cn } from '../lib/utils';
 import { ThemedDatePicker } from './ThemedDatePicker';
@@ -66,7 +68,7 @@ function CampaignList({
   tone: 'rose' | 'emerald' | 'slate';
   onOpenTask: (id: string) => void;
   onMarkPublished: (id: string) => void;
-  canMarkPublished: boolean;
+  canMarkPublished: (task: Task) => boolean;
   formatBudget: (amount: number, currency?: string | null) => string;
 }) {
   const toneClass = tone === 'rose'
@@ -93,6 +95,7 @@ function CampaignList({
           >
             <button type="button" onClick={() => onOpenTask(task.id)} className="min-w-0 flex-1 text-left">
               <span className="block truncate text-sm font-black text-slate-900">{task.name}</span>
+                    <WorkflowRoadmap task={task} />
               <span className="mt-1 block text-xs font-bold text-slate-500">
                 {formatDateTime(publishDate)} {task.platform ? `• ${task.platform}` : ''}
               </span>
@@ -108,7 +111,7 @@ function CampaignList({
                 <Check className="h-3.5 w-3.5" />
                 Published
               </span>
-            ) : canMarkPublished ? (
+            ) : canMarkPublished(task) ? (
               <button
                 type="button"
                 onClick={() => onMarkPublished(task.id)}
@@ -136,10 +139,11 @@ const CURRENCY_RATES = {
 };
 
 export function CampaignScheduler({ onOpenTask }: { onOpenTask: (id: string) => void }) {
-  const { tasks, currentUser, environment, markCampaignPublished, appSettings, updateAppSettings, submitScheduledCampaign, editScheduledCampaign, deleteTask } = useAppStore();
+  const { tasks, currentUser, userList, environment, markCampaignPublished, appSettings, updateAppSettings, submitScheduledCampaign, editScheduledCampaign, deleteTask } = useAppStore();
   const [visibleMonth, setVisibleMonth] = useState(() => startOfMonth(new Date()));
   const todayKey = dateKey(new Date());
-  const canMarkPublished = canManageWorkflow(currentUser);
+  const canEditCampaignTask = (task: Task) => canEditTask(task, currentUser, appSettings, userList);
+  const canMarkPublished = (task: Task) => canManageWorkflow(currentUser) && canEditCampaignTask(task);
 
   // Modal State
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
@@ -242,7 +246,7 @@ export function CampaignScheduler({ onOpenTask }: { onOpenTask: (id: string) => 
   };
 
   const handleEditClick = (task: Task) => {
-    if (!isLeaderboardOrMina) return;
+    if (!isLeaderboardOrMina || !canEditCampaignTask(task)) return;
     
     const publishDate = parsePublishDate(task.scheduledPublishAt);
     if (!publishDate) return;
@@ -269,6 +273,8 @@ export function CampaignScheduler({ onOpenTask }: { onOpenTask: (id: string) => 
 
   const handleDeleteClick = () => {
     if (isEditMode && editingTaskId) {
+      const editingTask = tasks.find(task => task.id === editingTaskId);
+      if (!editingTask || !canEditCampaignTask(editingTask)) return;
       if (confirm('Are you sure you want to delete this scheduled event?')) {
         deleteTask(editingTaskId);
         setScheduleModalOpen(false);
@@ -278,6 +284,10 @@ export function CampaignScheduler({ onOpenTask }: { onOpenTask: (id: string) => 
 
   const handleScheduleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isEditMode && editingTaskId) {
+      const editingTask = tasks.find(task => task.id === editingTaskId);
+      if (!editingTask || !canEditCampaignTask(editingTask)) return;
+    }
     if (!name.trim()) return;
 
     if (name.trim().length < 3) {
@@ -353,14 +363,14 @@ export function CampaignScheduler({ onOpenTask }: { onOpenTask: (id: string) => 
 
   const scheduledCampaigns = useMemo(() => {
     return tasks
-      .filter(task => task.environment === environment && (task.taskType === 'campaign' || task.taskType === 'media_buying') && !isTaskArchived(task) && canUserAccessTask(task, currentUser))
+      .filter(task => task.environment === environment && (task.taskType === 'campaign' || task.taskType === 'media_buying') && !isTaskArchived(task) && canViewTask(task, currentUser, appSettings, userList))
       .map(task => {
         const publishDate = parsePublishDate(task.scheduledPublishAt);
         return publishDate ? { task, publishDate } : null;
       })
       .filter(Boolean)
       .sort((a, b) => a!.publishDate.getTime() - b!.publishDate.getTime()) as ScheduledCampaign[];
-  }, [tasks, environment, currentUser.id, currentUser.role]);
+  }, [tasks, environment, currentUser, appSettings, userList]);
 
   const now = Date.now();
   const overdue = scheduledCampaigns.filter(item => !item.task.publishedAt && item.publishDate.getTime() < now);
@@ -454,7 +464,7 @@ export function CampaignScheduler({ onOpenTask }: { onOpenTask: (id: string) => 
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (isLeaderboardOrMina) {
+                            if (isLeaderboardOrMina && canEditCampaignTask(task)) {
                               handleEditClick(task);
                             } else {
                               onOpenTask(task.id);
@@ -477,6 +487,7 @@ export function CampaignScheduler({ onOpenTask }: { onOpenTask: (id: string) => 
                             {task.platform && <span className="font-extrabold uppercase text-[7.5px] bg-black/5 px-1 rounded">{task.platform}</span>}
                           </div>
                           <div className="font-bold text-slate-800 leading-snug">{task.name}</div>
+                    <WorkflowRoadmap task={task} />
                           {task.taskType === 'media_buying' && task.budgetAmount && (
                             <div className="text-[8.5px] text-slate-500 font-extrabold mt-0.5">
                               Budget: {formatBudget(task.budgetAmount, task.budgetCurrency)}
@@ -504,7 +515,7 @@ export function CampaignScheduler({ onOpenTask }: { onOpenTask: (id: string) => 
             tone="rose"
             onOpenTask={(id) => {
               const t = tasks.find(x => x.id === id);
-              if (t && isLeaderboardOrMina) {
+              if (t && isLeaderboardOrMina && canEditCampaignTask(t)) {
                 handleEditClick(t);
               } else {
                 onOpenTask(id);
@@ -522,7 +533,7 @@ export function CampaignScheduler({ onOpenTask }: { onOpenTask: (id: string) => 
             tone="slate"
             onOpenTask={(id) => {
               const t = tasks.find(x => x.id === id);
-              if (t && isLeaderboardOrMina) {
+              if (t && isLeaderboardOrMina && canEditCampaignTask(t)) {
                 handleEditClick(t);
               } else {
                 onOpenTask(id);
@@ -540,7 +551,7 @@ export function CampaignScheduler({ onOpenTask }: { onOpenTask: (id: string) => 
             tone="emerald"
             onOpenTask={(id) => {
               const t = tasks.find(x => x.id === id);
-              if (t && isLeaderboardOrMina) {
+              if (t && isLeaderboardOrMina && canEditCampaignTask(t)) {
                 handleEditClick(t);
               } else {
                 onOpenTask(id);

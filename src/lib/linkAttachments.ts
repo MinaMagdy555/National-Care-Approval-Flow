@@ -1,4 +1,5 @@
 import { UploadedTaskFile } from './types';
+import { getNeonAuthHeaders } from './neonDb';
 import { ensureDriveAccessToken, googleApiKey, hasUsableDriveToken } from './driveAuth';
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif']);
@@ -242,7 +243,7 @@ export function createLinkedTaskFile(rawUrl: string): UploadedTaskFile {
 
 export async function fetchLinkTitleScraped(url: string): Promise<string | null> {
   try {
-    const response = await fetch(`/api/metadata?url=${encodeURIComponent(url)}`);
+    const response = await fetch(`/api/metadata?url=${encodeURIComponent(url)}`, { credentials: 'same-origin', headers: getNeonAuthHeaders() });
     if (!response.ok) return null;
     const data = await response.json() as { title?: string };
     return data.title || null;

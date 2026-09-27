@@ -1,9 +1,10 @@
+import { WorkflowOwnerEditor } from './WorkflowOwnerEditor';
 import React, { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { uniqueIds } from '../lib/workflowUtils';
-import { Priority, ReviewMode, TaskComment, TaskCommentSection, UploadedTaskFile, TaskStatus } from '../lib/types';
+import { CLOSED_STATUSES, uniqueIds } from '../lib/workflowUtils';
+import { Priority, ReviewMode, Task, TaskComment, TaskCommentSection, UploadedTaskFile, TaskStatus } from '../lib/types';
 import { initialUsers } from '../lib/mockData';
-import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
+import { formatTaskSystemMessage, getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { getTaskTypeConfigs, cleanTaskTypeKey } from '../lib/appSettings';
 import { ArrowLeft, Check, X, AlertCircle, Clock, Upload, Plus, Link2, Settings2, Edit3, Trash2, History, Send, Pause, Reply, Play } from 'lucide-react';
@@ -15,9 +16,13 @@ import { UserMultiSelect } from './UserMultiSelect';
 import { CustomSelect } from './CustomSelect';
 import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_SIZE_BYTES, uploadLimitHelpText } from '../lib/uploadLimits';
 import { createLinkedTaskFileWithMetadata, getDriveLinkMetadata, getLinkHostLabel, isDriveFolderMetadata, listDriveFolderLinkedFiles, parseAssignmentLink } from '../lib/linkAttachments';
-import { canManageWorkflow, canManageWorkflowBuilder, canUserAccessTask, canUserActAsCurrentOwner, getActiveWorkflowPhaseForUser, getCurrentOwnerUserIds, getWorkflowPhase, hasUserApprovedWorkflowPhase, isContentCreatorProfile, resolveWorkflowPhaseReviewerIds, userCanViewFullWorkspace } from '../lib/workflowUtils';
-import { isLeaderboardUser } from '../lib/workAssignmentUtils';
+import { canManageWorkflow, canManageWorkflowBuilder, canUserActAsCurrentOwner, getActiveWorkflowPhaseForUser, getCurrentOwnerUserIds, getPhaseAssignableOwnerIds, getStatusForWorkflowPhase, getWorkflowPhase, hasUserApprovedWorkflowPhase, isContentCreatorProfile, isMandatoryFinalReview, isPhaseAvailable, isWorkflowPhaseSkippedForTask, resolveWorkflowPhaseOwnerIds, RETURNED_STATUSES } from '../lib/workflowUtils';
+import { canReassignWorkflowTask, canUploadWorkAssignment, isLeaderboardUser } from '../lib/workAssignmentUtils';
 import { DINA_ID, MINA_ID } from '../lib/appSettings';
+import { isContentReviewPhase, normalizeReviewMode, normalizeReviewPhase } from '../lib/reviewPolicy';
+import { getWorkflowSuccessors } from '../lib/workflowGraph';
+import { getVoiceOverDeliveryOwnerId, getVoiceOverProvider, isVoiceOverPhase, VOICE_OVER_PROVIDER_OPTIONS } from '../lib/voiceOverPolicy';
+import { canChangeWorkflowPhaseOmission, canManageWorkflowOmissions } from '../lib/workflowOmissions';
 import { LinkifiedText } from '../lib/linkify';
 import {
   addLowResPreviewsToFiles,
@@ -26,6 +31,9 @@ import {
   taskNeedsPreviewOptimization,
   uploadCommentImagePreview,
 } from '../lib/previewUtils';
+import { formatDeadlineInput, getTaskDeadlineAt, parseDeadlineInput } from '../lib/deadlinePolicy';
+import { canEditTask, canViewTask } from '../lib/taskPolicy';
+import { resolveTaskFinalArtDirector } from '../lib/finalApprovalPolicy';
 
 type ReviewNoteSection = {
   id: string;
@@ -65,7 +73,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     applyTaskWorkflow,
     approveWorkflowPhase,
     rejectWorkflowPhase,
-    skipWorkflowPhase,
+    setWorkflowPhaseOmitted,
     manuallyApproveTask,
     updateTaskPublishSchedule,
     markCampaignPublished,
@@ -89,10 +97,10 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   const isSobeeh = currentUser.id === 'user_9' || currentUser.name.includes('Sobeeh');
   const isFawzy = currentUser.id === 'user_7' || currentUser.name.includes('Fawzy');
 
-  const canArchiveTask = isMina || isDina || isMarwa || isSobeeh || isFawzy;
-  const canDeleteTask = isDina || isMarwa || isSobeeh || isFawzy;
+  const hasArchivePrivilege = isMina || isDina || isMarwa || isSobeeh || isFawzy;
+  const hasDeletePrivilege = isDina || isMarwa || isSobeeh || isFawzy;
 
-  const [modal, setModal] = useState<'send_to_ad' | 'quick_look_done' | 'ad_reject' | null>(null);
+  const [modal, setModal] = useState<'send_to_ad' | 'ad_reject' | null>(null);
   const [selectedVersionIndex, setSelectedVersionIndex] = useState(0);
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
@@ -130,11 +138,10 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   const [replyMessage, setReplyMessage] = useState('');
   const [replyNotes, setReplyNotes] = useState<ReviewNoteSection[]>([]);
   const [actionError, setActionError] = useState('');
+  const [workflowOmissionError, setWorkflowOmissionError] = useState('');
   const [managedContributorIds, setManagedContributorIds] = useState<string[]>([]);
   const [managedReviewMode, setManagedReviewMode] = useState<ReviewMode>('first_review');
   const [managedWorkflowId, setManagedWorkflowId] = useState('');
-  const [managedWorkflowPhaseId, setManagedWorkflowPhaseId] = useState('');
-  const [managedActivePhaseAssigneeIds, setManagedActivePhaseAssigneeIds] = useState<string[]>([]);
   const [managedPublishAt, setManagedPublishAt] = useState('');
   const [managedPublishNote, setManagedPublishNote] = useState('');
   const [managedRevisionAssigneeIds, setManagedRevisionAssigneeIds] = useState<string[]>([]);
@@ -154,7 +161,8 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   const previewOptimizationAttemptedRef = useRef<Set<string>>(new Set());
   const updateTaskMediaPreviewsRef = useRef(updateTaskMediaPreviews);
 
-  const canViewFullWorkspace = userCanViewFullWorkspace(currentUser, appSettings);
+  const canViewCurrentTask = Boolean(task && canViewTask(task, currentUser, appSettings, userList));
+  const canEditCurrentTask = Boolean(task && canEditTask(task, currentUser, appSettings, userList));
 
   useEffect(() => {
     setSelectedVersionIndex(0);
@@ -164,6 +172,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     setIsEditingRevisionAssignees(true);
     setRevisionAssigneesSaved(false);
     setIsEditingTaskBasics(false);
+    setWorkflowOmissionError('');
   }, [taskId]);
 
   useEffect(() => {
@@ -187,12 +196,8 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   useEffect(() => {
     if (!task) return;
     setManagedContributorIds(task.handledBy);
-    setManagedReviewMode(task.reviewMode);
+    setManagedReviewMode(normalizeReviewMode(task.reviewMode));
     setManagedWorkflowId(task.workflowId || task.workflowSnapshot?.id || '');
-    setManagedWorkflowPhaseId(task.workflowCurrentPhaseId || task.workflowSnapshot?.phases[0]?.id || '');
-    setManagedActivePhaseAssigneeIds(
-      task.workflowNodeAssigneeIds?.[task.workflowCurrentPhaseId || ''] || task.currentOwnerUserIds || [],
-    );
     setManagedPublishAt(toDateTimeLocalValue(task.scheduledPublishAt));
     setManagedPublishNote(task.publishNote || '');
     setManagedRevisionAssigneeIds(task.contentRevisionAssigneeIds || []);
@@ -201,8 +206,9 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     setBasicTaskType(task.taskType);
     setBasicTaskPriority(task.priority);
     setBasicTaskWorkDate(task.assignmentDate || '');
-    setBasicTaskDeadline(toDateTimeLocalValue(task.deadlineAt));
-  }, [taskId, (task?.handledBy || []).join('|'), (task?.currentOwnerUserIds || []).join('|'), task?.currentOwnerUserId, task?.reviewMode, task?.workflowId, task?.workflowCurrentPhaseId, task?.scheduledPublishAt, task?.publishNote, (task?.contentRevisionAssigneeIds || []).join('|'), JSON.stringify(task?.workflowNodeAssigneeIds || {})]);
+    const taskDeadline = getTaskDeadlineAt(task);
+    setBasicTaskDeadline(taskDeadline ? formatDeadlineInput(taskDeadline) : '');
+  }, [taskId, (task?.handledBy || []).join('|'), (task?.currentOwnerUserIds || []).join('|'), task?.currentOwnerUserId, task?.reviewMode, task?.workflowId, task?.workflowCurrentPhaseId, task?.deadlineAt, task?.deadlineText, task?.scheduledPublishAt, task?.publishNote, (task?.contentRevisionAssigneeIds || []).join('|'), JSON.stringify(task?.workflowNodeAssigneeIds || {})]);
 
   useEffect(() => {
     if (task && selectedVersionIndex > task.versions.length - 1) {
@@ -216,7 +222,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   }, [updateTaskMediaPreviews]);
 
   useEffect(() => {
-    if (!task || !canUserAccessTask(task, currentUser, appSettings) || previewOptimizationAttemptedRef.current.has(task.id) || !taskNeedsPreviewOptimization(task)) return;
+    if (!task || !canViewCurrentTask || previewOptimizationAttemptedRef.current.has(task.id) || !taskNeedsPreviewOptimization(task)) return;
 
     previewOptimizationAttemptedRef.current.add(task.id);
     let cancelled = false;
@@ -234,7 +240,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     return () => {
       cancelled = true;
     };
-  }, [canViewFullWorkspace, currentUser.id, task]);
+  }, [canViewCurrentTask, currentUser.id, task]);
 
   const isDetailedReviewType = React.useMemo(() => {
     if (!task) return false;
@@ -243,26 +249,25 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     return config ? config.isDetailedReview : (cleanTaskTypeKey(task.taskType) === 'ai packet' || cleanTaskTypeKey(task.taskType) === 'video');
   }, [appSettings, task?.taskType]);
 
-  if (!task || !canUserAccessTask(task, currentUser, appSettings)) return <div>Task not found</div>;
+  if (!task || !canViewCurrentTask) return <div>Task not found</div>;
 
   const statusInfo = getStatusInfo(task, currentUser.role, users);
-  const nextAction = getNextActionLabel(task, currentUser.role);
+  const nextAction = canEditCurrentTask ? getNextActionLabel(task, currentUser.role) : 'View task history';
   const creator = users[task.createdBy]?.name || (task.createdBy === currentUser.id ? currentUser.name : initialUsers.find(u => u.id === task.createdBy)?.name) || 'Unknown';
   const handledByNames = task.handledBy
     .filter(id => isAssignableHandler(id, undefined, appSettings))
     .map(id => users[id]?.name || initialUsers.find(u => u.id === id)?.name)
     .filter(Boolean)
     .join(' + ');
-  const currentOwnerIds = getCurrentOwnerUserIds(task);
-  const currentOwnerNames = currentOwnerIds
-    .map(id => users[id]?.name || initialUsers.find(u => u.id === id)?.name)
-    .filter(Boolean)
-    .join(' + ');
   const getUserName = (id: string) => users[id]?.name || initialUsers.find(u => u.id === id)?.name || '';
   const formatUserNames = (ids: string[]) => {
     const names = Array.from(new Set(ids.map(getUserName).filter(Boolean)));
-    return names.length > 0 ? names.join(' + ') : 'Not set';
+    return names.length > 0 ? names.join(' + ') : 'Unassigned';
   };
+  const currentOwnerIds = getCurrentOwnerUserIds(task);
+  const actionableCurrentOwnerIds = userList
+    .filter(user => user.id !== 'guest' && canUserActAsCurrentOwner(task, user, undefined, appSettings, userList))
+    .map(user => user.id);
 
   const currentVersion = task.versions[selectedVersionIndex] || task.versions[0];
   const latestVersion = task.versions[0];
@@ -271,89 +276,230 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   const taskAssignmentLinks = task.assignmentLinks || [];
   const currentVersionHasLocalOnlyFiles = files.some(file => isLocalOnlyFileUrl(file.url));
   const isArchived = isTaskArchived(task);
+  const canArchiveTask = canEditCurrentTask && hasArchivePrivilege;
+  const canDeleteTask = canEditCurrentTask && hasDeletePrivilege;
 
   const isSelfCreatedTask = task.createdBy === currentUser.id;
   const currentVersionSubmittedByMe = currentVersion?.submittedBy === currentUser.id;
   const latestVersionSubmittedByMe = latestVersion?.submittedBy === currentUser.id;
   const canApproveCurrentSubmission = !isSelfCreatedTask && !currentVersionSubmittedByMe && !latestVersionSubmittedByMe;
   const isReadOnlyObserver = currentUser.role === 'manager' || currentUser.role === 'developer';
-  const isCurrentActiveOwner = canUserActAsCurrentOwner(task, currentUser);
+  const isCurrentActiveOwner = canUserActAsCurrentOwner(task, currentUser, undefined, appSettings, userList);
   const isAdminUser = Boolean(currentUser.isAdmin) || currentUser.role === 'admin';
-  const activeWorkflowPhase = getActiveWorkflowPhaseForUser(task, currentUser.id, appSettings, userList);
+  const activeWorkflowPhaseIds = task.workflowActivePhaseIds ?? [task.workflowCurrentPhaseId].filter(Boolean) as string[];
+  const hasUnavailableActivePhase = task.workflowSnapshot
+    ? activeWorkflowPhaseIds.some(phaseId => !isPhaseAvailable(task, new Date(), phaseId))
+    : !isPhaseAvailable(task, new Date());
+  const taskHasClosedOwnership = Boolean(task.archivedAt) || ['approved_by_art_director', 'completed', 'archived'].includes(task.status);
+  const currentOwnerSummary = actionableCurrentOwnerIds.length > 0
+    ? formatUserNames(actionableCurrentOwnerIds)
+    : task.status === 'on_hold' ? 'Paused'
+      : taskHasClosedOwnership ? 'No active owner'
+        : hasUnavailableActivePhase ? 'Waiting for step availability'
+          : 'Unassigned';
+  const activeWorkflowPhaseNames = task.workflowSnapshot
+    ? activeWorkflowPhaseIds
+      .map(phaseId => task.workflowSnapshot?.phases.find(phase => phase.id === phaseId)?.name)
+      .filter(Boolean)
+      .join(' + ')
+    : '';
+  const includesContentReview = task.workflowSnapshot
+    ? task.workflowSnapshot.phases.some(phase => !phase.disabled && isContentReviewPhase(phase) && !(task.workflowSkippedPhaseIds || []).includes(phase.id))
+    : Boolean(task.needsContentRevision);
+  const voiceOverAssignmentSummary = (task.workflowSnapshot?.phases || [])
+    .filter(isVoiceOverPhase)
+    .map(phase => {
+      if (phase.disabled || (task.workflowSkippedPhaseIds || []).includes(phase.id)) return `${phase.name}: Skipped`;
+      const provider = getVoiceOverProvider(task, phase);
+      const providerLabel = VOICE_OVER_PROVIDER_OPTIONS.find(option => option.value === provider)?.label || 'Provider not selected';
+      const deliveryOwnerId = getVoiceOverDeliveryOwnerId(task, phase, userList);
+      const legacyOwnerIds = !provider && !deliveryOwnerId
+        ? resolveWorkflowPhaseOwnerIds(phase, task, appSettings, userList)
+        : [];
+      const ownerSummary = deliveryOwnerId
+        ? `Delivery owner ${getUserName(deliveryOwnerId)}`
+        : legacyOwnerIds.length > 0
+          ? `Assigned ${legacyOwnerIds.length === 1 ? 'member' : 'members'} ${formatUserNames(legacyOwnerIds)}`
+          : 'No delivery owner';
+      return `${phase.name}: ${providerLabel} · ${ownerSummary}`;
+    })
+    .join('; ');
+  const ownedActiveWorkflowPhases = (task.workflowSnapshot?.phases || []).filter(phase =>
+    activeWorkflowPhaseIds.includes(phase.id) &&
+    getPhaseAssignableOwnerIds(task, phase, appSettings, userList, task.workflowPhaseApprovals?.[phase.id] || []).includes(currentUser.id)
+  );
+  const ownedActiveWorkflowWorkPhase = ownedActiveWorkflowPhases.find(phase => normalizeReviewPhase(phase).phaseKind === 'work') || null;
+  const activeWorkflowPhase = ownedActiveWorkflowPhases.find(phase => normalizeReviewPhase(phase).phaseKind !== 'work') ||
+    getActiveWorkflowPhaseForUser(task, currentUser.id, appSettings, userList);
+  const displayedWorkflowPhase = activeWorkflowPhase || getWorkflowPhase(task);
+  const displayedFixedArtDirector = displayedWorkflowPhase && isMandatoryFinalReview(displayedWorkflowPhase)
+    ? resolveTaskFinalArtDirector(displayedWorkflowPhase, task, appSettings, userList)
+    : null;
   const workflowOptions = (appSettings.workflows || [])
     .filter(workflow => workflow.active !== false)
     .map(workflow => ({ value: workflow.id, label: workflow.name }));
-  const selectedWorkflow = (appSettings.workflows || []).find(workflow => workflow.id === managedWorkflowId) || task.workflowSnapshot || null;
-  const workflowPhaseOptions = (selectedWorkflow?.phases || []).map(phase => ({ value: phase.id, label: phase.name }));
+  const canManageTaskStepOmissions = canManageWorkflowOmissions(currentUser, appSettings, task, userList);
+  const workflowOmissionPhases = (task.workflowSnapshot?.phases || []).filter(phase => (phase.nodeType || 'step') === 'step');
   const activeWorkflowPhaseApprovedByMe = activeWorkflowPhase ? hasUserApprovedWorkflowPhase(task, activeWorkflowPhase.id, currentUser.id) : false;
-  const taskTypeConfig = getTaskTypeConfigs(appSettings).find(config => cleanTaskTypeKey(config.id) === cleanTaskTypeKey(task.taskType));
-  // Resolve from the selected phase, rather than the task-wide owner list.
-  // Parallel phases have different owners and must never be shown as one
-  // combined reviewer list.
-  const activePhaseExplicitAssignees = activeWorkflowPhase
-    ? task.workflowNodeAssigneeIds?.[activeWorkflowPhase.id] || []
-    : [];
-  const activePhaseReviewerIds = activePhaseExplicitAssignees.length > 0
-    ? [
-        ...activePhaseExplicitAssignees.filter(id => id !== 'voice_over_ai'),
-        ...(activePhaseExplicitAssignees.includes('voice_over_ai') && activeWorkflowPhase && task.workflowNodeAIAssigneeIds?.[activeWorkflowPhase.id]
-          ? [task.workflowNodeAIAssigneeIds[activeWorkflowPhase.id]]
-          : []),
-      ]
-    : (() => {
-        const configuredOwners = resolveWorkflowPhaseReviewerIds(activeWorkflowPhase, appSettings, userList, task);
-        return configuredOwners.length > 0 ? configuredOwners : currentOwnerIds;
-      })();
-  const firstReviewerIds = taskTypeConfig?.fullReviewerUserIds?.length
-    ? taskTypeConfig.fullReviewerUserIds
-    : appSettings.firstReviewerUserIds || [];
-  const finalReviewerIds = taskTypeConfig?.finalReviewerUserIds?.length ? taskTypeConfig.finalReviewerUserIds : appSettings.finalReviewerUserIds || [];
-  const reviewerSections = [
-    activeWorkflowPhase ? {
-      label: 'Active phase',
-      detail: activeWorkflowPhase.name,
-      names: formatUserNames(activePhaseReviewerIds.length > 0 ? activePhaseReviewerIds : currentOwnerIds),
-    } : null,
-    task.needsContentRevision ? {
-      label: 'Content revision',
-      detail: 'Content feedback owner',
-      names: formatUserNames(task.contentRevisionAssigneeIds || []),
-    } : null,
-    {
-      label: 'First review',
-      detail: getReviewModeLabel(task.reviewMode),
-      names: formatUserNames(firstReviewerIds),
-    },
-    {
-      label: 'Final approval',
-      detail: 'Final approver',
-      names: formatUserNames(finalReviewerIds),
-    },
-  ].filter(Boolean) as Array<{ label: string; detail: string; names: string }>;
+  const activeWorkflowPhaseStatus = activeWorkflowPhase ? getStatusForWorkflowPhase(activeWorkflowPhase) : null;
+  const latestHistoryByPhaseId = new Map<string, NonNullable<Task['workflowPhaseHistory']>[number]>();
+  (task.workflowPhaseHistory || []).forEach(entry => latestHistoryByPhaseId.set(entry.phaseId, entry));
+  const reviewStageLabel = (phase: NonNullable<Task['workflowSnapshot']>['phases'][number]) => {
+    const kind = normalizeReviewPhase(phase).phaseKind;
+    if (kind === 'content_review') return 'Content Review';
+    if (kind === 'final_review') return 'Final Review';
+    if (kind === 'first_review') return 'First Review';
+    return 'Review decision';
+  };
+  const reviewSections = task.workflowSnapshot
+    ? task.workflowSnapshot.phases
+      .filter(phase => {
+        if ((phase.nodeType || 'step') !== 'step') return false;
+        const kind = normalizeReviewPhase(phase).phaseKind;
+        return ['content_review', 'first_review', 'final_review'].includes(kind || '') || Boolean(phase.isReviewDecision);
+      })
+      .map(phase => {
+        const approvals = task.workflowPhaseApprovals?.[phase.id] || [];
+        const phaseHistory = (task.workflowPhaseHistory || []).filter(entry => entry.phaseId === phase.id);
+        const lastInvalidationIndex = phaseHistory.reduce((latestIndex, entry, index) => entry.action === 'invalidated' ? index : latestIndex, -1);
+        const currentCycleHistory = phaseHistory.slice(lastInvalidationIndex + 1);
+        const historyApprovalIds = uniqueIds(currentCycleHistory
+          .filter(entry => entry.action === 'approved' || entry.action === 'completed')
+          .map(entry => entry.actorId));
+        const approvedDisplayIds = uniqueIds([...approvals, ...historyApprovalIds]);
+        const fixedArtDirector = isMandatoryFinalReview(phase)
+          ? resolveTaskFinalArtDirector(phase, task, appSettings, userList)
+          : null;
+        const allOwnerIds = fixedArtDirector?.ok && fixedArtDirector.ownerId
+          ? [fixedArtDirector.ownerId]
+          : fixedArtDirector ? [] : resolveWorkflowPhaseOwnerIds(phase, task, appSettings, userList);
+        const pendingOwnerIds = allOwnerIds.filter(userId => !approvals.includes(userId));
+        const isActive = activeWorkflowPhaseIds.includes(phase.id);
+        const isAvailable = isActive && isPhaseAvailable(task, new Date(), phase.id);
+        const reviewActionsOpen = !task.archivedAt && task.status !== 'on_hold'
+          && !['approved_by_art_director', 'completed', 'archived', ...RETURNED_STATUSES].includes(task.status);
+        const isActionable = isAvailable && reviewActionsOpen;
+        const latestHistory = latestHistoryByPhaseId.get(phase.id);
+        const isCompleted = !isActive && latestHistory?.action === 'completed';
+        const isSkipped = !isActive && (latestHistory?.action === 'skipped' || isWorkflowPhaseSkippedForTask(phase, task));
+        const availabilityValue = Object.keys(task.workflowPhaseAvailableAtByPhaseId || {}).length > 0
+          ? task.workflowPhaseAvailableAtByPhaseId?.[phase.id]
+          : isActive ? task.workflowPhaseAvailableAt : null;
+        const availableAt = availabilityValue ? new Date(availabilityValue) : null;
+        const hasFutureAvailability = Boolean(availableAt && !Number.isNaN(availableAt.getTime()) && availableAt.getTime() > Date.now());
+        const actionableOwnerIds = isActionable
+          ? getPhaseAssignableOwnerIds(task, phase, appSettings, userList, approvals)
+          : phase.mode === 'sequential' ? pendingOwnerIds.slice(0, 1) : pendingOwnerIds;
+
+        let status = 'Upcoming';
+        let tone: 'active' | 'delayed' | 'complete' | 'skipped' | 'upcoming' = 'upcoming';
+        if (isActive && RETURNED_STATUSES.includes(task.status)) {
+          status = 'Waiting for resubmission';
+          tone = 'delayed';
+        } else if (isActive && task.status === 'on_hold') {
+          status = 'Review paused · task on hold';
+          tone = 'delayed';
+        } else if (isActive && (task.archivedAt || ['approved_by_art_director', 'completed', 'archived'].includes(task.status))) {
+          status = 'Review closed';
+          tone = 'complete';
+        } else if (isActive && isActionable) {
+          status = 'Active now';
+          tone = 'active';
+        } else if (isActive && hasFutureAvailability && availableAt) {
+          status = `Delayed until ${availableAt.toLocaleString('en-EG', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Africa/Cairo' })}`;
+          tone = 'delayed';
+        } else if (isCompleted) {
+          status = 'Completed';
+          tone = 'complete';
+        } else if (isSkipped) {
+          status = 'Skipped for this task';
+          tone = 'skipped';
+        } else if (latestHistory?.action === 'invalidated') {
+          status = 'Reset after returned changes';
+        } else if (phase.delayDays && phase.delayDays > 0) {
+          status = `Upcoming · starts ${phase.delayDays} day${phase.delayDays === 1 ? '' : 's'} after the prior step`;
+        }
+
+        const displayedOwnerIds = isCompleted
+          ? approvedDisplayIds
+          : isSkipped ? []
+            : isActive ? actionableOwnerIds : allOwnerIds;
+        const ownerLabel = isCompleted ? 'Approved by'
+          : isSkipped ? 'Reviewer'
+            : isActive && isActionable ? (phase.mode === 'sequential' ? 'Next reviewer' : 'Reviewers now')
+              : isActive && reviewActionsOpen ? (phase.mode === 'sequential' ? 'Next after delay' : 'Reviewers after delay')
+                : isActive ? 'Assigned reviewers'
+                : 'Assigned reviewers';
+
+        return {
+          id: phase.id,
+          label: phase.name,
+          stage: reviewStageLabel(phase),
+          status,
+          tone,
+          ownerLabel,
+          names: isSkipped ? 'No reviewer needed' : formatUserNames(displayedOwnerIds),
+          approvedNames: isActive && approvedDisplayIds.length > 0 ? formatUserNames(approvedDisplayIds) : '',
+        };
+      })
+    : [{
+        id: 'legacy-current-owner',
+        label: 'Current task owner',
+        stage: getReviewModeLabel(task.reviewMode),
+        status: statusInfo.label,
+        tone: (task.status === 'on_hold' || hasUnavailableActivePhase ? 'delayed' : taskHasClosedOwnership ? 'complete' : 'active') as 'active' | 'delayed' | 'complete',
+        ownerLabel: actionableCurrentOwnerIds.length > 0 ? 'Responsible now' : 'Review availability',
+        names: currentOwnerSummary === 'No active owner' ? 'No active review' : currentOwnerSummary,
+        approvedNames: '',
+      }];
   const canActAsWorkflowReviewer = Boolean(activeWorkflowPhase) &&
-    isCurrentActiveOwner &&
-    canApproveCurrentSubmission &&
     !activeWorkflowPhaseApprovedByMe &&
-    !['approved_by_art_director', 'completed', 'archived', 'on_hold', 'assigned_work'].includes(task.status);
-  const canActAsReviewer = (currentUser.role === 'reviewer' || currentUser.role === 'team_leader') && isCurrentActiveOwner && canApproveCurrentSubmission;
-  const canActAsArtDirector = currentUser.role === 'art_director' && isCurrentActiveOwner && canApproveCurrentSubmission;
-  const canEditTaskRouteAndAssignment = isLeaderboardUser(currentUser.id);
-  const canEditTaskBasics = canEditTaskRouteAndAssignment || task.createdBy === currentUser.id;
+    !['approved_by_art_director', 'completed', 'archived', 'on_hold', ...RETURNED_STATUSES].includes(task.status);
+  const normalizedActiveWorkflowPhase = activeWorkflowPhase ? normalizeReviewPhase(activeWorkflowPhase) : null;
+  const isWorkflowContentReview = isContentReviewPhase(activeWorkflowPhase);
+  const isWorkflowWorkPhase = normalizedActiveWorkflowPhase?.phaseKind === 'work';
+  const isWorkflowFinalReview = normalizedActiveWorkflowPhase?.phaseKind === 'final_review';
+  const activeFixedArtDirector = activeWorkflowPhase && isWorkflowFinalReview
+    ? resolveTaskFinalArtDirector(activeWorkflowPhase, task, appSettings, userList)
+    : null;
+  const canActAsReviewer = task.workflowSnapshot
+    ? canActAsWorkflowReviewer && !isWorkflowWorkPhase && !isWorkflowContentReview && !isWorkflowFinalReview
+    : (currentUser.role === 'reviewer' || currentUser.role === 'team_leader') && isCurrentActiveOwner && canApproveCurrentSubmission;
+  const canActAsArtDirector = task.workflowSnapshot
+    ? canActAsWorkflowReviewer && !isWorkflowWorkPhase && isWorkflowFinalReview &&
+      currentUser.role === 'art_director' && activeFixedArtDirector?.ok === true && activeFixedArtDirector.ownerId === currentUser.id
+    : currentUser.role === 'art_director' && isCurrentActiveOwner && canApproveCurrentSubmission;
+  const canEditTaskRouteAndAssignment = canEditCurrentTask && canReassignWorkflowTask(currentUser);
+  const canEditTaskBasics = canEditCurrentTask && (canEditTaskRouteAndAssignment || task.createdBy === currentUser.id);
   const canManageWorkflowSettings = canEditTaskRouteAndAssignment && canManageWorkflow(currentUser, appSettings);
   const canManageWorkflowDefinitions = canEditTaskRouteAndAssignment && canManageWorkflowBuilder(currentUser, appSettings);
-  const canReassignTask = canEditTaskRouteAndAssignment && canAssignContributors(currentUser.id, appSettings);
+  const canReassignTask = canEditTaskRouteAndAssignment && !CLOSED_STATUSES.includes(task.status) && !task.archivedAt;
   const canShowWorkflowAdjuster = showWorkflowAdjuster && (canManageWorkflowSettings || canReassignTask);
-  const canResubmitTask = !isReadOnlyObserver && task.handledBy.includes(currentUser.id);
-  const isReviewerActionable = !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
+  const ownsActiveWorkflowWorkPhase = Boolean(ownedActiveWorkflowWorkPhase);
+  const canUploadCurrentWork = canEditCurrentTask && (task.workflowSnapshot
+    ? ownsActiveWorkflowWorkPhase &&
+      !['approved_by_art_director', 'completed', 'archived', 'on_hold'].includes(task.status) &&
+      !RETURNED_STATUSES.includes(task.status)
+    : canUploadWorkAssignment(task, currentUser));
+  const isReturnedToCurrentUser = RETURNED_STATUSES.includes(task.status) && currentOwnerIds.includes(currentUser.id);
+  const canResubmitTask = canEditCurrentTask && !isReadOnlyObserver && (task.workflowSnapshot
+    ? ownsActiveWorkflowWorkPhase || isReturnedToCurrentUser
+    : task.handledBy.includes(currentUser.id));
+  const isReviewerActionable = task.workflowSnapshot
+    ? Boolean(activeWorkflowPhaseStatus && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(activeWorkflowPhaseStatus))
+    : !isSelfCreatedTask && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
   const canResubmitVersion = canResubmitTask &&
     task.versions.length > 0 &&
-    !['draft', 'assigned_work', 'approved_by_art_director', 'completed', 'archived', 'on_hold'].includes(task.status);
+    !['draft', 'approved_by_art_director', 'completed', 'archived', 'on_hold'].includes(task.status) &&
+    (task.status !== 'assigned_work' || ownsActiveWorkflowWorkPhase);
   const isInternalReviewTask = !isDetailedReviewType;
-  const canViewInternalReviewNotes = canViewFullWorkspace;
+  const canViewInternalReviewNotes = canEditCurrentTask;
   const isContentCreatorUser = isContentCreatorProfile(currentUser);
-  const canActAsContentCreator = task.status === 'waiting_content_revision' &&
-    canApproveCurrentSubmission &&
-    ((isContentCreatorUser && (task.currentOwnerUserIds || []).includes(currentUser.id)) || (isAdminUser && (task.currentOwnerUserIds || []).includes(currentUser.id)));
+  const canActAsContentCreator = task.workflowSnapshot
+    ? canActAsWorkflowReviewer && isWorkflowContentReview && activeWorkflowPhaseStatus === 'waiting_content_revision'
+    : task.status === 'waiting_content_revision' &&
+      canApproveCurrentSubmission &&
+      ((isContentCreatorUser && (task.currentOwnerUserIds || []).includes(currentUser.id)) || (isAdminUser && (task.currentOwnerUserIds || []).includes(currentUser.id)));
   const jobTitleLower = (currentUser.jobTitle || '').toLowerCase();
   const isInGraphicOrVideoDept = jobTitleLower.includes('designer') ||
                                  jobTitleLower.includes('video') ||
@@ -361,7 +507,8 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                                  jobTitleLower.includes('graphic');
   const isContentOrSeniorContent = jobTitleLower.includes('content');
   const isLeaderboard = isLeaderboardUser(currentUser.id);
-  const canUndoContentApproval = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'sent_to_art_director'].includes(task.status) &&
+  const canUndoContentApproval = canEditCurrentTask && !task.workflowSnapshot &&
+    ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'sent_to_art_director'].includes(task.status) &&
     !isInGraphicOrVideoDept &&
     ((isContentOrSeniorContent && (task.contentRevisionAssigneeIds || []).includes(currentUser.id)) || isLeaderboard || isAdminUser);
   const humanCommentActions = new Set<TaskComment['action']>([
@@ -374,7 +521,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     'clarification_needed'
   ]);
   const canEditOrDeleteComment = (comment: TaskComment) => {
-    if (comment.isDeleted) return false;
+    if (!canEditCurrentTask || comment.isDeleted) return false;
     return comment.authorId === currentUser.id && humanCommentActions.has(comment.action);
   };
   const canViewCommentHistory = (comment: TaskComment) => comment.authorId === currentUser.id || isAdminUser;
@@ -409,13 +556,15 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   const parentComments = visibleComments.filter(comment => !comment.parentId);
   const getCommentReplies = (parentId: string) => visibleComments.filter(comment => comment.parentId === parentId);
   const saveTaskBasics = () => {
+    const parsedDeadline = basicTaskDeadline ? parseDeadlineInput(basicTaskDeadline) : null;
+    if (basicTaskDeadline && !parsedDeadline) return;
     updateTaskBasicDetails(task.id, {
       name: basicTaskName,
       description: basicTaskDescription,
       taskType: basicTaskType,
       priority: basicTaskPriority,
       assignmentDate: basicTaskWorkDate || null,
-      deadlineAt: basicTaskDeadline ? new Date(basicTaskDeadline).toISOString() : null,
+      deadlineAt: parsedDeadline?.toISOString() || null,
     });
     setIsEditingTaskBasics(false);
   };
@@ -434,7 +583,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
       items.push({
         id: `${comment.id}:message`,
         label: 'Main note',
-        note: comment.message.trim(),
+        note: formatTaskSystemMessage(comment.message.trim(), comment.action),
       });
     }
 
@@ -455,25 +604,18 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   });
   const selectedMinaFeedback = minaForwardableFeedback.filter(item => selectedMinaFeedbackIds.includes(item.id));
   const canSubmitADReject = adRejectComment.trim() || selectedMinaFeedback.length > 0 || adRejectNotes.some(section => section.note.trim() || section.imageUrl || section.localPreviewUrl || section.imageFile);
-  const taskParticipantIds = new Set([
-    task.createdBy,
-    ...task.handledBy,
-    ...currentOwnerIds,
-    ...(task.contentRevisionAssigneeIds || []),
-    ...(task.workflowPhaseHistory || []).map(entry => entry.actorId),
-    ...(task.comments || []).map(comment => comment.authorId),
-  ].filter(Boolean));
-  const canManuallyApproveTask = !isReadOnlyObserver &&
-    !isSelfCreatedTask &&
-    taskParticipantIds.has(currentUser.id) &&
+  const canManuallyApproveTask = canEditCurrentTask && !isReadOnlyObserver &&
+    !task.workflowSnapshot &&
+    currentUser.role === 'art_director' &&
+    canApproveCurrentSubmission &&
     !['approved', 'completed', 'archived', 'approved_by_art_director', 'assigned_work', 'draft'].includes(task.status) &&
     !isArchived;
   const hasResubmitAttachments = resubmitLinks.length > 0;
   const contributorOptions = getAssignableContributorsForTask(userList, task.taskType, task.createdBy, appSettings);
   const reviewModeOptions = [
-    { value: 'content_review', label: 'Content Rev.' },
-    { value: 'first_review', label: 'First Rev.' },
-    { value: 'final_review', label: 'Final Rev. (Art Director)' },
+    { value: 'content_review', label: 'Content Review' },
+    { value: 'first_review', label: 'First Review' },
+    { value: 'final_review', label: 'Final Review' },
   ];
 
   const saveAssignment = () => {
@@ -484,18 +626,15 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   };
 
   const saveReviewRoute = () => {
-    updateTaskReviewMode(task.id, managedReviewMode);
+    updateTaskReviewMode(task.id, normalizeReviewMode(managedReviewMode));
   };
 
   const saveWorkflow = () => {
     if (!managedWorkflowId) return;
-    applyTaskWorkflow(task.id, managedWorkflowId, managedWorkflowPhaseId || undefined);
+    applyTaskWorkflow(task.id, managedWorkflowId);
   };
 
-  const saveActivePhaseAssignees = () => {
-    if (!activeWorkflowPhase) return;
-    updateWorkflowPhaseAssignees(task.id, activeWorkflowPhase.id, managedActivePhaseAssigneeIds);
-  };
+
 
   const saveRevisionAssignees = () => {
     updateTaskContentRevisionAssignees(task.id, managedRevisionAssigneeIds);
@@ -641,7 +780,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
     const nextVersionNumber = Math.max(0, ...task.versions.map(version => version.versionNumber)) + 1;
     try {
       const versionFiles = [...resubmitLinks];
-      addTaskVersion(task.id, {
+      const submitted = addTaskVersion(task.id, {
         id: Math.random().toString(36).substring(7),
         versionNumber: nextVersionNumber,
         submittedBy: currentUser.id,
@@ -649,7 +788,11 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
         fileUrl: versionFiles[0].url,
         files: versionFiles,
         createdAt: new Date().toISOString(),
-      });
+      }, ownedActiveWorkflowWorkPhase?.id);
+      if (!submitted) {
+        setResubmitError('This workflow step is no longer available for your upload. Refresh the task and try again.');
+        return;
+      }
       setSelectedFileIndex(0);
       setResubmitLinks([]);
       setResubmitLinkUrl('');
@@ -887,29 +1030,29 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
 
   const handleFollowUpSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (isSavingAction) return;
+    if (!canEditCurrentTask || isSavingAction) return;
 
     const message = followUpMessage.trim();
     if (!message && !hasFilledFollowUpSections()) return;
 
     // Check if the commenter is a reviewer and if we should ask for rejection
-    const isReviewerComment = currentUser.role === 'reviewer' || currentUser.role === 'team_leader' || currentUser.role === 'art_director' || currentUser.role === 'admin';
+    const isReviewerComment = task.workflowSnapshot
+      ? canActAsWorkflowReviewer
+      : currentUser.role === 'reviewer' || currentUser.role === 'team_leader' || currentUser.role === 'art_director' || currentUser.role === 'admin';
     const isTaskActiveForReview = !['approved', 'completed', 'archived', 'approved_by_art_director'].includes(task.status);
 
     let rejectStatus: TaskStatus | null = null;
     if (isReviewerComment && isTaskActiveForReview) {
-      if (currentUser.role === 'reviewer' || currentUser.role === 'team_leader') {
-        if (task.reviewMode !== 'quick_look') {
-          rejectStatus = 'changes_requested_by_reviewer';
-        }
+      if (task.workflowSnapshot) {
+        rejectStatus = isWorkflowFinalReview ? 'changes_requested_by_art_director' : 'changes_requested_by_reviewer';
+      } else if (currentUser.role === 'reviewer' || currentUser.role === 'team_leader') {
+        rejectStatus = 'changes_requested_by_reviewer';
       } else if (currentUser.role === 'art_director') {
         rejectStatus = 'changes_requested_by_art_director';
       } else if (currentUser.role === 'admin') {
         const isFirstReviewState = ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'draft'].includes(task.status);
         if (isFirstReviewState) {
-          if (task.reviewMode !== 'quick_look') {
-            rejectStatus = 'changes_requested_by_reviewer';
-          }
+          rejectStatus = 'changes_requested_by_reviewer';
         } else {
           rejectStatus = 'changes_requested_by_art_director';
         }
@@ -918,7 +1061,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
 
     let shouldReject = false;
     if (rejectStatus) {
-      shouldReject = window.confirm("Do you want to reject this task because of this comment?");
+      shouldReject = window.confirm("Do you want to return this task for changes because of this comment?");
     }
 
     setIsSavingAction(true);
@@ -961,7 +1104,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
 
       if (shouldReject && rejectStatus) {
         if (task.workflowSnapshot) {
-          rejectWorkflowPhase(task.id, message || 'Returned for changes from comment.');
+          rejectWorkflowPhase(task.id, message || 'Returned for changes from comment.', activeWorkflowPhase?.id);
         } else {
           updateTaskStatus(task.id, rejectStatus, 'team_member', [task.createdBy, ...task.handledBy]);
         }
@@ -978,6 +1121,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   };
 
   const handleSaveCommentEdit = (commentId: string) => {
+    if (!canEditCurrentTask) return;
     const hasText = editMessage.trim();
     const sections = editSections
       .map(section => ({ ...section, note: section.note.trim() }))
@@ -993,6 +1137,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   };
 
   const handleAddReply = async (parentId: string) => {
+    if (!canEditCurrentTask) return;
     const message = replyMessage.trim();
     if (!message && !hasFilledReplySections()) return;
 
@@ -1045,7 +1190,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
 
       updateTaskPriority(task.id, priority, deadline);
       if (task.workflowSnapshot) {
-        approveWorkflowPhase(task.id, note || `${activeWorkflowPhase?.name || 'Review phase'} approved.`);
+        approveWorkflowPhase(task.id, note || `${activeWorkflowPhase?.name || 'Review phase'} approved.`, activeWorkflowPhase?.id);
       } else {
         updateTaskStatus(task.id, 'sent_to_art_director', 'art_director');
       }
@@ -1075,7 +1220,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
         sections,
       });
       if (task.workflowSnapshot) {
-        rejectWorkflowPhase(task.id, 'Reviewer requested changes.');
+        rejectWorkflowPhase(task.id, 'Reviewer requested changes.', activeWorkflowPhase?.id);
       } else {
         updateTaskStatus(task.id, 'changes_requested_by_reviewer', 'team_member', [task.createdBy, ...task.handledBy]);
       }
@@ -1115,7 +1260,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
         sections: [...forwardedSections, ...marwaSections],
       });
       if (task.workflowSnapshot) {
-        rejectWorkflowPhase(task.id, message || 'Art Director requested changes.');
+        rejectWorkflowPhase(task.id, message || 'Art Director requested changes.', activeWorkflowPhase?.id);
       } else {
         updateTaskStatus(task.id, 'changes_requested_by_art_director', 'team_member', [task.createdBy, ...task.handledBy]);
       }
@@ -1124,7 +1269,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
       setSelectedMinaFeedbackIds([]);
       setModal(null);
     } catch (error) {
-      console.error('Failed to save rejection', error);
+      console.error('Failed to return task for changes', error);
       setActionError('Could not save the attached screenshots. Please try again.');
     } finally {
       setIsSavingAction(false);
@@ -1133,7 +1278,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
 
   const handleADApprove = () => {
     if (task.workflowSnapshot) {
-      approveWorkflowPhase(task.id, `${activeWorkflowPhase?.name || 'Final review'} approved.`);
+      approveWorkflowPhase(task.id, `${activeWorkflowPhase?.name || 'Final review'} approved.`, activeWorkflowPhase?.id);
     } else {
       updateTaskStatus(task.id, 'approved_by_art_director', null);
     }
@@ -1208,17 +1353,15 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
           message: 'Content approved, moving to the next workflow phase.',
           sections: [],
         });
-        approveWorkflowPhase(task.id, 'Content approved.');
+        approveWorkflowPhase(task.id, 'Content approved.', activeWorkflowPhase?.id);
         return;
       }
       const creatorRole = users[task.createdBy]?.role || initialUsers.find(user => user.id === task.createdBy)?.role;
       const isReviewerCreated = creatorRole === 'reviewer' || creatorRole === 'admin';
-      const sendToMarwa = isReviewerCreated || task.reviewMode === 'direct_to_ad';
+      const sendToMarwa = isReviewerCreated || normalizeReviewMode(task.reviewMode) === 'final_review';
       const nextStatus = sendToMarwa
         ? 'sent_to_art_director'
-        : task.reviewMode === 'quick_look'
-          ? 'waiting_reviewer_quick_look'
-          : 'waiting_reviewer_full_review';
+        : 'waiting_reviewer_full_review';
       const nextOwnerRole = sendToMarwa ? 'art_director' : 'reviewer';
 
       addTaskComment(task.id, {
@@ -1231,7 +1374,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
       updateTaskStatus(task.id, nextStatus, nextOwnerRole);
     } catch (error) {
       console.error('Failed to approve content', error);
-      setActionError('Could not approve content revision. Please try again.');
+      setActionError('Could not approve Content Review. Please try again.');
     } finally {
       setIsSavingAction(false);
     }
@@ -1275,7 +1418,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
         authorId: currentUser.id,
         ...getCurrentVersionCommentContext(),
         action: 'content_rejected',
-        message: 'Content revision returned with change requests.',
+        message: 'Content Review returned with change requests.',
         sections,
       });
       updateTaskStatus(task.id, 'changes_requested_by_content', 'team_member', [task.createdBy, ...task.handledBy]);
@@ -1541,13 +1684,14 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
             {[
               ['Assigner', creator],
               ['Handled by', handledByNames || 'Not assigned'],
-              ['Current owners', currentOwnerNames || 'Role queue'],
+              ['Current owners', currentOwnerSummary],
               ['Task type', getTaskTypeLabel(task.taskType, appSettings)],
               ['Review mode', getReviewModeLabel(task.reviewMode)],
               ['Workflow', task.workflowSnapshot?.name || 'Default route'],
-              ['Active phase', activeWorkflowPhase?.name || 'Not started'],
-              ...(task.workflowPhaseAvailableAt ? [['Phase available at', new Date(task.workflowPhaseAvailableAt).toLocaleString()]] : []),
-              ...(task.needsContentRevision ? [['Revision assignees', formatUserNames(task.contentRevisionAssigneeIds || [])]] : []),
+              [task.workflowSnapshot ? 'Active phases' : 'Active phase', activeWorkflowPhaseNames || displayedWorkflowPhase?.name || 'Not started'],
+              ...(voiceOverAssignmentSummary ? [['Voice Over', voiceOverAssignmentSummary]] : []),
+              ...(!task.workflowSnapshot && task.workflowPhaseAvailableAt ? [['Phase available at', new Date(task.workflowPhaseAvailableAt).toLocaleString()]] : []),
+              ...(!task.workflowSnapshot && includesContentReview ? [['Content Review assignees', formatUserNames(task.contentRevisionAssigneeIds || [])]] : []),
               ...(task.activeWorkSetById ? [['Made active by', getUserName(task.activeWorkSetById) + (task.activeWorkSetAt ? ` on ${new Date(task.activeWorkSetAt).toLocaleString()}` : '')]] : []),
               ...(task.activeWorkBy ? [['Started by', getUserName(task.activeWorkBy) + (task.activeWorkStartedAt ? ` at ${new Date(task.activeWorkStartedAt).toLocaleString()}` : '')]] : []),
               ...(task.activeWorkFinishedById ? [['Finished by', getUserName(task.activeWorkFinishedById) + (task.activeWorkFinishedAt ? ` at ${new Date(task.activeWorkFinishedAt).toLocaleString()}` : '')]] : []),
@@ -1557,16 +1701,67 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                 <span className="block break-words text-sm font-black leading-snug text-slate-900">{value}</span>
               </div>
             ))}
-            {isLeaderboard && activeWorkflowPhase && activeWorkflowPhase.skipRule === 'manual' && !['approved_by_art_director', 'completed', 'archived'].includes(task.status) && (
-              <button
-                type="button"
-                onClick={() => skipWorkflowPhase(task.id)}
-                className="col-span-1 sm:col-span-2 inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black uppercase tracking-wide text-slate-700 hover:bg-slate-50"
-              >
-                Skip phase (manual)
-              </button>
-            )}
           </div>
+
+          {displayedWorkflowPhase && task.workflowSnapshot && isMandatoryFinalReview(displayedWorkflowPhase) && (
+            <div role="note" aria-label="Art Director review outcome" className="mb-5 rounded-xl border border-violet-200 bg-violet-50 p-4 text-sm text-violet-900">
+              <p className="font-black">Art Director review outcome</p>
+              <p className="mt-1 text-xs leading-relaxed">{getWorkflowSuccessors(task.workflowSnapshot, displayedWorkflowPhase.id).length
+                ? 'Approve completes this review and continues to the next configured workflow step. Return for Changes sends the task back for revisions and another review.'
+                : 'Approve completes Final Review and marks the task approved, ready for posting. Return for Changes sends the task back for revisions and another review. No separate approval step is needed.'}</p>
+            </div>
+          )}
+          {canManageTaskStepOmissions && workflowOmissionPhases.length > 0 && (
+            <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-3">
+                <h3 className="text-sm font-black text-slate-900">Task workflow steps</h3>
+                <p className="mt-1 text-xs font-semibold text-slate-500">Omit an active or upcoming step for this task. Completed work and required Final Review stay protected.</p>
+              </div>
+              {workflowOmissionError && <p role="alert" className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700">{workflowOmissionError}</p>}
+              <div className="space-y-2">
+                {workflowOmissionPhases.map(phase => {
+                  const omitted = (task.workflowSkippedPhaseIds || []).includes(phase.id);
+                  const latestHistoryAction = (task.workflowPhaseHistory || []).filter(entry => entry.phaseId === phase.id).at(-1)?.action;
+                  const completed = latestHistoryAction === 'completed';
+                  const passedOmission = latestHistoryAction === 'skipped';
+                  const active = activeWorkflowPhaseIds.includes(phase.id);
+                  const eligibility = canChangeWorkflowPhaseOmission(task, phase, !omitted);
+                  const stateLabel = isMandatoryFinalReview(phase) ? 'Required'
+                    : completed ? 'Completed'
+                      : passedOmission ? 'Omitted · passed'
+                        : omitted ? 'Omitted'
+                          : active ? 'Active'
+                            : phase.disabled ? 'Disabled in template'
+                              : 'Upcoming';
+                  return (
+                    <div key={phase.id} className={`rounded-xl border px-3 py-2.5 ${omitted || phase.disabled ? 'border-slate-200 bg-slate-50 opacity-75' : 'border-slate-200 bg-white'}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-black text-slate-900">{phase.name}</div>
+                          <div className="mt-0.5 text-[10px] font-black uppercase tracking-wide text-slate-500">{stateLabel}</div>
+                        </div>
+                        {eligibility.ok && !phase.disabled && (
+                          <button
+                            type="button"
+                            aria-label={`${omitted ? 'Include' : 'Omit'} ${phase.name}`}
+                            onClick={() => {
+                              setWorkflowOmissionError('');
+                              const result = setWorkflowPhaseOmitted(task.id, phase.id, !omitted);
+                              if (!result.ok) setWorkflowOmissionError(result.message || 'This workflow step cannot be changed.');
+                            }}
+                            className={`rounded-lg border px-3 py-1.5 text-xs font-black ${omitted ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'}`}
+                          >
+                            {omitted ? 'Include step' : 'Omit step'}
+                          </button>
+                        )}
+                      </div>
+                      {!eligibility.ok && !completed && !passedOmission && <p className="mt-1.5 text-xs font-semibold text-slate-500">{eligibility.message}</p>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {canEditTaskBasics && (
             <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1606,7 +1801,17 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                     <div className="grid gap-2 sm:grid-cols-2">
                       <div>
                         <label className="mb-1 block text-[10px] font-black uppercase tracking-wider text-slate-500">Task Type</label>
-                        <CustomSelect value={basicTaskType} onChange={setBasicTaskType} options={getTaskTypeConfigs(appSettings).map(config => ({ value: config.id, label: config.label }))} />
+                        <CustomSelect
+                          value={basicTaskType}
+                          onChange={setBasicTaskType}
+                          options={getTaskTypeConfigs(appSettings).map(config => ({ value: config.id, label: config.label }))}
+                          disabled={Boolean(task.workflowSnapshot)}
+                        />
+                        {task.workflowSnapshot && (
+                          <p className="mt-1 text-[10px] font-bold text-amber-700">
+                            This task type is locked to its saved workflow. Leadership can apply a different workflow below.
+                          </p>
+                        )}
                       </div>
                       <div>
                         <label className="mb-1 block text-[10px] font-black uppercase tracking-wider text-slate-500">Work Date</label>
@@ -1622,7 +1827,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                         )}
                       </div>
                       <div className="sm:col-span-2">
-                        <label className="mb-1 block text-[10px] font-black uppercase tracking-wider text-slate-500">Deadline</label>
+                        <label className="mb-1 block text-[10px] font-black uppercase tracking-wider text-slate-500">Deadline (Africa/Cairo)</label>
                         <input type="datetime-local" value={basicTaskDeadline} onChange={event => setBasicTaskDeadline(event.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500" />
                       </div>
                     </div>
@@ -1685,7 +1890,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
             </div>
             <div className="min-w-0 sm:border-l sm:border-slate-200 sm:pl-4">
               <span className="block text-[11px] uppercase tracking-wider text-slate-400 font-black mb-1">Next Action</span>
-              {task && task.status === 'assigned_work' && task.handledBy.includes(currentUser.id) ? (
+              {task && canUploadCurrentWork ? (
                 <button
                   type="button"
                   onClick={() => {
@@ -1710,29 +1915,48 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
           <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50/60 p-4">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-sm font-black text-slate-900">Reviewers</h3>
+                <h3 className="text-sm font-black text-slate-900">Review responsibility</h3>
                 <p className="mt-1 text-[11px] font-bold text-slate-500">
-                  Names for each review path on this task.
+                  Saved owners and progress for each review step on this task.
                 </p>
               </div>
               <span className="rounded-full border border-blue-200 bg-white px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-blue-700">
-                {reviewerSections.length} paths
+                {reviewSections.length} {reviewSections.length === 1 ? 'step' : 'steps'}
               </span>
             </div>
             <div className="space-y-2">
-              {reviewerSections.map(section => (
-                <div key={`${section.label}-${section.detail}`} className="rounded-lg border border-blue-100 bg-white px-3 py-2">
-                  <div className="flex items-start justify-between gap-3">
+              {reviewSections.map(section => (
+                <div key={section.id} className="rounded-lg border border-blue-100 bg-white px-3 py-2.5">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="text-[10px] font-black uppercase tracking-wider text-blue-500">{section.label}</p>
-                      <p className="mt-0.5 truncate text-xs font-bold text-slate-500">{section.detail}</p>
+                      <p className="text-[10px] font-black uppercase tracking-wider text-blue-500">{section.stage}</p>
+                      <p className="mt-0.5 break-words text-sm font-black text-slate-900">{section.label}</p>
                     </div>
-                    <p className="max-w-[58%] break-words text-right text-xs font-black text-slate-900">{section.names}</p>
+                    <span className={cn(
+                      "rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-wide",
+                      section.tone === 'active' && "border-emerald-200 bg-emerald-50 text-emerald-700",
+                      section.tone === 'delayed' && "border-amber-200 bg-amber-50 text-amber-700",
+                      section.tone === 'complete' && "border-blue-200 bg-blue-50 text-blue-700",
+                      section.tone === 'skipped' && "border-slate-200 bg-slate-100 text-slate-500",
+                      section.tone === 'upcoming' && "border-violet-200 bg-violet-50 text-violet-700",
+                    )}>{section.status}</span>
                   </div>
+                  <div className="mt-2 flex items-start justify-between gap-3 border-t border-slate-100 pt-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">{section.ownerLabel}</span>
+                    <span className="max-w-[66%] break-words text-right text-xs font-black text-slate-900">{section.names}</span>
+                  </div>
+                  {section.approvedNames && (
+                    <div className="mt-1.5 flex items-start justify-between gap-3">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Already approved</span>
+                      <span className="max-w-[66%] break-words text-right text-xs font-bold text-slate-600">{section.approvedNames}</span>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
           </div>
+
+          {canReassignTask && task.workflowSnapshot && <WorkflowOwnerEditor task={task} />}
 
           {canShowWorkflowAdjuster && (
             <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1741,39 +1965,29 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                 <div>
                   <h3 className="text-sm font-black text-slate-900">Workflow Adjuster</h3>
                   <p className="mt-1 text-[11px] font-bold text-slate-500">
-                    Leaderboard users can adjust this task's workflow path, review route, and assigned contributors.
+                    Leadership can adjust this task's workflow and active or future step owners.
                   </p>
                 </div>
               </div>
 
               <div className="space-y-3">
                 {canManageWorkflowDefinitions && workflowOptions.length > 0 && (
-                  <div className="grid gap-3 sm:grid-cols-[1fr,1fr,auto]">
+                  <div className="grid gap-3 sm:grid-cols-[1fr,auto]">
                     <div>
                       <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Workflow</label>
                       <CustomSelect
                         value={managedWorkflowId}
-                        onChange={value => {
-                          setManagedWorkflowId(value);
-                          const workflow = (appSettings.workflows || []).find(item => item.id === value);
-                          setManagedWorkflowPhaseId(workflow?.phases[0]?.id || '');
-                        }}
+                        onChange={setManagedWorkflowId}
                         options={workflowOptions}
                       />
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Continue From Phase</label>
-                      <CustomSelect
-                        value={managedWorkflowPhaseId}
-                        onChange={setManagedWorkflowPhaseId}
-                        options={workflowPhaseOptions}
-                        disabled={workflowPhaseOptions.length === 0}
-                      />
+                      <p className="mt-1 text-[10px] font-bold text-slate-500">
+                        Applying a different workflow starts at its configured first step.
+                      </p>
                     </div>
                     <button
                       type="button"
                       onClick={saveWorkflow}
-                      disabled={!managedWorkflowId || (managedWorkflowId === (task.workflowId || task.workflowSnapshot?.id || '') && managedWorkflowPhaseId === (task.workflowCurrentPhaseId || ''))}
+                      disabled={!managedWorkflowId || managedWorkflowId === (task.workflowId || task.workflowSnapshot?.id || '')}
                       className="self-end rounded-lg bg-slate-900 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300"
                     >
                       Apply Workflow
@@ -1781,7 +1995,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                   </div>
                 )}
 
-                {canManageWorkflowSettings && (
+                {canManageWorkflowSettings && !task.workflowSnapshot && (
                   <div className="grid gap-3 sm:grid-cols-[1fr,auto]">
                     <div>
                       <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Review Route</label>
@@ -1794,35 +2008,10 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                     <button
                       type="button"
                       onClick={saveReviewRoute}
-                      disabled={managedReviewMode === task.reviewMode}
+                      disabled={managedReviewMode === normalizeReviewMode(task.reviewMode)}
                       className="self-end rounded-lg bg-indigo-600 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                     >
                       Save Route
-                    </button>
-                  </div>
-                )}
-
-                {canReassignTask && activeWorkflowPhase && (
-                  <div className="space-y-2 border-t border-slate-100 pt-3">
-                    <div>
-                      <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Current step owner</label>
-                      <p className="mt-1 text-xs font-bold text-slate-600">
-                        {activeWorkflowPhase.name}. Only these people can act on the active step.
-                      </p>
-                    </div>
-                    <UserMultiSelect
-                      users={userList.filter(user => user.id !== 'guest')}
-                      selectedIds={managedActivePhaseAssigneeIds}
-                      onChange={setManagedActivePhaseAssigneeIds}
-                      layout="single"
-                    />
-                    <button
-                      type="button"
-                      onClick={saveActivePhaseAssignees}
-                      disabled={(managedActivePhaseAssigneeIds || []).slice().sort().join('|') === (task.workflowNodeAssigneeIds?.[activeWorkflowPhase.id] || currentOwnerIds).slice().sort().join('|')}
-                      className="w-full rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-black uppercase tracking-wide text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                    >
-                      Save Current Step Owner
                     </button>
                   </div>
                 )}
@@ -1872,7 +2061,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                   </>
                 )}
 
-                {canReassignTask && task.needsContentRevision && (
+                {canReassignTask && includesContentReview && (
                   <>
                     <div className="space-y-2 pt-2 border-t border-slate-100">
                       <div>
@@ -2181,7 +2370,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
               <form onSubmit={handleContentReject} className="space-y-3 rounded-2xl border border-rose-100 bg-rose-50/40 p-3">
                 <div>
                   <h3 className="text-sm font-black text-rose-900">Request Content Changes</h3>
-                  <p className="mt-1 text-xs font-semibold text-rose-700/70">Add notes and optional screens for what needs content revision.</p>
+                  <p className="mt-1 text-xs font-semibold text-rose-700/70">Add notes and optional screens for what needs changes in Content Review.</p>
                 </div>
                 {renderReviewNotes()}
                 {actionError && <p className="text-sm font-bold text-rose-600">{actionError}</p>}
@@ -2219,7 +2408,9 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                   ? `Approve ${activeWorkflowPhase?.name || 'Phase'}`
                   : task.status === 'waiting_reviewer_full_review' ? 'Approve & Send to Art Director' : 'Send to Art Director'}
               </button>
-              {(task.workflowSnapshot || task.reviewMode === 'first_review') && task.status !== 'draft' && (
+              {(task.workflowSnapshot
+                ? activeWorkflowPhaseStatus !== 'draft'
+                : task.reviewMode === 'first_review' && task.status !== 'draft') && (
                 <form onSubmit={handleRequestChanges} className="space-y-3 rounded-2xl border border-rose-100 bg-rose-50/40 p-3">
                   <div>
                     <h3 className="text-sm font-black text-rose-900">Request Edits</h3>
@@ -2239,13 +2430,15 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
             </>
           )}
 
-          {(currentUser.role === 'reviewer' || currentUser.role === 'team_leader') && task.status === 'sent_to_art_director' && (
+          {!task.workflowSnapshot && (currentUser.role === 'reviewer' || currentUser.role === 'team_leader') && task.status === 'sent_to_art_director' && (
             <div className="text-sm font-medium text-gray-500 flex items-center gap-2 justify-center py-2">
               <Check className="w-4 h-4" /> Sent to Art Director
             </div>
           )}
 
-          {canActAsArtDirector && ['sent_to_art_director', 'waiting_art_director_approval', 'reviewer_approved'].includes(task.status) && (
+          {canActAsArtDirector && (task.workflowSnapshot
+            ? activeWorkflowPhaseStatus === 'sent_to_art_director'
+            : ['sent_to_art_director', 'waiting_art_director_approval', 'reviewer_approved'].includes(task.status)) && (
             <>
               <button
                 onClick={handleADApprove}
@@ -2262,7 +2455,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                 }}
                 className="w-full bg-white hover:bg-rose-50 text-rose-600 font-bold py-3 px-4 rounded-xl border border-rose-200 shadow-sm transition-all focus:ring-4 focus:ring-rose-100 flex items-center justify-center gap-2"
               >
-                <X className="w-5 h-5" /> Reject
+                <X className="w-5 h-5" /> Return for Changes
               </button>
             </>
           )}
@@ -2285,7 +2478,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                 }}
                 className="w-full bg-white hover:bg-gray-50 text-gray-700 font-semibold py-2 px-4 rounded-lg border border-gray-200 shadow-sm transition-all text-sm"
               >
-                Reject / Reopen
+                Return / Reopen
               </button>
             </>
           )}
@@ -2300,7 +2493,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
             </button>
           )}
 
-          {['admin', 'team_leader', 'marketing_manager', 'reviewer', 'art_director'].includes(currentUser.role) &&
+          {canEditCurrentTask && ['admin', 'team_leader', 'marketing_manager', 'reviewer', 'art_director'].includes(currentUser.role) &&
            !['approved', 'completed', 'archived', 'approved_by_art_director'].includes(task.status) && (
             <button
               onClick={() => toggleTaskHold(task.id)}
@@ -2355,7 +2548,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
             })}
           </div>
 
-          {currentVersion && (
+          {canEditCurrentTask && currentVersion && (
             <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <h3 className="text-[11px] font-black uppercase tracking-wider text-slate-400">Manage Uploads in Version {currentVersion.versionNumber}</h3>
               <p className="mt-1 text-xs font-semibold text-slate-500">Edit, remove, or add uploaded files without deleting the task.</p>
@@ -2426,7 +2619,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                 New comments attach to V{currentVersion?.versionNumber || 1}
               </span>
             </div>
-            <form onSubmit={handleFollowUpSubmit} className="mb-4 space-y-3 rounded-xl border border-indigo-100 bg-white p-4 shadow-sm">
+            {canEditCurrentTask && <form onSubmit={handleFollowUpSubmit} className="mb-4 space-y-3 rounded-xl border border-indigo-100 bg-white p-4 shadow-sm">
               <textarea
                 value={followUpMessage}
                 onChange={event => setFollowUpMessage(event.target.value)}
@@ -2443,7 +2636,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
               >
                 <Send className="h-4 w-4" /> {isSavingAction ? 'Saving...' : 'Add Comment'}
               </button>
-            </form>
+            </form>}
 
             <div className="space-y-3">
               {parentComments.length === 0 && (
@@ -2534,7 +2727,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                         </div>
                       ) : (
                         <>
-                          {comment.message && <p className="mb-3 text-sm font-medium text-slate-700"><LinkifiedText text={comment.message} /></p>}
+                          {comment.message && <p className="mb-3 text-sm font-medium text-slate-700"><LinkifiedText text={formatTaskSystemMessage(comment.message, comment.action)} /></p>}
 
                           {comment.sections.length > 0 && (
                             <div className="space-y-3">
@@ -2555,7 +2748,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
 
                       {(!comment.isDeleted || canSeeHistory) && !isEditing && (
                         <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-                          {!comment.isDeleted && (
+                          {!comment.isDeleted && canEditCurrentTask && (
                             <button
                               type="button"
                               onClick={() => {
@@ -2610,7 +2803,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                               <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">
                                 Edited by {users[version.editedBy]?.name || version.editedBy} at {new Date(version.editedAt).toLocaleString()} · Original {getCommentVersionLabel(comment)}
                               </p>
-                              {version.previousMessage && <p className="text-xs font-semibold text-slate-600">Previous: <LinkifiedText text={version.previousMessage} /></p>}
+                              {version.previousMessage && <p className="text-xs font-semibold text-slate-600">Previous: <LinkifiedText text={formatTaskSystemMessage(version.previousMessage, comment.action)} /></p>}
                               {version.previousSections.length > 0 && (
                                 <div className="mt-2 space-y-1">
                                   {version.previousSections.map(section => (
@@ -2625,7 +2818,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                               <p className="text-xs font-semibold text-slate-600">
                                 Deleted by {users[comment.deletedBy || '']?.name || comment.deletedBy || 'Unknown'} at {new Date(comment.deletedAt).toLocaleString()}
                               </p>
-                              {comment.message && <p className="mt-2 text-xs font-semibold text-slate-700">Deleted content: <LinkifiedText text={comment.message} /></p>}
+                              {comment.message && <p className="mt-2 text-xs font-semibold text-slate-700">Deleted content: <LinkifiedText text={formatTaskSystemMessage(comment.message, comment.action)} /></p>}
                               {comment.sections.length > 0 && (
                                 <div className="mt-2 space-y-1">
                                   {comment.sections.map(section => (
@@ -2640,7 +2833,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
                     </div>
 
                     {/* Reply Input Form */}
-                    {replyingToCommentId === comment.id && (
+                    {canEditCurrentTask && replyingToCommentId === comment.id && (
                       <form
                         id={`reply-form-${comment.id}`}
                         onSubmit={(e) => {
@@ -2875,7 +3068,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
         <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="max-h-[92vh] w-full max-w-lg overflow-hidden rounded-2xl border border-rose-200 bg-white shadow-xl">
             <div className="p-6 border-b border-rose-100 bg-rose-50 flex justify-between items-center">
-              <h3 className="text-lg font-black text-rose-900 flex items-center gap-2"><AlertCircle className="w-5 h-5"/> Reject Task</h3>
+              <h3 className="text-lg font-black text-rose-900 flex items-center gap-2"><AlertCircle className="w-5 h-5"/> Return Task</h3>
               <button
                 onClick={() => {
                   setActionError('');
@@ -2942,7 +3135,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
               {actionError && <p className="text-sm font-bold text-rose-600">{actionError}</p>}
               <div className="pt-2">
                 <button type="submit" disabled={!canSubmitADReject || isSavingAction} className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 px-4 rounded-xl shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-slate-300">
-                  {isSavingAction ? 'Saving...' : 'Reject and Return'}
+                  {isSavingAction ? 'Saving...' : 'Return for Changes'}
                 </button>
               </div>
             </form>

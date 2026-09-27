@@ -1,15 +1,25 @@
+import { WorkflowRoadmap } from './WorkflowRoadmap';
+import { buildActualWorkEntries, cairoDate, mergeWorkReportEntries } from '../lib/dailyReportWork';
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle2, Clock, Eye, FileText, Send, XCircle } from 'lucide-react';
 import { useAppStore } from '../lib/store';
-import { DailyReport, Task, User } from '../lib/types';
+import { DailyReport, DailyReportEntry, Task, User } from '../lib/types';
 import { cn } from '../lib/utils';
 import { getStatusInfo } from '../lib/taskUtils';
-import { getCurrentOwnerUserIds } from '../lib/workflowUtils';
 import { CustomSelect } from './CustomSelect';
 import { ThemedDatePicker } from './ThemedDatePicker';
+import {
+  canEditDailyReport,
+  canViewDailyReport,
+  getDailyReportReceiverIds,
+  getReportTeamKeys,
+  isReportExempt,
+  isReportLeader,
+  isSeniorReporter,
+} from '../lib/reportPolicy';
+import { canViewTask } from '../lib/taskPolicy';
 
-type ReportBucket = 'approved' | 'rejected' | 'waiting_review' | 'active' | 'not_started';
-type ReportInspectorRole = 'team_leader' | 'manager' | 'marketing_manager' | 'art_director' | 'admin';
+type ReportBucket = 'approved' | 'rejected' | 'waiting_review' | 'active' | 'not_started' | 'recorded';
 
 type ReportRow = {
   task: Task;
@@ -19,6 +29,7 @@ type ReportRow = {
 };
 
 const bucketStyles: Record<ReportBucket, { label: string; icon: React.ElementType; className: string }> = {
+  recorded: { label: 'Work Recorded', icon: CheckCircle2, className: 'border-indigo-200 bg-indigo-50 text-indigo-800' },
   approved: { label: 'Finished / Approved', icon: CheckCircle2, className: 'border-emerald-200 bg-emerald-50 text-emerald-800' },
   rejected: { label: 'Finished / Returned', icon: XCircle, className: 'border-rose-200 bg-rose-50 text-rose-800' },
   waiting_review: { label: 'Finished / Waiting Review', icon: FileText, className: 'border-blue-200 bg-blue-50 text-blue-800' },
@@ -27,6 +38,7 @@ const bucketStyles: Record<ReportBucket, { label: string; icon: React.ElementTyp
 };
 
 const bucketCountLabels: Record<ReportBucket, string> = {
+  recorded: 'Recorded',
   approved: 'Approved',
   rejected: 'Returned',
   waiting_review: 'Waiting Review',
@@ -34,33 +46,17 @@ const bucketCountLabels: Record<ReportBucket, string> = {
   not_started: 'Not Started',
 };
 
-const reportInspectorRoles = new Set<ReportInspectorRole>([
-  'team_leader',
-  'manager',
-  'marketing_manager',
-  'art_director',
-  'admin',
-]);
-
-function todayValue() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-}
-
-function durationMinutesBetweenIso(start?: string | null, end?: string | null) {
-  if (!start) return null;
-  const startDate = new Date(start);
-  const endDate = end ? new Date(end) : new Date();
-  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return null;
-  return Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / 60000));
-}
+function todayValue() { return cairoDate(); }
 
 function classifyTask(task: Task): ReportBucket {
+  const entry = (task as Task & { reportEntry?: DailyReportEntry }).reportEntry;
+  if (entry?.source === 'manual') return 'recorded';
+  if (entry?.workState === 'active') return 'active';
   if (['approved', 'completed', 'approved_by_art_director'].includes(task.status)) return 'approved';
   if (['changes_requested_by_reviewer', 'changes_requested_by_art_director', 'changes_requested_by_content', 'rejected'].includes(task.status)) return 'rejected';
   if (task.activeWorkStartedAt && !task.activeWorkFinishedAt) return 'active';
   if (['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval', 'waiting_content_revision'].includes(task.status)) return 'waiting_review';
-  return 'not_started';
+  return entry?.workState === 'finished' ? 'recorded' : 'not_started';
 }
 
 function timeToMinutes(value?: string | null) {
@@ -78,14 +74,9 @@ function formatDurationFromMinutes(minutes: number | null) {
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
-function deriveTeamName(user?: User | null) {
-  const text = `${user?.jobTitle || ''} ${user?.role || ''} ${user?.name || ''}`.toLowerCase();
-  if (text.includes('admin')) return 'Admin';
-  if (text.includes('content') || text.includes('writer') || text.includes('caption') || text.includes('script')) return 'Content Team';
-  if (text.includes('graphic') || text.includes('design') || text.includes('designer') || /\bart\b/.test(text)) return 'Design Team';
-  if (text.includes('video') || text.includes('editor') || text.includes('montage') || text.includes('senior brand')) return 'Video Team';
-  if (text.includes('leader') || text.includes('manager') || text.includes('marketing') || text.includes('reviewer') || text.includes('art_director')) return 'Leadership';
-  return 'Other Team';
+function getTeamLabel(teamKey: string) {
+  if (teamKey === 'other') return 'Other Team';
+  return teamKey;
 }
 
 export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => void }) {
@@ -93,6 +84,7 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
     currentUser,
     users,
     userList,
+    appSettings,
     tasks,
     environment,
     dailyReports,
@@ -101,12 +93,10 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
     sendDailyReport,
   } = useAppStore();
 
-  const isLeadershipReporter = Boolean(currentUser.isAdmin) || reportInspectorRoles.has(currentUser.role as ReportInspectorRole);
-  const isSeniorReporter = /\bsenior\b/i.test(currentUser.jobTitle || '');
-  // Personal reports remain personal. The cross-team showcase is reserved for
-  // leadership roles, rather than every senior contributor. A senior title
-  // always keeps this screen private, even when that account has other admin access.
-  const canInspectTeamReports = isLeadershipReporter && !isSeniorReporter;
+  const currentUserIsSenior = isSeniorReporter(currentUser);
+  const currentUserIsLeader = isReportLeader(currentUser);
+  const currentUserIsExempt = isReportExempt(currentUser);
+  const canInspectTeamReports = currentUserIsSenior || currentUserIsLeader;
   const [selectedDate, setSelectedDate] = useState(todayValue());
   const [showcaseDate, setShowcaseDate] = useState(todayValue());
   const [showcaseMemberId, setShowcaseMemberId] = useState('all');
@@ -116,10 +106,18 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
   const [note, setNote] = useState('');
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
+  const [sideTitle, setSideTitle] = useState('');
+  const [sideStart, setSideStart] = useState('');
+  const [sideEnd, setSideEnd] = useState('');
 
   const selectedUser = currentUser;
   const reportId = `${selectedDate}:${currentUser.id}`;
   const report = dailyReports.find(item => item.id === reportId) || null;
+  const reportUsers = useMemo(() => userList.filter(user => user.id !== 'guest'), [userList]);
+  const canEditOwnReport = canEditDailyReport({ userId: currentUser.id }, currentUser, appSettings);
+  const reportReceiverNames = getDailyReportReceiverIds({ userId: currentUser.id }, appSettings, reportUsers)
+    .map(userId => users[userId]?.name)
+    .filter((name): name is string => Boolean(name));
 
   useEffect(() => {
     setNote(report?.note || '');
@@ -127,31 +125,24 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
     setRowError(null);
   }, [reportId, report?.id, report?.updatedAt]);
 
-  const taskBelongsToUserOnDate = (task: Task, userId: string, date: string) => {
-    if (task.environment !== environment) return false;
-    const involvedIds = new Set([
-      task.createdBy,
-      ...task.handledBy,
-      ...(task.contentRevisionAssigneeIds || []),
-      ...(task.submittedOnBehalfOfIds || []),
-      ...getCurrentOwnerUserIds(task),
-    ]);
-    if (!involvedIds.has(userId)) return false;
-    const taskDate = task.assignmentDate || task.createdAt.slice(0, 10);
-    const activeStartDate = task.activeWorkStartedAt?.slice(0, 10);
-    const activeFinishDate = task.activeWorkFinishedAt?.slice(0, 10);
-    return taskDate === date || activeStartDate === date || activeFinishDate === date;
-  };
-
-  const getReportTasksForUser = (userId: string, date: string) => tasks.filter(task => taskBelongsToUserOnDate(task, userId, date));
+  const entriesFor = (userId: string, date: string, saved = dailyReports.find(item => item.id === `${date}:${userId}`)) =>
+    mergeWorkReportEntries(buildActualWorkEntries(tasks, userId, date, appSettings, reportUsers), saved?.entries);
+  const taskForEntry = (entry: DailyReportEntry): Task => ({
+    ...(tasks.find(task => task.id === entry.taskId) || { id: entry.taskId, createdBy: currentUser.id, handledBy: [], versions: [], comments: [], environment: 'production', createdAt: '', updatedAt: '' }),
+    name: entry.title || tasks.find(task => task.id === entry.taskId)?.name || 'Historical work',
+    code: entry.taskCode || (entry.source === 'manual' ? 'Side work' : entry.taskId),
+    status: entry.taskStatus || 'completed', reportEntry: entry,
+  } as Task);
+  const getReportTasksForUser = (userId: string, date: string) => entriesFor(userId, date).map(taskForEntry);
 
   const reportTasks = useMemo(() => (
     getReportTasksForUser(currentUser.id, selectedDate)
-  ), [tasks, environment, currentUser.id, selectedDate]);
+  ), [tasks, dailyReports, environment, currentUser.id, selectedDate, appSettings, reportUsers]);
 
   const sortedReportTasks = useMemo(() => {
     const bucketOrder: Record<ReportBucket, number> = {
       active: 0,
+      recorded: 1,
       waiting_review: 1,
       not_started: 2,
       approved: 3,
@@ -164,65 +155,41 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
     return reportTasks.reduce<Record<ReportBucket, Task[]>>((acc, task) => {
       acc[classifyTask(task)].push(task);
       return acc;
-    }, { approved: [], rejected: [], waiting_review: [], active: [], not_started: [] });
+    }, { approved: [], rejected: [], waiting_review: [], active: [], not_started: [], recorded: [] });
   }, [reportTasks]);
 
   const effectiveEntryFor = (task: Task, sourceReport = report): ReportRow => {
-    const manual = sourceReport?.entries.find(entry => entry.taskId === task.id);
-    const startTime = manual?.startTime || task.activeWorkStartedAt?.slice(11, 16) || '';
-    const endTime = manual?.endTime || task.activeWorkFinishedAt?.slice(11, 16) || '';
-    const manualMinutes = manual?.durationMinutes;
-    const derivedMinutes = (() => {
-      if (manual?.startTime && manual?.endTime) {
-        const s = timeToMinutes(manual.startTime);
-        const e = timeToMinutes(manual.endTime);
-        if (s !== null && e !== null && e > s) return e - s;
-      }
-      if (manual?.startTime) return null;
-      if (task.activeWorkStartedAt) return durationMinutesBetweenIso(task.activeWorkStartedAt, task.activeWorkFinishedAt);
-      return null;
-    })();
-    return { task, startTime, endTime, durationMinutes: manualMinutes ?? derivedMinutes };
+    const entry = (task as Task & { reportEntry?: DailyReportEntry }).reportEntry || sourceReport?.entries.find(entry => entry.taskId === task.id);
+    return { task, startTime: entry?.startTime || '', endTime: entry?.endTime || '', durationMinutes: entry?.durationMinutes ?? null };
   };
-
-  const rowsForReport = (sourceReport: DailyReport) => {
-    const rowsFromSavedEntries = sourceReport.entries
-      .map(entry => {
-        const task = tasks.find(item => item.id === entry.taskId);
-        return task ? effectiveEntryFor(task, sourceReport) : null;
-      })
-      .filter(Boolean) as ReportRow[];
-
-    if (rowsFromSavedEntries.length > 0) return rowsFromSavedEntries;
-    return getReportTasksForUser(sourceReport.userId, sourceReport.date).map(task => effectiveEntryFor(task, sourceReport));
-  };
-
+  const rowsForReport = (sourceReport: DailyReport) => (sourceReport.sentAt ? sourceReport.entries : entriesFor(sourceReport.userId, sourceReport.date, sourceReport)).map(entry => effectiveEntryFor(taskForEntry(entry), sourceReport));
   const saveReport = (send = false) => {
-    const now = new Date().toISOString();
-    const entries = sortedReportTasks.map(task => {
-      const row = effectiveEntryFor(task);
-      return {
-        taskId: task.id,
-        startTime: row.startTime || null,
-        endTime: row.endTime || null,
-        durationMinutes: row.durationMinutes,
-      };
-    });
-    const updated = upsertDailyReport({ date: selectedDate, userId: currentUser.id, note, entries });
-    setSavedAt(now);
-    if (updated && send && !updated.sentAt) {
-      sendDailyReport(updated.id);
-    }
+    if (!canEditOwnReport) return;
+    const entries = entriesFor(currentUser.id, selectedDate);
+    if (send && !entries.length && !note.trim()) { setRowError('Add work or a report note before sending.'); return; }
+    upsertDailyReport({ date: selectedDate, userId: currentUser.id, note, entries });
+    setSavedAt(new Date().toISOString());
+    if (send && !report?.sentAt) sendDailyReport(reportId);
+  };
+  const addSideWork = () => {
+    if (!sideTitle.trim()) return;
+    if (sideStart && sideEnd && sideEnd < sideStart) { setRowError('End time must be after start time.'); return; }
+    const duration = sideStart && sideEnd ? timeToMinutes(sideEnd)! - timeToMinutes(sideStart)! : null;
+    const entry: DailyReportEntry = { taskId: `manual:${crypto.randomUUID()}`, title: sideTitle.trim(), source: 'manual', taskStatus: 'completed', workState: 'finished', startTime: sideStart || null, endTime: sideEnd || null, durationMinutes: duration };
+    upsertDailyReport({date:selectedDate,userId:currentUser.id,note,entries:[...entriesFor(currentUser.id,selectedDate),entry]});
+    setSideTitle('');setSideStart('');setSideEnd('');setRowError(null);
   };
 
   const handleStartChange = (taskId: string, value: string) => {
+    if (!canEditOwnReport) return;
     setRowError(null);
     upsertDailyReportEntry(reportId, taskId, { startTime: value || null });
   };
 
   const handleEndChange = (taskId: string, value: string) => {
+    if (!canEditOwnReport) return;
     setRowError(null);
-    const task = tasks.find(t => t.id === taskId);
+    const task = reportTasks.find(t => t.id === taskId);
     if (!task) return;
     const effective = effectiveEntryFor(task);
     const startMinutes = timeToMinutes(effective.startTime);
@@ -234,35 +201,47 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
     upsertDailyReportEntry(reportId, taskId, { endTime: value || null });
   };
 
-  const reportUsers = useMemo(() => userList.filter(user => user.id !== 'guest'), [userList]);
-  const canInspectReportOwner = (owner: User) => {
-    if (owner.id === currentUser.id) return true;
-    if (canInspectTeamReports) return true;
-    return false;
-  };
+  const visibleShowcaseReports = useMemo(() => dailyReports.filter(item => (
+    item.date === showcaseDate &&
+    Boolean(item.sentAt) &&
+    item.userId !== 'guest' &&
+    item.userId !== currentUser.id &&
+    canViewDailyReport(item, currentUser, appSettings, reportUsers)
+  )), [dailyReports, showcaseDate, currentUser, appSettings, reportUsers]);
   const inspectableReportUsers = useMemo(
-    () => reportUsers.filter(canInspectReportOwner),
-    [reportUsers, currentUser.id, currentUser.jobTitle, currentUser.role, currentUser.isAdmin],
+    () => {
+      const reportOwnerIds = new Set(visibleShowcaseReports.map(item => item.userId));
+      return reportUsers.filter(user => reportOwnerIds.has(user.id));
+    },
+    [reportUsers, visibleShowcaseReports],
   );
   const teamOptions = useMemo(() => {
-    return Array.from(new Set(inspectableReportUsers.map(user => deriveTeamName(user)))).sort();
+    return Array.from(new Set<string>(inspectableReportUsers.flatMap(user => getReportTeamKeys(user))))
+      .sort()
+      .map(teamKey => ({ value: teamKey, label: getTeamLabel(teamKey) }));
   }, [inspectableReportUsers]);
+
+  useEffect(() => {
+    if (showcaseMemberId !== 'all' && !inspectableReportUsers.some(user => user.id === showcaseMemberId)) {
+      setShowcaseMemberId('all');
+    }
+    if (showcaseTeam !== 'all' && !teamOptions.some(option => option.value === showcaseTeam)) {
+      setShowcaseTeam('all');
+    }
+  }, [inspectableReportUsers, showcaseMemberId, showcaseTeam, teamOptions]);
 
   const showcaseGroups = useMemo(() => {
     const search = showcaseSearch.trim().toLowerCase();
-    const sentReports = dailyReports
-      .filter(item => item.date === showcaseDate && item.sentAt)
-      .filter(item => item.userId !== 'guest')
+    const sentReports = visibleShowcaseReports
       .filter(item => showcaseMemberId === 'all' || item.userId === showcaseMemberId);
 
-    const grouped = new Map<string, Array<{ report: DailyReport; user: User; rows: ReportRow[] }>>();
+    const grouped = new Map<string, { label: string; reports: Array<{ report: DailyReport; user: User; rows: ReportRow[] }> }>();
 
     sentReports.forEach(item => {
       const user = users[item.userId];
       if (!user) return;
-      if (!canInspectReportOwner(user)) return;
-      const team = deriveTeamName(user);
-      if (showcaseTeam !== 'all' && team !== showcaseTeam) return;
+      const teamKeys = getReportTeamKeys(user);
+      if (showcaseTeam !== 'all' && !teamKeys.includes(showcaseTeam)) return;
 
       const filteredRows = rowsForReport(item).filter(row => {
         if (showcaseStatus !== 'all' && classifyTask(row.task) !== showcaseStatus) return false;
@@ -271,18 +250,24 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
       });
 
       if (filteredRows.length === 0 && (showcaseStatus !== 'all' || search)) return;
-      const next = grouped.get(team) || [];
-      next.push({ report: item, user, rows: filteredRows });
-      grouped.set(team, next);
+      const normalizedTeamKeys = teamKeys.length > 0 ? [...teamKeys].sort() : ['other'];
+      const groupKey = normalizedTeamKeys.join('|');
+      const group = grouped.get(groupKey) || {
+        label: normalizedTeamKeys.map(getTeamLabel).join(' / '),
+        reports: [],
+      };
+      group.reports.push({ report: item, user, rows: filteredRows });
+      grouped.set(groupKey, group);
     });
 
     return Array.from(grouped.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([team, reports]) => ({
+      .sort(([, a], [, b]) => a.label.localeCompare(b.label))
+      .map(([team, group]) => ({
         team,
-        reports: reports.sort((a, b) => a.user.name.localeCompare(b.user.name)),
+        label: group.label,
+        reports: group.reports.sort((a, b) => a.user.name.localeCompare(b.user.name)),
       }));
-  }, [dailyReports, showcaseDate, showcaseMemberId, showcaseTeam, showcaseStatus, showcaseSearch, users, tasks, environment, currentUser.id, currentUser.jobTitle, currentUser.role, currentUser.isAdmin]);
+  }, [visibleShowcaseReports, showcaseMemberId, showcaseTeam, showcaseStatus, showcaseSearch, users, tasks, environment]);
 
   const renderTaskRows = (rows: ReportRow[], viewer: User, readOnly = false) => (
     <div className="overflow-x-auto">
@@ -308,11 +293,17 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
             const meta = bucketStyles[bucket];
             const Icon = meta.icon;
             const statusInfo = getStatusInfo(row.task, viewer.role, users);
+            const canOpenTask = tasks.some(task => task.id === row.task.id) && canViewTask(row.task, currentUser, appSettings, reportUsers);
             return (
-              <tr key={row.task.id} className="cursor-pointer transition-colors hover:bg-slate-50/60" onClick={() => onOpenTask(row.task.id)}>
+              <tr
+                key={row.task.id}
+                className={cn(canOpenTask && 'cursor-pointer transition-colors hover:bg-slate-50/60')}
+                onClick={canOpenTask ? () => onOpenTask(row.task.id) : undefined}
+              >
                 <td className="p-3 align-top">
                   <p className="text-sm font-black text-slate-900">{row.task.name}</p>
                   <p className="mt-0.5 text-[11px] font-bold text-slate-500">{row.task.code}</p>
+                  {tasks.find(task => task.id === row.task.id) && <WorkflowRoadmap task={tasks.find(task => task.id === row.task.id)!} />}
                 </td>
                 <td className="p-3 align-top">
                   {readOnly ? (
@@ -320,6 +311,7 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
                   ) : (
                     <input
                       type="time"
+                      aria-label={`Start time for ${row.task.name}`}
                       value={row.startTime}
                       onClick={event => event.stopPropagation()}
                       onChange={event => handleStartChange(row.task.id, event.target.value)}
@@ -332,7 +324,8 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
                     <span className="text-xs font-bold text-slate-700">{row.endTime || '-'}</span>
                   ) : (
                     <input
-                      type="time"
+                      type={row.endTime === '24:00' ? 'text' : 'time'}
+                      aria-label={`End time for ${row.task.name}`}
                       value={row.endTime}
                       onClick={event => event.stopPropagation()}
                       onChange={event => handleEndChange(row.task.id, event.target.value)}
@@ -350,7 +343,7 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
                   <p className="mt-1 text-[10px] font-bold text-slate-500">{statusInfo.label}</p>
                 </td>
                 <td className="p-3 align-top text-right">
-                  <button
+                  {canOpenTask ? <button
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation();
@@ -359,7 +352,9 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
                     className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-black uppercase tracking-wide text-slate-600 hover:bg-slate-50"
                   >
                     <Eye className="h-3 w-3" /> View
-                  </button>
+                  </button> : (
+                    <span className="text-[10px] font-black uppercase tracking-wide text-slate-400">Historical record</span>
+                  )}
                 </td>
               </tr>
             );
@@ -374,19 +369,28 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h2 className="text-3xl font-black tracking-tight text-slate-950">Daily Reports</h2>
-          <p className="mt-1 text-sm font-semibold text-slate-500">Auto-filled from assigned work, review tasks, and active-work tracking.</p>
+          <p className="mt-1 text-sm font-semibold text-slate-500">Recorded work and manual side work. Times use Africa/Cairo. Review reminder at 17:15; automatic submission at 17:29 on working days.</p>
         </div>
-        <div className="w-44">
+        {!currentUserIsExempt && <div className="w-44">
           <label className="mb-1 block text-[10px] font-black uppercase tracking-wider text-slate-400">Report date</label>
           <ThemedDatePicker value={selectedDate} onChange={setSelectedDate} />
-        </div>
+        </div>}
       </div>
 
+      {currentUserIsExempt ? (
+        <section className="rounded-2xl border border-indigo-200 bg-indigo-50 p-5 text-indigo-900 shadow-sm">
+          <h3 className="text-lg font-black">Daily report submission is not required for your role.</h3>
+          <p className="mt-1 text-sm font-semibold text-indigo-700">Use the submitted reports below to review the teams that report to you.</p>
+        </section>
+      ) : <>
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-lg font-black text-slate-950">{selectedUser.name}</h3>
             <p className="text-xs font-bold text-slate-500">{reportTasks.length} tasks found for this report day</p>
+            <p className="mt-1 text-[11px] font-semibold text-slate-400">
+              {reportReceiverNames.length > 0 ? `Reports go to ${reportReceiverNames.join(', ')}.` : 'No reporting recipient is currently assigned.'}
+            </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => saveReport(false)} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black uppercase tracking-wide text-slate-700 hover:bg-slate-50">Save Edits</button>
@@ -425,12 +429,22 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
             </ul>
           </details>
         )}
-        {report?.sentAt && (
+        {(
           <div className="space-y-2">
-            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Correction note after sending</label>
-            <textarea value={note} onChange={event => setNote(event.target.value)} rows={4} placeholder="Explain what changed after the report was sent..." className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500" />
+            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Report note / correction</label>
+            <textarea value={note} onChange={event => setNote(event.target.value)} rows={4} placeholder="Add context or explain a correction..." className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500" />
           </div>
         )}
+      </section>
+
+      <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5">
+        <h3 className="text-sm font-black">Add side work</h3>
+        <div className="grid gap-3 sm:grid-cols-4">
+          <input aria-label="Side work description" value={sideTitle} onChange={event=>setSideTitle(event.target.value)} placeholder="Meeting, research, or other work" className="min-w-0 rounded-lg border p-2 text-sm" />
+          <input aria-label="Side work start time" type="time" value={sideStart} onChange={event=>setSideStart(event.target.value)} className="min-w-0 rounded-lg border p-2 text-sm" />
+          <input aria-label="Side work end time" type="time" value={sideEnd} onChange={event=>setSideEnd(event.target.value)} className="min-w-0 rounded-lg border p-2 text-sm" />
+          <button onClick={addSideWork} disabled={!sideTitle.trim()} className="rounded-lg bg-indigo-600 p-2 text-sm font-bold text-white disabled:opacity-40">Add Side Work</button>
+        </div>
       </section>
 
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -450,13 +464,18 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
         </div>
         {renderTaskRows(sortedReportTasks.map(task => effectiveEntryFor(task)), currentUser)}
       </div>
+      </>}
 
       {canInspectTeamReports && (
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
             <div>
-              <h3 className="text-lg font-black text-slate-950">Leaderboard Report Showcase</h3>
-              <p className="mt-1 text-xs font-bold text-slate-500">Inspect submitted reports without changing who owns or writes your personal daily report.</p>
+              <h3 className="text-lg font-black text-slate-950">{currentUserIsSenior ? 'Team Report Showcase' : 'Leadership Report Showcase'}</h3>
+              <p className="mt-1 text-xs font-bold text-slate-500">
+                {currentUserIsSenior
+                  ? 'Inspect submitted reports from the members assigned to you.'
+                  : 'Inspect submitted reports available to your leadership role.'}
+              </p>
             </div>
             <div className="grid w-full gap-3 md:grid-cols-5">
               <div>
@@ -477,7 +496,7 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
                 <CustomSelect
                   value={showcaseTeam}
                   onChange={setShowcaseTeam}
-                  options={[{ value: 'all', label: 'All Teams' }, ...teamOptions.map(team => ({ value: team, label: team }))]}
+                  options={[{ value: 'all', label: 'All Teams' }, ...teamOptions]}
                   buttonClassName="h-11 rounded-xl px-3 py-2 text-sm font-black"
                 />
               </div>
@@ -512,7 +531,7 @@ export function DailyReports({ onOpenTask }: { onOpenTask: (taskId: string) => v
               <div key={group.team} className="overflow-hidden rounded-xl border border-slate-200">
                 <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
                   <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">{showcaseDate}</p>
-                  <h4 className="text-base font-black text-slate-950">{group.team}</h4>
+                  <h4 className="text-base font-black text-slate-950">{group.label}</h4>
                 </div>
                 <div className="divide-y divide-slate-200">
                   {group.reports.map(({ report: item, user, rows }) => (

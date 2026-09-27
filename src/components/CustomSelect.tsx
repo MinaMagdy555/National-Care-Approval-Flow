@@ -54,19 +54,33 @@ export function CustomSelect({ options, value, onChange, placeholder, className,
       if (!button) return;
 
       const rect = button.getBoundingClientRect();
-      const menuWidth = Math.max(rect.width, 200);
       const viewportPadding = 12;
+      const menuWidth = Math.min(Math.max(rect.width, 200), window.innerWidth - viewportPadding * 2);
       const left = Math.min(
         Math.max(rect.right - menuWidth, viewportPadding),
         window.innerWidth - menuWidth - viewportPadding
       );
+      const gap = 4;
+      const availableBelow = window.innerHeight - rect.bottom - viewportPadding - gap;
+      const availableAbove = rect.top - viewportPadding - gap;
+      const maximumMenuHeight = Math.max(80, Math.min(320, window.innerHeight - viewportPadding * 2));
+      const contentHeight = Math.min(menuRef.current?.scrollHeight || options.length * 44 + 8, maximumMenuHeight);
+      const opensAbove = availableBelow < contentHeight && availableAbove > availableBelow;
+      const availableHeight = Math.max(80, opensAbove ? availableAbove : availableBelow);
+      const renderedHeight = Math.min(contentHeight, availableHeight);
+      const top = opensAbove
+        ? Math.max(viewportPadding, rect.top - gap - renderedHeight)
+        : Math.min(rect.bottom + gap, window.innerHeight - viewportPadding - renderedHeight);
 
       setMenuStyle({
         position: 'fixed',
-        top: rect.bottom + 4,
+        top,
         left,
         width: rect.width,
         minWidth: 200,
+        maxWidth: `calc(100vw - ${viewportPadding * 2}px)`,
+        maxHeight: Math.min(maximumMenuHeight, availableHeight),
+        overflowY: 'auto',
       });
     };
 
@@ -79,7 +93,7 @@ export function CustomSelect({ options, value, onChange, placeholder, className,
       window.removeEventListener('resize', updateMenuPosition);
       window.removeEventListener('scroll', updateMenuPosition, true);
     };
-  }, [isOpen]);
+  }, [isOpen, options.length]);
 
   return (
     <div className={cn("relative", className)} ref={containerRef}>
@@ -87,6 +101,7 @@ export function CustomSelect({ options, value, onChange, placeholder, className,
         ref={buttonRef}
         type="button"
         disabled={disabled}
+        aria-expanded={isOpen}
         onClick={() => !disabled && setIsOpen(!isOpen)}
         className={cn(
           "w-full flex items-center justify-between gap-2 border border-slate-200 bg-white hover:bg-slate-50 text-sm font-bold rounded-lg px-3 py-1.5 outline-none text-slate-800 transition-colors shadow-sm",

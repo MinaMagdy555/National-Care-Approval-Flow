@@ -1,15 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../lib/store';
 import { X, CheckCircle2, Link2, Plus } from 'lucide-react';
-import { Task, ReviewMode, Priority, TaskType, UploadedTaskFile } from '../lib/types';
+import { Task, ReviewMode, Priority, TaskType, UploadedTaskFile, WorkflowDefinition } from '../lib/types';
 import { CustomSelect } from './CustomSelect';
 import { UserMultiSelect } from './UserMultiSelect';
 import { canAssignContributors, getAssignableContributorsForTask, sanitizeHandledBy } from '../lib/handlerUtils';
 import { createLinkedTaskFileWithMetadata, getLinkHostLabel, parseAssignmentLink } from '../lib/linkAttachments';
-import { canManageWorkflowBuilder, getReviewRouteTarget, getWorkflowForTaskType, isContentCreatorProfile, isDirectToFinalReviewUploader, uniqueIds } from '../lib/workflowUtils';
+import { canManageWorkflowBuilder, canSkipWorkflowPhase, getPhaseAssignableOwnerIds, getReviewRouteTarget, getWorkflowForTaskType, isMandatoryFinalReview, RETURNED_STATUSES } from '../lib/workflowUtils';
 import { canUploadWorkAssignment } from '../lib/workAssignmentUtils';
 import { getTaskTypeLabel } from '../lib/taskUtils';
-import { getTaskTypeConfigs } from '../lib/appSettings';
+import { getTaskTypeConfigs, getWorkflowTaskTypeOptionLabel } from '../lib/appSettings';
+import { formatDeadlineInput, getTaskDeadlineAt, parseDeadlineInput } from '../lib/deadlinePolicy';
+import { canViewTask } from '../lib/taskPolicy';
+import { isContentReviewPhase, normalizeReviewMode, normalizeReviewPhase } from '../lib/reviewPolicy';
+import { prepareWorkflowAssignmentOwners, resolveWorkflowAssignment } from '../lib/workflowAssignment';
+import { getUniqueShazaUser, getVoiceOverProvider, isVoiceOverPhase, VOICE_OVER_PROVIDER_OPTIONS } from '../lib/voiceOverPolicy';
+import { canManageWorkflowOmissions } from '../lib/workflowOmissions';
+import { resolveFixedArtDirector } from '../lib/finalApprovalPolicy';
 
 const FORM_SELECT_BUTTON_CLASS = 'rounded-xl border-slate-300 px-4 py-3 text-sm font-bold text-slate-900 shadow-none hover:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500';
 
@@ -20,13 +27,16 @@ export function CreateTask({
   assignmentTaskId?: string | null;
   onAssignmentUploaded?: (taskId: string) => void;
 }) {
-  const { tasks, currentUser, userList, users, environment, addTask, addNotification, submitWorkAssignmentUpload, appSettings, getEffectiveReviewMode } = useAppStore();
+  const { tasks, currentUser, userList, users, environment, addTask, submitWorkAssignmentUpload, appSettings } = useAppStore();
   const [taskName, setTaskName] = useState('');
   const [createdBy, setCreatedBy] = useState('');
   const [taskType, setTaskType] = useState<TaskType>('');
-  const [reviewMode, setReviewMode] = useState<ReviewMode>('first_review');
+  const [includeContentReview, setIncludeContentReview] = useState(false);
   const [workflowId, setWorkflowId] = useState('');
   const [assignedContributorIds, setAssignedContributorIds] = useState<string[]>([]);
+  const [workflowNodeAssigneeIds, setWorkflowNodeAssigneeIds] = useState<Record<string, string[]>>({});
+  const [workflowNodeVoiceOverDeliveryOwnerIds, setWorkflowNodeVoiceOverDeliveryOwnerIds] = useState<Record<string, string>>({});
+  const [workflowSkippedPhaseIds, setWorkflowSkippedPhaseIds] = useState<string[]>([]);
   const [scheduledPublishAt, setScheduledPublishAt] = useState('');
   const [publishNote, setPublishNote] = useState('');
   const [linkedFiles, setLinkedFiles] = useState<UploadedTaskFile[]>([]);
@@ -35,19 +45,34 @@ export function CreateTask({
   const [fileError, setFileError] = useState('');
   const [isAddingLink, setIsAddingLink] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
-  const assignmentTask = assignmentTaskId ? tasks.find(task => task.id === assignmentTaskId && task.assignmentPeriod) : null;
-  const isAssignmentUploadMode = Boolean(assignmentTask && assignmentTask.status === 'assigned_work');
-  const canUploadAssignment = assignmentTask && assignmentTask.status === 'assigned_work' ? canUploadWorkAssignment(assignmentTask, currentUser) : false;
+  const assignmentTask = assignmentTaskId ? tasks.find(task => task.id === assignmentTaskId) : null;
   const workspaceUsers = userList.filter(user => user.id !== 'guest');
+  const canViewAssignmentTask = Boolean(assignmentTask && canViewTask(assignmentTask, currentUser, appSettings, workspaceUsers));
+  const assignmentActivePhaseIds = assignmentTask?.workflowActivePhaseIds ?? [assignmentTask?.workflowCurrentPhaseId].filter(Boolean) as string[];
+  const assignmentOwnedWorkPhase = (assignmentTask?.workflowSnapshot?.phases || []).find(phase =>
+    normalizeReviewPhase(phase).phaseKind === 'work' &&
+    assignmentActivePhaseIds.includes(phase.id) &&
+    assignmentTask &&
+    getPhaseAssignableOwnerIds(assignmentTask, phase, appSettings, workspaceUsers, assignmentTask.workflowPhaseApprovals?.[phase.id] || []).includes(currentUser.id)
+  ) || null;
+  const canUploadAssignment = assignmentTask
+    ? assignmentTask.workflowSnapshot
+      ? Boolean(assignmentOwnedWorkPhase) &&
+        !['approved_by_art_director', 'completed', 'archived', 'on_hold'].includes(assignmentTask.status) &&
+        !RETURNED_STATUSES.includes(assignmentTask.status)
+      : assignmentTask.status === 'assigned_work' && canUploadWorkAssignment(assignmentTask, currentUser)
+    : false;
+  const isAssignmentUploadMode = Boolean(assignmentTask && canUploadAssignment);
   const canChooseCreator = !isAssignmentUploadMode && (currentUser.role === 'reviewer' || currentUser.role === 'admin' || Boolean(currentUser.isAdmin));
   const selectedCreatorId = assignmentTask ? assignmentTask.createdBy : canChooseCreator ? createdBy : currentUser.id;
-  const selectedCreator = users[selectedCreatorId] || (selectedCreatorId === currentUser.id ? currentUser : undefined);
-  const routeActor = isAssignmentUploadMode ? currentUser : selectedCreator;
-  const isDirectToFinalUpload = isDirectToFinalReviewUploader(routeActor);
-  const effectiveReviewMode = isDirectToFinalUpload ? 'direct_to_ad' : reviewMode;
-  const effectiveWorkflowId = isDirectToFinalUpload ? null : workflowId || null;
+  const selectedWorkflowId = assignmentTask
+    ? assignmentTask.workflowId || assignmentTask.workflowSnapshot?.id || workflowId
+    : getWorkflowForTaskType(appSettings, taskType)?.id || '';
+  const effectiveReviewMode: ReviewMode = normalizeReviewMode(assignmentTask?.reviewMode);
+  const effectiveWorkflowId = selectedWorkflowId || null;
   const routeTarget = getReviewRouteTarget(effectiveReviewMode);
   const canChooseWorkflow = canManageWorkflowBuilder(currentUser, appSettings);
+  const canManageStepOmissions = canManageWorkflowOmissions(currentUser, appSettings);
   const canManageAssignedContributors = !isAssignmentUploadMode && canAssignContributors(currentUser.id, appSettings);
   const creatorOptions = workspaceUsers
     .filter(user => ['team_member', 'reviewer', 'admin'].includes(user.role))
@@ -57,16 +82,18 @@ export function CreateTask({
     : [];
   const taskTypeOptions = getTaskTypeConfigs(appSettings).map(config => {
     const id = config.id;
+    const typeLabel = getTaskTypeLabel(id, appSettings);
     return {
       value: id,
-      label: getTaskTypeLabel(id, appSettings)
+      label: getWorkflowTaskTypeOptionLabel(appSettings, { ...config, label: typeLabel }),
     };
   });
-  const reviewModeOptions = [
-    { value: 'content_review', label: 'Content Rev.' },
-    { value: 'first_review', label: 'First Rev.' },
-    { value: 'final_review', label: 'Final Rev. (Art Director)' },
-  ];
+  const hasSelectableTaskType = taskTypeOptions.some(option => option.value === taskType);
+  const selectedWorkflow = assignmentTask?.workflowSnapshot || (appSettings.workflows || []).find(workflow => workflow.id === selectedWorkflowId) || null;
+  const workflowSteps = (selectedWorkflow?.phases || []).filter(phase => (phase.nodeType || 'step') === 'step' && !phase.disabled);
+  const voiceOverPhases = workflowSteps.filter(isVoiceOverPhase);
+  const contentReviewPhaseIds = workflowSteps.filter(isContentReviewPhase).map(phase => phase.id);
+  const shazaUser = getUniqueShazaUser(workspaceUsers);
   const workflowOptions = (appSettings.workflows || [])
     .filter(workflow => workflow.active !== false)
     .map(workflow => ({ value: workflow.id, label: workflow.name }));
@@ -80,7 +107,7 @@ export function CreateTask({
   // If reviewer, they can set priority directly on creation if they want (though mostly they handle others)
   const isReviewer = !isAssignmentUploadMode && (currentUser.role === 'reviewer' || currentUser.role === 'admin');
   const [priority, setPriority] = useState<Priority | ''>('');
-  const [deadline, setDeadline] = useState('');
+  const [deadlineInput, setDeadlineInput] = useState('');
   const hasAttachments = linkedFiles.length > 0;
 
   useEffect(() => {
@@ -89,7 +116,11 @@ export function CreateTask({
   }, [selectedCreatorId, taskType, canManageAssignedContributors, workspaceUsers.map(user => user.id).join('|')]);
 
   useEffect(() => {
-    if (isAssignmentUploadMode || taskTypeOptions.length === 0) return;
+    if (isAssignmentUploadMode) return;
+    if (taskTypeOptions.length === 0) {
+      if (taskType) setTaskType('');
+      return;
+    }
     if (!taskTypeOptions.some(option => option.value === taskType)) {
       setTaskType(taskTypeOptions[0].value as TaskType);
     }
@@ -101,13 +132,12 @@ export function CreateTask({
     setTaskName(assignmentTask.name);
     setAssignedContributorIds([]);
     setPriority(assignmentTask.priority === 'not_set' ? 'normal' : assignmentTask.priority);
-    setDeadline(assignmentTask.deadlineText || '');
+    const assignmentDeadline = getTaskDeadlineAt(assignmentTask);
+    setDeadlineInput(assignmentDeadline ? formatDeadlineInput(assignmentDeadline) : '');
     if (assignmentTask.taskType) {
       setTaskType(assignmentTask.taskType as TaskType);
     }
-    if (assignmentTask.reviewMode) {
-      setReviewMode(assignmentTask.reviewMode);
-    }
+    setIncludeContentReview(Boolean(assignmentTask.needsContentRevision));
     if (assignmentTask.workflowId) {
       setWorkflowId(assignmentTask.workflowId);
     }
@@ -117,13 +147,22 @@ export function CreateTask({
     if (isAssignmentUploadMode && assignmentTask) {
       return;
     }
-    const creator = users[selectedCreatorId] || (selectedCreatorId === currentUser.id ? currentUser : undefined);
-    const isContentCreator = isContentCreatorProfile(isAssignmentUploadMode ? currentUser : creator);
-    const defaultMode = getEffectiveReviewMode(taskType, isContentCreator, 'first_review');
-    setReviewMode(defaultMode);
     const workflow = getWorkflowForTaskType(appSettings, taskType);
     setWorkflowId(workflow?.id || '');
   }, [taskType, selectedCreatorId, isAssignmentUploadMode, assignmentTask?.id]);
+
+  useEffect(() => {
+    if (!isAssignmentUploadMode) setIncludeContentReview(false);
+  }, [isAssignmentUploadMode, selectedWorkflowId]);
+
+  useEffect(() => {
+    if (isAssignmentUploadMode) return;
+    const validPhaseIds = new Set(voiceOverPhases.map(phase => phase.id));
+    setWorkflowNodeAssigneeIds(previous => Object.fromEntries(Object.entries(previous).filter(([phaseId]) => validPhaseIds.has(phaseId))));
+    setWorkflowNodeVoiceOverDeliveryOwnerIds(previous => Object.fromEntries(Object.entries(previous).filter(([phaseId]) => validPhaseIds.has(phaseId))));
+    const validStepIds = new Set(workflowSteps.map(phase => phase.id));
+    setWorkflowSkippedPhaseIds(previous => previous.filter(phaseId => validStepIds.has(phaseId)));
+  }, [isAssignmentUploadMode, selectedWorkflowId, voiceOverPhases.map(phase => phase.id).join('|'), workflowSteps.map(phase => phase.id).join('|')]);
 
   const addLinkedFile = async () => {
     if (!linkUrl.trim() || isAddingLink) return;
@@ -155,8 +194,21 @@ export function CreateTask({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    let workflowForCreation: WorkflowDefinition | undefined;
     if (!taskName || !selectedCreatorId || !hasAttachments) return;
     if (isAssignmentUploadMode && (!assignmentTask || !canUploadAssignment)) return;
+    if (!assignmentTask && !hasSelectableTaskType) {
+      setFileError('Create and activate a workflow before submitting a new task.');
+      return;
+    }
+    if (!assignmentTask) {
+      const workflowSelection = resolveWorkflowAssignment(appSettings, taskType, effectiveWorkflowId);
+      if (!workflowSelection.ok || !workflowSelection.workflow) {
+        setFileError(workflowSelection.message || 'This task type does not have a valid active workflow.');
+        return;
+      }
+      workflowForCreation = workflowSelection.workflow;
+    }
 
     const taskFiles = [...linkedFiles];
     if (taskType === 'video' && !taskFiles.some(file => file.type.startsWith('video/'))) {
@@ -164,14 +216,14 @@ export function CreateTask({
       return;
     }
 
-    const creator = selectedCreator;
     const newTaskId = assignmentTask?.id || Math.random().toString(36).substring(7);
     const newTaskCode = assignmentTask?.code || `TSK-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
     const thumbnailFile = taskFiles.find(file => file.previewUrl && file.previewStoragePath);
 
     if (isAssignmentUploadMode && assignmentTask) {
       const nextVersionNumber = Math.max(0, ...assignmentTask.versions.map(version => version.versionNumber)) + 1;
-      submitWorkAssignmentUpload(assignmentTask.id, {
+      const uploaded = submitWorkAssignmentUpload(assignmentTask.id, {
+        phaseId: assignmentOwnedWorkPhase?.id,
         taskType,
         reviewMode: effectiveReviewMode,
         workflowId: effectiveWorkflowId,
@@ -191,6 +243,11 @@ export function CreateTask({
         driveFolderId: taskFiles.find(file => file.driveFolderId)?.driveFolderId,
       });
 
+      if (!uploaded) {
+        setFileError('This workflow step is no longer available for your upload. Refresh the task and try again.');
+        return;
+      }
+
       setIsSuccess(true);
       setTimeout(() => {
         setIsSuccess(false);
@@ -203,12 +260,15 @@ export function CreateTask({
     }
 
     const newTaskStatus = routeTarget.status;
-    const defaultOwnerIds = routeTarget.ownerRole === 'reviewer'
-      ? workspaceUsers.filter(user => user.role === 'reviewer' || user.role === 'admin').map(user => user.id)
-      : routeTarget.ownerRole === 'art_director'
-        ? workspaceUsers.filter(user => user.role === 'art_director').map(user => user.id)
-        : [];
     const handledByIds = canManageAssignedContributors ? sanitizeHandledBy(assignedContributorIds, currentUser.id, appSettings) : [];
+    const parsedDeadline = isReviewer && deadlineInput ? parseDeadlineInput(deadlineInput) : null;
+    if (isReviewer && deadlineInput && !parsedDeadline) {
+      setFileError('Enter a valid deadline date and time for Africa/Cairo.');
+      return;
+    }
+    const syncedSkippedPhaseIds = includeContentReview
+      ? workflowSkippedPhaseIds.filter(phaseId => !contentReviewPhaseIds.includes(phaseId))
+      : Array.from(new Set([...workflowSkippedPhaseIds, ...contentReviewPhaseIds]));
 
     const newTask: Task = {
       id: newTaskId,
@@ -216,21 +276,27 @@ export function CreateTask({
       name: taskName,
       taskType,
       reviewMode: effectiveReviewMode,
+      needsContentRevision: includeContentReview,
       workflowId: effectiveWorkflowId,
       environment,
       createdBy: selectedCreatorId,
       handledBy: handledByIds,
+      workContributorIds: handledByIds.length > 0 ? handledByIds : [selectedCreatorId],
       status: newTaskStatus,
       currentOwnerRole: routeTarget.ownerRole,
       currentOwnerUserId: null,
       currentOwnerUserIds: [],
+      workflowNodeAssigneeIds,
+      workflowNodeVoiceOverDeliveryOwnerIds,
+      workflowSkippedPhaseIds: syncedSkippedPhaseIds,
       workflowSnapshot: null,
       workflowCurrentPhaseId: null,
       workflowCurrentPhaseIndex: null,
       workflowPhaseApprovals: {},
       workflowPhaseHistory: [],
       priority: isReviewer ? priority : 'not_set',
-      deadlineText: isReviewer ? deadline : null,
+      deadlineText: null,
+      deadlineAt: parsedDeadline?.toISOString() || null,
       scheduledPublishAt: taskType === 'campaign' ? scheduledPublishAt || null : null,
       publishNote: taskType === 'campaign' ? publishNote.trim() || null : null,
       publishedAt: null,
@@ -253,21 +319,25 @@ export function CreateTask({
       updatedAt: new Date().toISOString(),
     };
 
-    addTask(newTask);
+    const ownerPreparation = prepareWorkflowAssignmentOwners(
+      workflowForCreation!,
+      newTask,
+      appSettings,
+      workspaceUsers,
+      handledByIds.length > 0 ? handledByIds : [selectedCreatorId],
+    );
+    if (!ownerPreparation.ok) {
+      setFileError(ownerPreparation.message || 'Select an accountable member for every required workflow step.');
+      return;
+    }
+    newTask.workflowNodeAssigneeIds = ownerPreparation.workflowNodeAssigneeIds || {};
+    newTask.workflowNodeVoiceOverDeliveryOwnerIds = ownerPreparation.workflowNodeVoiceOverDeliveryOwnerIds || {};
 
-    const notificationRecipients = uniqueIds([
-      ...defaultOwnerIds,
-      ...handledByIds,
-      ...workspaceUsers.filter(user => user.role === 'team_leader').map(user => user.id),
-    ]).filter(userId => userId !== selectedCreatorId);
-
-    Array.from(new Set(notificationRecipients)).forEach(userId => {
-      addNotification({
-        userId,
-        taskId: newTaskId,
-        message: `${creator?.name || 'Someone'} uploaded a new task: ${taskName}`,
-      });
-    });
+    const created = addTask(newTask);
+    if (!created) {
+      setFileError('This task could not be created with the selected workflow. Review the workflow and try again.');
+      return;
+    }
 
     setIsSuccess(true);
     setTimeout(() => {
@@ -275,17 +345,21 @@ export function CreateTask({
       setTaskName('');
       setCreatedBy('');
       setAssignedContributorIds([]);
+      setWorkflowNodeAssigneeIds({});
+      setWorkflowNodeVoiceOverDeliveryOwnerIds({});
+      setWorkflowSkippedPhaseIds([]);
       setScheduledPublishAt('');
       setPublishNote('');
       setLinkedFiles([]);
       setLinkUrl('');
       setFileError('');
       setPriority('');
-      setDeadline('');
+      setDeadlineInput('');
+      setIncludeContentReview(false);
     }, 2000);
   };
 
-  if (assignmentTaskId && !assignmentTask) {
+  if (assignmentTaskId && (!assignmentTask || !canViewAssignmentTask)) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 lg:px-8">
         <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
@@ -295,21 +369,21 @@ export function CreateTask({
     );
   }
 
-  if (assignmentTask && assignmentTask.status === 'assigned_work' && !canUploadAssignment) {
+  if (assignmentTask && !assignmentTask.workflowSnapshot && assignmentTask.status !== 'assigned_work' && !isSuccess) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 lg:px-8">
         <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-          <h2 className="text-xl font-black text-slate-900">This assignment is not available for upload</h2>
+          <h2 className="text-xl font-black text-slate-900">Finished work already uploaded</h2>
         </div>
       </div>
     );
   }
 
-  if (assignmentTask && assignmentTask.status !== 'assigned_work' && !isSuccess) {
+  if (assignmentTask && !canUploadAssignment) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 lg:px-8">
         <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-          <h2 className="text-xl font-black text-slate-900">Finished work already uploaded</h2>
+          <h2 className="text-xl font-black text-slate-900">This assignment is not available for upload</h2>
         </div>
       </div>
     );
@@ -344,7 +418,9 @@ export function CreateTask({
                   </div>
                   <div>
                     <span className="mb-1 block text-[10px] font-black uppercase tracking-wider text-indigo-500">Deadline</span>
-                    <p className="font-semibold text-slate-800">{assignmentTask.deadlineAt ? new Date(assignmentTask.deadlineAt).toLocaleString() : assignmentTask.deadlineText || 'No deadline'}</p>
+                    <p className="font-semibold text-slate-800">
+                      {getTaskDeadlineAt(assignmentTask)?.toLocaleString('en-EG', { timeZone: 'Africa/Cairo' }) || 'No deadline'}
+                    </p>
                   </div>
                 </div>
                 {(assignmentTask.assignmentLinks || []).length > 0 && (
@@ -401,29 +477,23 @@ export function CreateTask({
                     buttonClassName={FORM_SELECT_BUTTON_CLASS}
                     disabled={isAssignmentUploadMode}
                   />
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Review Route *</label>
-                  <CustomSelect
-                    value={effectiveReviewMode}
-                    onChange={value => setReviewMode(value as ReviewMode)}
-                    options={reviewModeOptions}
-                    buttonClassName={FORM_SELECT_BUTTON_CLASS}
-                    disabled={currentUser.role === 'team_member' || isDirectToFinalUpload || isAssignmentUploadMode}
-                  />
-                  {isDirectToFinalUpload && (
-                    <p className="mt-2 text-xs font-bold text-slate-500">Senior and reviewer uploads go directly to the Art Director.</p>
+                  {taskTypeOptions.length === 0 && !isAssignmentUploadMode && (
+                    <p className="mt-2 text-xs font-bold text-rose-600">Create and activate a workflow before submitting a new task.</p>
                   )}
                 </div>
-                {canChooseWorkflow && !isDirectToFinalUpload && workflowOptions.length > 0 && (
+                {canChooseWorkflow && workflowOptions.length > 0 && (
                   <div className="col-span-2">
                     <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">Workflow</label>
                     <CustomSelect
-                      value={workflowId}
-                      onChange={setWorkflowId}
+                      value={selectedWorkflowId}
+                      onChange={() => {}}
                       options={workflowOptions}
+                      disabled
                       buttonClassName={FORM_SELECT_BUTTON_CLASS}
                     />
+                    {!isAssignmentUploadMode && (
+                      <p className="mt-2 text-xs font-bold text-slate-500">Workflow is determined by the task type.</p>
+                    )}
                   </div>
                 )}
                 {canManageAssignedContributors && (
@@ -441,6 +511,112 @@ export function CreateTask({
                     emptyText="No contributors available for this task type."
                   />
                 </div>
+                )}
+                {!isAssignmentUploadMode && workflowSteps.length > 0 && (
+                  <div className="col-span-2 space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                    <div>
+                      <h3 className="text-sm font-black text-slate-950">Workflow steps</h3>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">Omitted steps remain visible here and are bypassed only for this task.</p>
+                    </div>
+                    {workflowSteps.map(phase => {
+                  const isContentReview = isContentReviewPhase(phase);
+                  const isOmitted = isContentReview ? !includeContentReview : workflowSkippedPhaseIds.includes(phase.id);
+                  const canToggleOmission = canSkipWorkflowPhase(phase) && (isContentReview || canManageStepOmissions);
+                   const provider = getVoiceOverProvider({ workflowNodeAssigneeIds, workflowNodeAIAssigneeIds: {}, workflowNodeVoiceOverDeliveryOwnerIds }, phase);
+                   const fixedArtDirector = isMandatoryFinalReview(phase) ? resolveFixedArtDirector(phase, appSettings, workspaceUsers) : null;
+                  const deliveryOwnerId = workflowNodeVoiceOverDeliveryOwnerIds[phase.id] || '';
+                  const providerLabelId = `voice-over-provider-${phase.id}`;
+                  const deliveryLabelId = `voice-over-delivery-${phase.id}`;
+                  return (
+                    <div key={phase.id} className={`space-y-3 rounded-xl border p-3 ${isOmitted ? 'border-slate-200 bg-slate-100 opacity-70' : isVoiceOverPhase(phase) ? 'border-violet-200 bg-violet-50/60' : 'border-white bg-white'}`}>
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <h4 className="text-sm font-black text-slate-950">{phase.name}</h4>
+                          {phase.nodeNote && <p className="mt-1 text-xs font-semibold text-slate-500">{phase.nodeNote}</p>}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {isMandatoryFinalReview(phase) && <span className="rounded-lg border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] font-black uppercase tracking-wide text-violet-700">Required</span>}
+                          {isOmitted && <span className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-slate-600">Omitted</span>}
+                          {canToggleOmission && (
+                            <button
+                              type="button"
+                              aria-label={`${isOmitted ? 'Include' : 'Omit'} ${phase.name}`}
+                              onClick={() => {
+                                if (isContentReview) setIncludeContentReview(isOmitted);
+                                setWorkflowSkippedPhaseIds(previous => isOmitted
+                                  ? previous.filter(phaseId => phaseId !== phase.id)
+                                  : Array.from(new Set([...previous, phase.id])));
+                              }}
+                              className={`rounded-lg border px-2 py-1 text-[10px] font-black ${isOmitted ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}
+                            >
+                              {isOmitted ? 'Include step' : 'Omit step'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                       {isContentReview && <p className="text-xs font-semibold text-indigo-700">Content Review is optional for each task. When omitted, the workflow continues along its configured route.</p>}
+                       {!isOmitted && fixedArtDirector && (
+                         <div
+                           role={fixedArtDirector.ok ? 'status' : 'alert'}
+                           aria-label={`${phase.name} fixed Art Director`}
+                           className={`rounded-lg border px-3 py-2 ${fixedArtDirector.ok ? 'border-violet-200 bg-violet-50 text-violet-900' : 'border-rose-200 bg-rose-50 text-rose-800'}`}
+                         >
+                           <div className="text-[10px] font-black uppercase tracking-wider">Fixed approver</div>
+                           <div className="mt-1 text-sm font-black">
+                             {fixedArtDirector.ok && fixedArtDirector.ownerId
+                               ? workspaceUsers.find(user => user.id === fixedArtDirector.ownerId)?.name || fixedArtDirector.ownerId
+                               : 'Art Director configuration required'}
+                           </div>
+                           <p className="mt-1 text-xs font-semibold">
+                             {fixedArtDirector.ok
+                               ? 'Final Review is assigned automatically and cannot be changed for this task.'
+                               : fixedArtDirector.message}
+                           </p>
+                         </div>
+                       )}
+                       {!isOmitted && isVoiceOverPhase(phase) && <div role="group" aria-labelledby={providerLabelId} className="space-y-1.5">
+                        <div id={providerLabelId} className="text-[10px] font-black uppercase tracking-wider text-violet-700">Voice Over provider</div>
+                        <CustomSelect
+                          value={provider || ''}
+                          onChange={value => {
+                            if (value === provider) return;
+                            setWorkflowNodeAssigneeIds(previous => ({ ...previous, [phase.id]: value ? [value] : [] }));
+                            setWorkflowNodeVoiceOverDeliveryOwnerIds(previous => ({ ...previous, [phase.id]: '' }));
+                          }}
+                          options={VOICE_OVER_PROVIDER_OPTIONS}
+                          placeholder="Choose voice over provider"
+                          buttonClassName={FORM_SELECT_BUTTON_CLASS}
+                        />
+                      </div>}
+                      {!isOmitted && isVoiceOverPhase(phase) && (provider === 'voice_over_shaza' && shazaUser ? (
+                        <div className="rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-bold text-emerald-800">
+                          Delivery owner: {shazaUser.name} (workspace member)
+                        </div>
+                      ) : provider ? (
+                        <div role="group" aria-labelledby={deliveryLabelId} className="space-y-1.5">
+                          <div id={deliveryLabelId} className="text-[10px] font-black uppercase tracking-wider text-violet-700">
+                            {provider === 'voice_over_ai' ? 'Human uploader' : 'Delivery coordinator'}
+                          </div>
+                          <CustomSelect
+                            value={deliveryOwnerId}
+                            onChange={value => setWorkflowNodeVoiceOverDeliveryOwnerIds(previous => ({ ...previous, [phase.id]: value }))}
+                            options={[
+                              { value: '', label: provider === 'voice_over_ai' ? 'Choose who uploads the AI audio' : 'Choose a coordinator for external Shaza' },
+                              ...workspaceUsers.map(user => ({ value: user.id, label: user.name })),
+                            ]}
+                            buttonClassName={FORM_SELECT_BUTTON_CLASS}
+                          />
+                          <p className="text-xs font-semibold text-violet-700">
+                            {provider === 'voice_over_ai'
+                              ? 'This person is accountable for delivering and uploading the generated audio.'
+                              : 'This person coordinates delivery and upload; Shaza remains the voice provider.'}
+                          </p>
+                        </div>
+                      ) : null)}
+                    </div>
+                  );
+                    })}
+                  </div>
                 )}
                 {taskType === 'campaign' && !isAssignmentUploadMode && (
                   <div className="col-span-2 grid grid-cols-1 gap-4 rounded-xl border border-emerald-100 bg-emerald-50/60 p-4 sm:grid-cols-2">
@@ -490,13 +666,12 @@ export function CreateTask({
                     />
                  </div>
                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Deadline</label>
-                    <input 
-                      type="text" 
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Deadline (Africa/Cairo)</label>
+                    <input
+                      type="datetime-local"
                       readOnly={isAssignmentUploadMode}
-                      value={deadline}
-                      onChange={e => setDeadline(e.target.value)}
-                      placeholder="e.g. End of day tomorrow" 
+                      value={deadlineInput}
+                      onChange={e => setDeadlineInput(e.target.value)}
                       className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all placeholder:font-medium read-only:bg-slate-100 read-only:text-slate-500"
                     />
                  </div>
@@ -550,7 +725,7 @@ export function CreateTask({
               </div>
 
               {fileError && (
-                <p className="mt-3 text-sm font-bold text-rose-600">{fileError}</p>
+                <p role="alert" className="mt-3 text-sm font-bold text-rose-600">{fileError}</p>
               )}
 
               {linkedFiles.length > 0 && (
@@ -578,7 +753,7 @@ export function CreateTask({
             <div className="flex justify-end border-t border-slate-100 pt-4">
               <button 
                 type="submit"
-                disabled={!taskName || !selectedCreatorId || !hasAttachments || (isReviewer && !priority) || (isAssignmentUploadMode && !canUploadAssignment)}
+                disabled={!taskName || !selectedCreatorId || !hasAttachments || (isReviewer && !priority) || (isAssignmentUploadMode ? !canUploadAssignment : !hasSelectableTaskType)}
                 className="w-full rounded-xl bg-indigo-600 px-8 py-3 font-black text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto"
               >
                 {isAssignmentUploadMode ? 'Upload Finished Work' : 'Submit Task'}

@@ -48,7 +48,7 @@ await sql`
 `;
 
 const rows = await sql`
-  SELECT state
+  SELECT state, updated_at
   FROM app_state
   WHERE id = 'current'
   LIMIT 1
@@ -57,16 +57,29 @@ const rows = await sql`
 const state = rows[0]?.state || { tasks: [], notifications: [], settings: {}, dailyReports: [] };
 state.settings = state.settings || {};
 
+// Member removals survive re-running the seed and stale roster snapshots.
+const hasRemovalTable = await sql`SELECT to_regclass('deleted_member_tombstones') AS table_name`;
+const removalRows = hasRemovalTable[0]?.table_name
+  ? await sql`SELECT record FROM deleted_member_tombstones`
+  : [];
+const removals = [...removalRows.map(row => row.record), ...(state.settings.deletedMembers || [])];
+const removedIds = new Set(removals.map(record => record.id));
+const removedEmails = new Set(removals.map(record => String(record.email || '').trim().toLowerCase()).filter(Boolean));
+const isRemoved = user => removedIds.has(user.id) || removedEmails.has(String(user.email || '').trim().toLowerCase());
+state.settings.deletedMembers = Array.from(new Map(removals.map(record => [record.id, record])).values());
+
 const existingUsers = Array.isArray(state.settings.manualUsers)
   ? state.settings.manualUsers
   : [];
 const usersByEmail = new Map(
   existingUsers
+    .filter(user => !isRemoved(user))
     .filter(user => user.id !== 'manual_shahed_hazem' && String(user.email || '').trim().toLowerCase() !== 'shahdhazem42@gmail.com')
     .map(user => [String(user.email || '').trim().toLowerCase(), user])
 );
 
 for (const member of members) {
+  if (isRemoved(member)) continue;
   const key = member.email.toLowerCase();
   const previous = usersByEmail.get(key) || {};
   usersByEmail.set(key, {
@@ -85,12 +98,15 @@ for (const member of members) {
 state.settings.manualUsers = Array.from(usersByEmail.values());
 state.settings.updatedAt = now;
 
-await sql`
+const saved = await sql`
   INSERT INTO app_state (id, state, updated_at)
   VALUES ('current', ${JSON.stringify(state)}::jsonb, now())
   ON CONFLICT (id)
   DO UPDATE SET state = EXCLUDED.state, updated_at = now()
+  WHERE app_state.updated_at = ${rows[0]?.updated_at || null}::timestamptz
+  RETURNING updated_at
 `;
+if (!saved.length) throw new Error('Workspace changed during seeding. Retry against fresh membership state.');
 
 console.log(JSON.stringify(
   state.settings.manualUsers

@@ -2,11 +2,14 @@ import React from 'react';
 import { useAppStore } from '../lib/store';
 import { Bell, Check, FileText, X } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { projectTaskNotifications } from '../lib/taskPolicy';
+import { formatTaskSystemMessage } from '../lib/taskUtils';
 
 export function NotificationsList({ onOpenTask, onOpenDailyReports }: { onOpenTask: (id: string) => void; onOpenDailyReports?: () => void }) {
-  const { notifications, tasks, currentUser, markNotificationAsRead } = useAppStore();
+  const { notifications, tasks, currentUser, userList, appSettings, markNotificationAsRead } = useAppStore();
 
-  const userNotifications = notifications.filter(n => n.userId === currentUser.id);
+  const userNotifications = projectTaskNotifications(notifications, tasks, currentUser, appSettings, userList)
+    .filter(notification => notification.userId === currentUser.id);
 
   if (userNotifications.length === 0) {
     return (
@@ -29,6 +32,8 @@ export function NotificationsList({ onOpenTask, onOpenDailyReports }: { onOpenTa
         {userNotifications.map(notification => {
           const isDailyReportNotification = notification.taskId === 'daily-report';
           const isDeleted = !isDailyReportNotification && !tasks.some(t => t.id === notification.taskId);
+          const displayMessage = formatTaskSystemMessage(notification.message);
+          const normalizedMessage = displayMessage.toLowerCase();
           return (
             <div 
               key={notification.id}
@@ -63,7 +68,7 @@ export function NotificationsList({ onOpenTask, onOpenDailyReports }: { onOpenTa
                 )}>
                   {isDeleted ? (
                     <X className="w-5 h-5" />
-                  ) : notification.message.includes('rejected') || notification.message.includes('returned') ? (
+                  ) : normalizedMessage.includes('returned') ? (
                     <X className="w-5 h-5" />
                   ) : notification.message.includes('approved') ? (
                     <Check className="w-5 h-5" />
@@ -78,7 +83,7 @@ export function NotificationsList({ onOpenTask, onOpenDailyReports }: { onOpenTa
                    notification.read ? "text-slate-600 font-medium" : "text-slate-900 font-bold",
                    isDeleted && "line-through text-slate-400 font-medium"
                  )}>
-                   {notification.message}
+                   {displayMessage}
                    {isDeleted && (
                      <span 
                        className="text-[10px] font-black uppercase text-rose-500 ml-2 no-underline inline-block bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200/50"

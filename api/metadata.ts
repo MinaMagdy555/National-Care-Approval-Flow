@@ -1,6 +1,14 @@
 import https from 'https';
+import { createTaskMetadataAuthorizer } from '../server/taskMetadata';
+import type { WorkspaceRequest } from '../server/workspaceAuth';
+
+function permittedMetadataUrl(raw: string): boolean {
+  try { const url = new URL(raw); return url.protocol === 'https:' && ['drive.google.com', 'docs.google.com'].includes(url.hostname) && !url.port && !url.username && !url.password; }
+  catch { return false; }
+}
 
 function fetchUrlTitle(targetUrl: string): Promise<string | null> {
+  if (!permittedMetadataUrl(targetUrl)) return Promise.resolve(null);
   return new Promise((resolve) => {
     let resolved = false;
     const safeResolve = (val: string | null) => {
@@ -76,7 +84,10 @@ function fetchUrlTitle(targetUrl: string): Promise<string | null> {
   });
 }
 
-export default async function handler(req: any, res: any) {
+export function createMetadataHandler(options: { authorize?: ReturnType<typeof createTaskMetadataAuthorizer>; fetchTitle?: typeof fetchUrlTitle; localPreview?: boolean } = {}) {
+return async function handler(req: WorkspaceRequest, res: any) {
+  res.setHeader('Cache-Control', 'no-store');
+  if (req.method !== 'GET') { res.status(405).json({ error: 'Method not allowed' }); return; }
   const urlObj = new URL(req.url || '', 'http://localhost');
   const targetUrl = urlObj.searchParams.get('url');
 
@@ -84,11 +95,19 @@ export default async function handler(req: any, res: any) {
     res.status(400).json({ error: 'url parameter is required' });
     return;
   }
+  if (!permittedMetadataUrl(targetUrl)) { res.status(400).json({ error: 'Use a Google Drive or Google Docs link.' }); return; }
 
   try {
-    const title = await fetchUrlTitle(targetUrl);
+    if (!options.localPreview) {
+      const status = await (options.authorize || createTaskMetadataAuthorizer())(req, targetUrl, urlObj.searchParams.get('taskId'));
+      if (status !== 200) { res.status(status).json({ error: 'This task attachment is not available to this account.' }); return; }
+    }
+    const title = await (options.fetchTitle || fetchUrlTitle)(targetUrl);
     res.status(200).json({ title });
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
+  } catch {
+    res.status(503).json({ error: 'Attachment metadata is temporarily unavailable.' });
   }
 }
+}
+
+export default createMetadataHandler();

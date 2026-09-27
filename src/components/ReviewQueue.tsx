@@ -1,14 +1,17 @@
+import { canStartTaskWork, getTaskWorkSessions } from '../lib/workSessions';
+import { WorkflowRoadmap } from './WorkflowRoadmap';
 import React, { useState } from 'react';
 import { useAppStore } from '../lib/store';
 import { Task } from '../lib/types';
 import { getStatusInfo, getTaskTypeLabel, getPriorityLabel } from '../lib/taskUtils';
 import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
-import { getCurrentOwnerUserIds } from '../lib/workflowUtils';
+import { canUserActAsCurrentOwner, getCurrentOwnerUserIds } from '../lib/workflowUtils';
 import { getCurrentReviewPhaseName } from '../lib/workflowUtils';
 import { CalendarDays, Search, X, Calendar, Clock, Play, CheckCircle2 } from 'lucide-react';
 import { CustomSelect } from './CustomSelect';
 import { MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID, cleanTaskTypeKey, getPriorityTone, getTaskTypeConfigs, priorityToneClasses } from '../lib/appSettings';
+import { canEditTask, canViewTask, hasTaskWorkHistory } from '../lib/taskPolicy';
 
 type DateFilterMode = 'all' | 'single' | 'range';
 
@@ -37,7 +40,7 @@ export function ReviewQueue({
   tasks: Task[];
   title: string;
 }) {
-  const { currentUser, users, appSettings, toggleTaskHold, updateTaskActiveWork } = useAppStore();
+  const { currentUser, users, userList, appSettings, toggleTaskHold, updateTaskActiveWork } = useAppStore();
   const isHighboard = [MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID].includes(currentUser.id);
 
   // Advanced filters state
@@ -73,6 +76,8 @@ export function ReviewQueue({
       : appSettings.firstReviewerUserIds || [];
     const configuredFinalReviewerIds = taskTypeConfig?.finalReviewerUserIds?.length ? taskTypeConfig.finalReviewerUserIds : appSettings.finalReviewerUserIds || [];
 
+    if (task.workflowSnapshot) return ownerIds;
+
     if (task.status === 'waiting_content_revision') {
       return Array.from(new Set([...(task.contentRevisionAssigneeIds || []), ...ownerIds]));
     }
@@ -93,10 +98,22 @@ export function ReviewQueue({
     return names.length > 0 ? names.join(', ') : 'Not set';
   };
 
+  const hasPersonalTaskParticipation = (task: Task, userId: string) => {
+    const user = getUserById(userId);
+    return Boolean(user && (
+      canUserActAsCurrentOwner(task, user, undefined, appSettings, userList) || hasTaskWorkHistory(task, userId)
+    ));
+  };
+
+  const hasRecordedWork = (task: Task, userId: string) => Boolean(
+    getTaskWorkSessions(task, appSettings, userList).some(session => session.userId === userId) ||
+    task.versions.some(version => version.submittedBy === userId && (version.fileUrl || version.files?.some(file => file.url || file.driveFileId || file.blob)))
+  );
+
   const getTaskRoleForUser = (task: Task, userId: string) => {
     const roles: string[] = [];
     if (task.createdBy === userId) roles.push('Assigner');
-    if (task.handledBy.includes(userId) || (task.submittedOnBehalfOfIds || []).includes(userId)) roles.push('Working task');
+    if (hasRecordedWork(task, userId) || (task.status === 'assigned_work' && canUserActAsCurrentOwner(task, getUserById(userId) || { id: userId }, undefined, appSettings, userList))) roles.push('Working task');
     if ((task.contentRevisionAssigneeIds || []).includes(userId)) roles.push('Content revision');
     if (getReviewerIdsForTask(task).includes(userId)) {
       const phaseName = getCurrentReviewPhaseName(task);
@@ -109,7 +126,8 @@ export function ReviewQueue({
     return Array.from(new Set(roles));
   };
 
-  const filteredTasks = tasks.filter(task => {
+  const accessibleTasks = tasks.filter(task => canViewTask(task, currentUser, appSettings, userList));
+  const filteredTasks = accessibleTasks.filter(task => {
     if (creatorFilter !== 'all' && task.createdBy !== creatorFilter) return false;
     if (typeFilter !== 'all' && task.taskType !== typeFilter) return false;
     if (teamModeFilter !== 'all') {
@@ -117,12 +135,7 @@ export function ReviewQueue({
       if (teamModeFilter === 'cooperation' && task.handledBy.length <= 1) return false;
     }
     if (assigneeFilter !== 'all') {
-      const involvedIds = new Set([
-        ...task.handledBy,
-        ...(task.contentRevisionAssigneeIds || []),
-        ...getCurrentOwnerUserIds(task),
-      ]);
-      if (!involvedIds.has(assigneeFilter)) return false;
+      if (!hasPersonalTaskParticipation(task, assigneeFilter)) return false;
     }
     if (reviewerFilter !== 'all' && !getReviewerIdsForTask(task).includes(reviewerFilter)) return false;
     if (roleFilter !== 'all') {
@@ -177,28 +190,17 @@ export function ReviewQueue({
     return true;
   });
 
-  const uniqueCreators = Array.from(new Set(tasks.map(t => t.createdBy))).map(getUserById).filter(Boolean) as Array<NonNullable<ReturnType<typeof getUserById>>>;
-  const uniqueAssignees = Array.from(new Set(tasks.flatMap(t => [
-    ...t.handledBy,
-    ...(t.contentRevisionAssigneeIds || []),
-    ...getCurrentOwnerUserIds(t),
-  ]))).map(getUserById).filter(Boolean) as Array<NonNullable<ReturnType<typeof getUserById>>>;
-  const uniqueReviewers = Array.from(new Set(tasks.flatMap(getReviewerIdsForTask))).map(getUserById).filter(Boolean) as Array<NonNullable<ReturnType<typeof getUserById>>>;
-  const uniqueTypes = Array.from(new Set(tasks.map(t => t.taskType)));
+  const uniqueCreators = Array.from(new Set(accessibleTasks.map(t => t.createdBy))).map(getUserById).filter(Boolean) as Array<NonNullable<ReturnType<typeof getUserById>>>;
+  const uniqueAssignees = userList.filter(user => accessibleTasks.some(task => hasPersonalTaskParticipation(task, user.id)));
+  const uniqueReviewers = Array.from(new Set(accessibleTasks.flatMap(getReviewerIdsForTask))).map(getUserById).filter(Boolean) as Array<NonNullable<ReturnType<typeof getUserById>>>;
+  const uniqueTypes = Array.from(new Set(accessibleTasks.map(t => t.taskType)));
 
   const memberSummary = (() => {
     if (assigneeFilter === 'all') return null;
-    const memberTasks = tasks.filter(task => {
-      const involvedIds = new Set([
-        ...task.handledBy,
-        ...(task.contentRevisionAssigneeIds || []),
-        ...getCurrentOwnerUserIds(task),
-      ]);
-      return involvedIds.has(assigneeFilter);
-    });
+    const memberTasks = accessibleTasks.filter(task => hasPersonalTaskParticipation(task, assigneeFilter));
     return {
       memberName: getUserById(assigneeFilter)?.name || 'Selected member',
-      working: memberTasks.filter(task => task.handledBy.includes(assigneeFilter) || (task.submittedOnBehalfOfIds || []).includes(assigneeFilter)).length,
+      working: memberTasks.filter(task => hasRecordedWork(task, assigneeFilter) || (task.status === 'assigned_work' && getCurrentOwnerUserIds(task).includes(assigneeFilter))).length,
       reviewing: memberTasks.filter(task => {
         const roles = getTaskRoleForUser(task, assigneeFilter);
         return roles.some(role => role.startsWith('Reviewer') || role === 'Content revision' || role.startsWith('Phase owner'));
@@ -243,7 +245,7 @@ export function ReviewQueue({
     { value: 'urgent', label: 'Urgent' }
   ];
 
-  const uniqueStatuses = Array.from(new Set(tasks.map(t => getStatusInfo(t, currentUser.role, users).label)));
+  const uniqueStatuses = Array.from(new Set(accessibleTasks.map(t => getStatusInfo(t, currentUser.role, users).label)));
   const statusOptions = [
     { value: 'all', label: 'All Statuses' },
     ...uniqueStatuses.map(label => ({ value: label, label }))
@@ -558,13 +560,15 @@ export function ReviewQueue({
               const reviewerNames = getUserNames(getReviewerIdsForTask(task));
               const roleTargetId = assigneeFilter !== 'all' ? assigneeFilter : currentUser.id;
               const roleLabels = getTaskRoleForUser(task, roleTargetId);
-              const isActiveWork = Boolean(task.activeWorkStartedAt && !task.activeWorkFinishedAt);
-              const canToggleActiveWork = task.handledBy.includes(currentUser.id) || isHighboard || currentUser.role === 'team_leader';
+              const isActiveWork = getTaskWorkSessions(task, appSettings, userList).some(session => session.userId === currentUser.id && !session.finishedAt);
+              const canMutateTask = canEditTask(task, currentUser, appSettings, userList);
+              const canToggleActiveWork = canMutateTask && (isActiveWork || canStartTaskWork(task, currentUser.id, appSettings, userList));
 
               return (
                 <tr key={task.id} className="hover:bg-slate-50/50 transition-colors group cursor-pointer border-b border-slate-100 last:border-0" onClick={() => onOpenTask(task.id)}>
                   <td className="w-[190px] p-3 align-top">
                     <div className="font-bold text-slate-900 mb-1 leading-tight">{task.name}</div>
+                    <WorkflowRoadmap task={task} />
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-bold text-slate-400 font-mono mb-2">
                       <span>{task.code}</span>
                       <span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
@@ -640,7 +644,7 @@ export function ReviewQueue({
                   </td>
                   <td className="sticky right-0 z-10 w-[150px] bg-white p-3 text-right align-top shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.45)] group-hover:bg-slate-50">
                     {(() => {
-                      const isAssignedToMe = task.handledBy.includes(currentUser.id);
+                      const isAssignedToMe = canMutateTask && getCurrentOwnerUserIds(task).includes(currentUser.id);
                       const isTaskActiveForUpload = task.status === 'assigned_work';
 
                       if (canToggleActiveWork && !['approved', 'completed', 'archived', 'approved_by_art_director'].includes(task.status)) {
@@ -693,7 +697,7 @@ export function ReviewQueue({
                       }
 
                       const leaderboardIds = [MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID];
-                      const canToggleHold = currentUser.role === 'reviewer' || leaderboardIds.includes(currentUser.id);
+                      const canToggleHold = canMutateTask && (currentUser.role === 'reviewer' || leaderboardIds.includes(currentUser.id));
                       if (canToggleHold) {
                         if (task.status === 'on_hold') {
                           return (

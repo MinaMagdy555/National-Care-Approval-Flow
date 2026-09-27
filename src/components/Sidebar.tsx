@@ -28,6 +28,7 @@ import { cn } from '../lib/utils';
 import { userRoleLabels } from '../lib/mockData';
 import { getTaskTypeConfigs } from '../lib/appSettings';
 import { canCreateWorkAssignment, isLeaderboardUser } from '../lib/workAssignmentUtils';
+import { projectTaskNotifications } from '../lib/taskPolicy';
 
 type MenuItem = {
   id: string;
@@ -51,7 +52,7 @@ export function Sidebar({
   showUserManagement: boolean;
   showSettings: boolean;
 }) {
-  const { currentUser, notifications, logout, authStatus, appSettings } = useAppStore();
+  const { currentUser, notifications, tasks, userList, logout, authStatus, appSettings } = useAppStore();
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const isSignedIn = authStatus === 'approved';
 
@@ -64,13 +65,15 @@ export function Sidebar({
     );
   }, [currentUser, appSettings]);
 
-  const unreadCount = notifications ? notifications.filter(n => n.userId === currentUser.id && !n.read).length : 0;
+  const unreadCount = projectTaskNotifications(notifications || [], tasks, currentUser, appSettings, userList)
+    .filter(notification => notification.userId === currentUser.id && !notification.read)
+    .length;
   const canManageUsers = Boolean(currentUser.isAdmin) || currentUser.role === 'admin' || isLeaderboardUser(currentUser.id);
 
   useEffect(() => {
   if (
       currentView === 'all_tasks' ||
-      currentView === 'campaign_scheduler' ||
+      currentView === 'deadline_calendar' ||
       currentView === 'daily_reports' ||
       currentView === 'assigned_work' ||
       currentView === 'assigned_tasks' ||
@@ -117,7 +120,7 @@ export function Sidebar({
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
       ...(isLoaderOrMina ? [{ id: 'performance', label: 'Team Performance', icon: UsersRound }] : []),
       { id: 'daily_reports', label: 'Daily Reports', icon: NotebookText },
-      { id: 'campaign_scheduler', label: 'Campaign Scheduler', icon: CalendarClock },
+      { id: 'deadline_calendar', label: 'Task Deadlines', icon: CalendarClock },
       ...(canCreateWorkAssignment(currentUser, appSettings) ? [{ id: 'assigned_work', label: 'Assign a Task', icon: BriefcaseBusiness }] : []),
       { id: 'notifications', label: `Notifications${unreadCount > 0 ? ` (${unreadCount})` : ''}`, icon: Bell },
     ];
@@ -191,7 +194,7 @@ export function Sidebar({
   const menu = getMenuForRole();
   const taskViews = new Set([
     'all_tasks',
-    'campaign_scheduler',
+    'deadline_calendar',
     'daily_reports',
     'assigned_work',
     'assigned_tasks',

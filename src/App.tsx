@@ -6,7 +6,7 @@ import { TaskDetail } from './components/TaskDetail';
 import { ReviewQueue } from './components/ReviewQueue';
 import { NotificationsList } from './components/Notifications';
 import { CreateTask } from './components/CreateTask';
-import { CampaignScheduler } from './components/CampaignScheduler';
+import { DeadlineCalendar } from './components/DeadlineCalendar';
 import { AuthScreen } from './components/AuthScreen';
 import { UserManagement } from './components/UserManagement';
 import { AssignedWorkSection } from './components/AssignedWorkSection';
@@ -15,7 +15,8 @@ import { WorkflowBuilderPage } from './components/WorkflowBuilderPage';
 import { DailyReports } from './components/DailyReports';
 import { isDueThisWeek, isDueToday } from './lib/deadlineUtils';
 import { isTaskArchived } from './lib/archiveUtils';
-import { canUserAccessTask, canUserActAsCurrentOwner, parsePublishDate, userCanViewFullWorkspace } from './lib/workflowUtils';
+import { canUserActAsCurrentOwner, parsePublishDate } from './lib/workflowUtils';
+import { canViewTask } from './lib/taskPolicy';
 import { Task } from './lib/types';
 import { canCreateWorkAssignment, isWorkAssignmentTask, isLeaderboardUser } from './lib/workAssignmentUtils';
 import { getTaskTypeConfigs } from './lib/appSettings';
@@ -149,6 +150,7 @@ function WorkspaceContent() {
   const {
     tasks,
     currentUser,
+    userList,
     environment,
     notifications,
     persistenceMode,
@@ -261,7 +263,7 @@ function WorkspaceContent() {
 
     tasks.forEach(task => {
       if ((task.taskType !== 'campaign' && task.taskType !== 'media_buying') || !task.scheduledPublishAt || task.publishedAt) return;
-      if (!canUserAccessTask(task, currentUser)) return;
+      if (!canViewTask(task, currentUser, appSettings, userList)) return;
 
       const publishDate = parsePublishDate(task.scheduledPublishAt);
       if (!publishDate) return;
@@ -278,7 +280,7 @@ function WorkspaceContent() {
         markWeekReminderSent(task.id);
       }
     });
-  }, [tasks, currentUser.id, authStatus]);
+  }, [tasks, currentUser, appSettings, userList, authStatus]);
 
   const navigateTo = (route: AppRoute, mode: 'push' | 'replace' = 'push') => {
     setView(route.view);
@@ -292,7 +294,7 @@ function WorkspaceContent() {
   };
 
   useEffect(() => {
-    if (authStatus === 'approved' && currentView === 'sign_in') {
+    if (currentView === 'campaign_scheduler' || (authStatus === 'approved' && currentView === 'sign_in')) {
       navigateTo({ view: 'dashboard', taskId: null, assignmentId: null }, 'replace');
     }
   }, [authStatus, currentView]);
@@ -344,17 +346,16 @@ function WorkspaceContent() {
     setIsSidebarOpen(false);
   };
 
-  const canViewFullWorkspace = userCanViewFullWorkspace(currentUser, appSettings);
   const envTasks = tasks.filter(t => t.environment === environment);
   const activeEnvTasks = envTasks.filter(task => !isTaskArchived(task));
   const archivedEnvTasks = envTasks.filter(isTaskArchived);
-  const visibleEnvTasks = canViewFullWorkspace ? activeEnvTasks : activeEnvTasks.filter(t => canUserAccessTask(t, currentUser, appSettings));
-  const visibleArchivedTasks = canViewFullWorkspace ? archivedEnvTasks : archivedEnvTasks.filter(t => canUserAccessTask(t, currentUser, appSettings));
+  const visibleEnvTasks = activeEnvTasks.filter(task => canViewTask(task, currentUser, appSettings, userList));
+  const visibleArchivedTasks = archivedEnvTasks.filter(task => canViewTask(task, currentUser, appSettings, userList));
   const workflowVisibleEnvTasks = visibleEnvTasks.filter(task => task.status !== 'assigned_work');
   const isScopedToCurrentOwner = (task: typeof visibleEnvTasks[number]) => (
     !(appSettings.firstReviewerUserIds || []).includes(currentUser.id) && !(appSettings.finalReviewerUserIds || []).includes(currentUser.id) && currentUser.role !== 'team_leader'
       ? true
-      : canUserActAsCurrentOwner(task, currentUser)
+      : canUserActAsCurrentOwner(task, currentUser, undefined, appSettings, userList)
   );
 
   const renderContent = () => {
@@ -373,8 +374,8 @@ function WorkspaceContent() {
         return <AuthScreen onContinueAsGuest={() => handleNavigate('dashboard')} />;
       case 'create_task':
         return <CreateTask assignmentTaskId={activeAssignmentId} onAssignmentUploaded={handleOpenTask} />;
-      case 'campaign_scheduler':
-        return <CampaignScheduler onOpenTask={handleOpenTask} />;
+      case 'deadline_calendar':
+        return <DeadlineCalendar onOpenTask={handleOpenTask} />;
       case 'daily_reports':
         return <DailyReports onOpenTask={handleOpenTask} />;
       case 'assigned_work': {

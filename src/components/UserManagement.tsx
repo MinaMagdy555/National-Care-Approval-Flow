@@ -1,9 +1,20 @@
 import { Edit3, Plus, ShieldCheck, Trash2, UserRoundCog, X } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../lib/store';
 import { CustomSelect } from './CustomSelect';
 import { AppSettings, Role, User } from '../lib/types';
+import { getReportSeniorId, getReportTeamKeys, isReportLeader, isSeniorReporter } from '../lib/reportPolicy';
 import { isLeaderboardUser } from '../lib/workAssignmentUtils';
+import { canViewTask } from '../lib/taskPolicy';
+
+type DeletionFeedback = {
+  kind: 'success' | 'error';
+  message: string;
+  blockingTasks?: Array<{ taskId: string; taskCode: string; phaseName: string }>;
+};
+
+const REPORTING_SENIOR_AUTO = '__auto__';
+const REPORTING_SENIOR_NONE = '__none__';
 
 const JOB_TITLE_OPTIONS: Array<{ value: string; label: string; permissionRole: Role }> = [
   { value: 'senior_brand_designer_video_editor', label: 'Senior Brand Designer & Video Editor', permissionRole: 'reviewer' },
@@ -61,6 +72,7 @@ function uniqueLabels(values: string[]) {
 export function UserManagement() {
   const {
     currentUser,
+    tasks,
     userList,
     accountProfiles,
     appSettings,
@@ -81,7 +93,23 @@ export function UserManagement() {
   const [memberPassword, setMemberPassword] = useState('');
   const [memberTags, setMemberTags] = useState<string[]>([]);
   const [memberTagInput, setMemberTagInput] = useState('');
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+  const [deletionFeedback, setDeletionFeedback] = useState<DeletionFeedback | null>(null);
+  const deletionFeedbackRef = useRef<HTMLDivElement | null>(null);
   const canManageUsers = Boolean(currentUser.isAdmin) || currentUser.role === 'admin' || isLeaderboardUser(currentUser.id);
+  const visibleDeletionBlockingTasks = (deletionFeedback?.blockingTasks || []).filter(blockingTask => {
+    const task = tasks.find(item => item.id === blockingTask.taskId);
+    return Boolean(task && canViewTask(task, currentUser, appSettings, userList));
+  });
+
+  useEffect(() => {
+    if (!deletionFeedback) return;
+    const frame = window.requestAnimationFrame(() => {
+      deletionFeedbackRef.current?.focus({ preventScroll: true });
+      deletionFeedbackRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [deletionFeedback]);
 
   if (!canManageUsers) {
     return (
@@ -100,9 +128,38 @@ export function UserManagement() {
     ...userList.flatMap(user => splitCapabilities(user.jobTitle)),
   ]);
 
-  const confirmDelete = (userId: string, name: string) => {
-    if (!window.confirm(`Delete ${name}'s account? This removes the user from the tool and removes any saved email login for them.`)) return;
-    deleteUserAccount(userId);
+  const confirmDelete = async (userId: string, name: string) => {
+    if (userId === currentUser.id || deletingUserId) return;
+    const confirmed = window.confirm(
+      `Remove ${name} from this workspace? They will lose access. Their historical work will be kept. Any pending work must be reassigned first.`
+    );
+    if (!confirmed) return;
+
+    setDeletingUserId(userId);
+    setDeletionFeedback(null);
+    try {
+      const result = await deleteUserAccount(userId);
+      if (!result.ok) {
+        setDeletionFeedback({
+          kind: 'error',
+          message: result.message || `${name} could not be removed from the workspace.`,
+          blockingTasks: result.blockingTasks,
+        });
+        return;
+      }
+      setExpandedUserId(previous => previous === userId ? null : previous);
+      setDeletionFeedback({
+        kind: 'success',
+        message: `${name} was removed from the workspace. Their historical work was kept.`,
+      });
+    } catch (error) {
+      setDeletionFeedback({
+        kind: 'error',
+        message: error instanceof Error ? error.message : `${name} could not be removed from the workspace.`,
+      });
+    } finally {
+      setDeletingUserId(null);
+    }
   };
 
   const handleAddResponsibility = () => {
@@ -190,6 +247,40 @@ export function UserManagement() {
     });
   };
 
+  const updateReportingSenior = (userId: string, value: string) => {
+    updateAppSettings(settings => {
+      const reportingSeniorByUserId = { ...(settings.reportingSeniorByUserId || {}) };
+      if (value === REPORTING_SENIOR_AUTO) {
+        delete reportingSeniorByUserId[userId];
+      } else {
+        reportingSeniorByUserId[userId] = value === REPORTING_SENIOR_NONE ? null : value;
+      }
+      return { ...settings, reportingSeniorByUserId };
+    });
+  };
+
+  const reportingSeniorCandidates = userList.filter(isSeniorReporter);
+  const reportingSeniorOptions = [
+    { value: REPORTING_SENIOR_AUTO, label: 'Auto by role/team' },
+    { value: REPORTING_SENIOR_NONE, label: 'No senior' },
+    ...reportingSeniorCandidates.map(candidate => {
+      const teams = getReportTeamKeys(candidate);
+      return {
+        value: candidate.id,
+        label: teams.length > 0 ? `${candidate.name} — ${teams.join(' / ')}` : candidate.name,
+      };
+    }),
+  ];
+
+  const getReportingSeniorValue = (userId: string) => {
+    const assignments = appSettings.reportingSeniorByUserId || {};
+    if (!Object.prototype.hasOwnProperty.call(assignments, userId)) return REPORTING_SENIOR_AUTO;
+    const seniorId = assignments[userId];
+    return seniorId && reportingSeniorCandidates.some(candidate => candidate.id === seniorId)
+      ? seniorId
+      : REPORTING_SENIOR_NONE;
+  };
+
   return (
     <div className="space-y-5 p-6 lg:p-8">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -242,6 +333,52 @@ export function UserManagement() {
           Add Role
         </button>
       </div>
+
+      {deletionFeedback && (
+        <div
+          ref={deletionFeedbackRef}
+          tabIndex={-1}
+          role={deletionFeedback.kind === 'error' ? 'alert' : 'status'}
+          aria-live={deletionFeedback.kind === 'error' ? 'assertive' : 'polite'}
+          className={`scroll-mt-4 rounded-xl border p-4 outline-none ${
+            deletionFeedback.kind === 'error'
+              ? 'border-rose-200 bg-rose-50 text-rose-900'
+              : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+          }`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-black">{deletionFeedback.message}</p>
+              {visibleDeletionBlockingTasks.length > 0 && (
+                <div className="mt-3">
+                  <p className="text-xs font-bold">Reassign these unfinished workflow steps before removing the member:</p>
+                  <ul className="mt-2 grid gap-2 sm:grid-cols-2">
+                    {visibleDeletionBlockingTasks.map(blockingTask => (
+                      <li key={`${blockingTask.taskId}:${blockingTask.phaseName}`}>
+                        <a
+                          href={`?view=task_detail&task=${encodeURIComponent(blockingTask.taskId)}`}
+                          className="flex min-w-0 flex-col rounded-lg border border-rose-200 bg-white px-3 py-2 transition-colors hover:border-rose-300 hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+                        >
+                          <span className="truncate text-sm font-black text-rose-800">{blockingTask.taskCode}</span>
+                          <span className="truncate text-xs font-bold text-rose-600">{blockingTask.phaseName}</span>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setDeletionFeedback(null)}
+              className="shrink-0 rounded-lg p-1 text-current opacity-60 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
+              aria-label="Dismiss member deletion message"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
         <div className="hidden grid-cols-[minmax(140px,1fr)_minmax(160px,1.1fr)_minmax(180px,1.2fr)_minmax(240px,1.2fr)_120px_112px] gap-4 border-b border-slate-100 bg-slate-50 px-4 py-3 text-[11px] font-black uppercase tracking-wider text-slate-400 lg:grid">
@@ -308,7 +445,7 @@ export function UserManagement() {
                   Configure
                 </button>
               </div>
-              <div className="flex justify-start gap-2 lg:justify-end">
+              <div className="flex flex-wrap items-center justify-start gap-2 lg:justify-end">
                 <button
                   type="button"
                   onClick={() => openMemberModal(user)}
@@ -320,13 +457,21 @@ export function UserManagement() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => confirmDelete(user.id, user.name)}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-rose-100 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
-                  aria-label={`Delete ${user.name}`}
-                  title={`Delete ${user.name}`}
+                  onClick={() => void confirmDelete(user.id, user.name)}
+                  disabled={user.id === currentUser.id || deletingUserId !== null}
+                  aria-busy={deletingUserId === user.id}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-rose-100 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                  aria-label={user.id === currentUser.id ? `Cannot remove yourself from the workspace` : deletingUserId === user.id ? `Removing ${user.name}` : `Remove ${user.name} from the workspace`}
+                  title={user.id === currentUser.id ? 'You cannot remove yourself from the workspace while signed in.' : `Remove ${user.name} from the workspace`}
                 >
-                  <Trash2 className="h-4 w-4" />
+                  <Trash2 className={`h-4 w-4 ${deletingUserId === user.id ? 'animate-pulse' : ''}`} />
                 </button>
+                {user.id === currentUser.id && (
+                  <p className="basis-full text-left text-[10px] font-bold leading-tight text-slate-400 lg:text-right">You cannot remove yourself.</p>
+                )}
+                {deletingUserId === user.id && (
+                  <p className="basis-full text-left text-[10px] font-bold leading-tight text-slate-500 lg:text-right">Removing member...</p>
+                )}
               </div>
 
               {expandedUserId === user.id && (
@@ -341,6 +486,34 @@ export function UserManagement() {
                       Close
                     </button>
                   </div>
+                  {!isSeniorReporter(user) && !isReportLeader(user) && (
+                    <div className="rounded-xl border border-indigo-100 bg-white p-4">
+                      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(240px,0.8fr)] sm:items-center">
+                        <div>
+                          <p className="text-xs font-black text-slate-900">Reporting Senior</p>
+                          <p className="mt-1 text-[11px] font-semibold text-slate-500">
+                            Choose who receives this member's submitted daily reports. Auto uses a unique senior with a matching team.
+                          </p>
+                        </div>
+                        <CustomSelect
+                          value={getReportingSeniorValue(user.id)}
+                          onChange={value => updateReportingSenior(user.id, value)}
+                          options={reportingSeniorOptions}
+                          buttonClassName="h-11 rounded-xl px-3 py-2 text-sm font-black"
+                        />
+                      </div>
+                      {getReportingSeniorValue(user.id) === REPORTING_SENIOR_AUTO && (
+                        <p className="mt-2 text-[11px] font-bold text-indigo-700">
+                          {(() => {
+                            const seniorId = getReportSeniorId(user, appSettings, userList);
+                            return seniorId
+                              ? `Auto currently resolves to ${userList.find(candidate => candidate.id === seniorId)?.name || 'the matching senior'}.`
+                              : 'Auto does not currently find one unique matching senior.';
+                          })()}
+                        </p>
+                      )}
+                    </div>
+                  )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                     <label className="flex items-start gap-3 p-3 bg-white border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors">
                       <input

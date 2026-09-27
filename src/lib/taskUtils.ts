@@ -49,6 +49,23 @@ export function getPriorityLabel(priority: Priority, settings = defaultAppSettin
   return getPriorityLabelFromSettings(settings, priority);
 }
 
+export function formatTaskSystemMessage(message: string, action?: string): string {
+  if (!action) {
+    const artDirectorMatch = message.match(/^Art Director rejected ("[\s\S]+") and requested changes\.$/i);
+    if (artDirectorMatch) return `Art Director returned ${artDirectorMatch[1]} and requested changes.`;
+
+    const finalApprovalMatch = message.match(/^Final Approvement rejected ("[\s\S]+") and requested changes\.$/i);
+    if (finalApprovalMatch) return `Final approval returned ${finalApprovalMatch[1]} and requested changes.`;
+  }
+
+  if (action === 'request_edits') {
+    const phaseMatch = message.match(/^Phase rejected(?: and routed to ([^.]+))?\.$/i);
+    if (phaseMatch) return phaseMatch[1] ? `Phase returned and routed to ${phaseMatch[1]}.` : 'Phase returned.';
+  }
+
+  return message;
+}
+
 export function getStatusInfo(task: Task, viewerRole: Role, users?: Record<string, User>): { label: string; color: 'amber' | 'blue' | 'green' | 'red' | 'gray' | 'purple' } {
   const { status } = task;
 
@@ -58,6 +75,10 @@ export function getStatusInfo(task: Task, viewerRole: Role, users?: Record<strin
 
   if (status === 'on_hold') {
     return { label: 'On Hold', color: 'gray' };
+  }
+
+  if (String(status) === 'rejected') {
+    return { label: 'Returned', color: 'red' };
   }
 
   const waitingReviewStatuses = [

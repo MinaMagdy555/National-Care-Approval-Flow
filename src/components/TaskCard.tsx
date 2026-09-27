@@ -1,3 +1,4 @@
+import { WorkflowRoadmap } from './WorkflowRoadmap';
 import React from 'react';
 import { Task } from '../lib/types';
 import { useAppStore } from '../lib/store';
@@ -5,21 +6,17 @@ import { getStatusInfo, getNextActionLabel, getTaskTypeLabel, getReviewModeLabel
 import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
 import { TaskThumbnail } from './FilePreview';
-import { getCurrentOwnerUserIds, getWorkflowPhase } from '../lib/workflowUtils';
-import { isLeaderboardUser } from '../lib/workAssignmentUtils';
 import { getPriorityTone, priorityToneClasses } from '../lib/appSettings';
+import { canViewTask } from '../lib/taskPolicy';
 
 export function TaskCard({ task, onClick }: { task: Task; onClick: (id: string) => void; key?: string | number }) {
-  const { currentUser, users, appSettings } = useAppStore();
+  const { currentUser, users, userList, appSettings } = useAppStore();
+  if (!canViewTask(task, currentUser, appSettings, userList)) return null;
   const statusInfo = getStatusInfo(task, currentUser.role, users);
   const nextAction = getNextActionLabel(task, currentUser.role);
 
   const creator = users[task.createdBy]?.name || (task.createdBy === currentUser.id ? currentUser.name : initialUsers.find(u => u.id === task.createdBy)?.name) || 'Unknown';
   const handledByNames = task.handledBy.map(id => users[id]?.name || initialUsers.find(u => u.id === id)?.name).filter(Boolean).join(' + ');
-  const ownerNames = getCurrentOwnerUserIds(task).map(id => users[id]?.name || initialUsers.find(u => u.id === id)?.name).filter(Boolean).join(' + ');
-  const activePhase = getWorkflowPhase(task);
-  const canSeeRoadmap = Boolean(currentUser.isAdmin) || isLeaderboardUser(currentUser.id) || /senior/i.test(currentUser.jobTitle || '');
-
   const version = task.versions.length > 0 ? task.versions[0].versionNumber : 1;
 
   const colorStyles = {
@@ -63,13 +60,7 @@ export function TaskCard({ task, onClick }: { task: Task; onClick: (id: string) 
         </div>
 
         <div className="mt-auto">
-          {canSeeRoadmap && activePhase && (
-            <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
-              <p className="text-[10px] font-black uppercase tracking-wider text-indigo-500">Workflow roadmap</p>
-              <p className="mt-1 text-xs font-black text-slate-900">Now: {activePhase.name}</p>
-              <p className="mt-1 text-[11px] font-bold text-slate-500">Waiting on: {ownerNames || 'No member assigned yet'}</p>
-            </div>
-          )}
+          <WorkflowRoadmap task={task} />
           <div className={cn("border p-3 rounded-xl mb-4", colorStyles[statusInfo.color])}>
             <div className="flex justify-between items-start mb-1">
               <p className="text-[10px] uppercase font-black tracking-wider opacity-60">Next Action</p>

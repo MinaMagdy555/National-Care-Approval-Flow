@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Settings, ShieldCheck, X, Clock } from 'lucide-react';
 import { useAppStore } from '../lib/store';
-import { PriorityTone, TaskTypeConfig } from '../lib/types';
-import { normalizeSettingId, priorityToneClasses, normalizeTaskTypeId, cleanTaskTypeKey, getTaskTypeConfigs } from '../lib/appSettings';
+import { PriorityTone } from '../lib/types';
+import { normalizeSettingId, priorityToneClasses } from '../lib/appSettings';
 import { CustomSelect } from './CustomSelect';
 import { UserMultiSelect } from './UserMultiSelect';
 import { cn } from '../lib/utils';
@@ -54,108 +54,6 @@ export function SettingsManagement() {
     }
   }, [customHoursTargetType, userList]);
   const [priorityTone, setPriorityTone] = useState<PriorityTone>('blue');
-  const [taskTypeName, setTaskTypeName] = useState('');
-  const [taskTypeJobTitles, setTaskTypeJobTitles] = useState<string[]>([]);
-  const [taskTypeDetailed, setTaskTypeDetailed] = useState(false);
-  const [taskTypeFullReviewers, setTaskTypeFullReviewers] = useState<string[]>([]);
-  const [taskTypeQuickLookReviewers, setTaskTypeQuickLookReviewers] = useState<string[]>([]);
-  const [taskTypeFinalReviewers, setTaskTypeFinalReviewers] = useState<string[]>([]);
-
-  const [editingTaskTypeId, setEditingTaskTypeId] = useState<string | null>(null);
-  const [editingLabel, setEditingLabel] = useState('');
-  const [editingJobTitles, setEditingJobTitles] = useState<string[]>([]);
-  const [editingDetailed, setEditingDetailed] = useState(false);
-  const [editingFullReviewers, setEditingFullReviewers] = useState<string[]>([]);
-  const [editingQuickLookReviewers, setEditingQuickLookReviewers] = useState<string[]>([]);
-  const [editingFinalReviewers, setEditingFinalReviewers] = useState<string[]>([]);
-
-  const taskTypeConfigs = getTaskTypeConfigs(appSettings);
-  const workflowOptions = (appSettings.workflows || []).map(workflow => ({ value: workflow.id, label: workflow.name }));
-  const handleAddTaskType = () => {
-    const name = taskTypeName.trim();
-    if (!name) return;
-    const normalized = normalizeTaskTypeId(name);
-    
-    if (taskTypeConfigs.some(c => cleanTaskTypeKey(c.id) === cleanTaskTypeKey(normalized))) {
-      alert('This task type already exists.');
-      return;
-    }
-
-    const newConfig: TaskTypeConfig = {
-      id: normalized,
-      label: name,
-      suggestedJobTitles: taskTypeJobTitles,
-      isDetailedReview: taskTypeDetailed,
-      fullReviewerUserIds: taskTypeFullReviewers,
-      quickLookUserIds: taskTypeQuickLookReviewers,
-      finalReviewerUserIds: taskTypeFinalReviewers,
-    };
-
-    updateAppSettings(settings => {
-      const current = settings.taskTypes || [];
-      return {
-        ...settings,
-        taskTypes: [...current, newConfig]
-      };
-    });
-
-    setTaskTypeName('');
-    setTaskTypeJobTitles([]);
-    setTaskTypeDetailed(false);
-    setTaskTypeFullReviewers([]);
-    setTaskTypeQuickLookReviewers([]);
-    setTaskTypeFinalReviewers([]);
-  };
-
-  const handleDeleteTaskType = (id: string) => {
-    if (!confirm(`Are you sure you want to delete the task type "${id}"?`)) return;
-    updateAppSettings(settings => {
-      const current = settings.taskTypes || [];
-      return {
-        ...settings,
-        taskTypes: current.filter(t => {
-          const tId = typeof t === 'object' && t !== null ? t.id : String(t);
-          return cleanTaskTypeKey(tId) !== cleanTaskTypeKey(id);
-        })
-      };
-    });
-  };
-
-  const handleStartEditingTaskType = (config: TaskTypeConfig) => {
-    setEditingTaskTypeId(config.id);
-    setEditingLabel(config.label);
-    setEditingJobTitles(config.suggestedJobTitles);
-    setEditingDetailed(config.isDetailedReview);
-    setEditingFullReviewers(config.fullReviewerUserIds || []);
-    setEditingQuickLookReviewers(config.quickLookUserIds || []);
-    setEditingFinalReviewers(config.finalReviewerUserIds || []);
-  };
-
-  const handleSaveEditTaskType = () => {
-    if (!editingLabel.trim()) return;
-    updateAppSettings(settings => {
-      const current = settings.taskTypes || [];
-      return {
-        ...settings,
-        taskTypes: current.map(t => {
-          const tId = typeof t === 'object' && t !== null ? t.id : String(t);
-          if (cleanTaskTypeKey(tId) === cleanTaskTypeKey(editingTaskTypeId || '')) {
-            return {
-              id: tId,
-              label: editingLabel.trim(),
-              suggestedJobTitles: editingJobTitles,
-              isDetailedReview: editingDetailed,
-              fullReviewerUserIds: editingFullReviewers,
-              quickLookUserIds: editingQuickLookReviewers,
-              finalReviewerUserIds: editingFinalReviewers,
-            };
-          }
-          return t;
-        })
-      };
-    });
-    setEditingTaskTypeId(null);
-  };
 
   if (!canManageSettings) {
     return (
@@ -765,11 +663,12 @@ export function SettingsManagement() {
             <p className="mt-1 text-[10px] font-bold text-slate-400">They are notified when reviewers comment on a task, in addition to the assignee.</p>
           </div>
           <div>
-            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Daily Report Auto-Send Time</label>
+            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Daily Report Auto-Send Time (Africa/Cairo)</label>
             <input
               type="time"
-              value={appSettings.dailyReportAutoSendTime || '17:29'}
-              onChange={event => updateAppSettings(settings => ({ ...settings, dailyReportAutoSendTime: event.target.value }))}
+              value="17:29"
+              readOnly
+              aria-label="Daily report submission time in Africa/Cairo"
               className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-900"
             />
             <label className="mt-3 inline-flex items-center gap-2 text-xs font-bold text-slate-600">

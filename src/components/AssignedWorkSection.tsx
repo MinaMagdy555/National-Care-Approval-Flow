@@ -1,9 +1,10 @@
+import { WorkflowRoadmap } from './WorkflowRoadmap';
 import React, { useEffect, useState } from 'react';
-import { CalendarDays, Check, Clock3, Edit3, Link2, Plus, RotateCcw, X, Trash2, Settings, Search, Calendar, Clock, HelpCircle, UserRoundCog } from 'lucide-react';
+import { CalendarDays, Check, Clock3, Edit3, Link2, Plus, RotateCcw, X, Trash2, Search, Calendar, Clock, HelpCircle, UserRoundCog } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { fetchLinkTitleScraped, parseAssignmentLink, getLinkedFileName } from '../lib/linkAttachments';
-import { Priority, Task, Role, TaskTypeConfig, User } from '../lib/types';
-import { canCreateWorkAssignment, canDeleteWorkAssignment, canManageWorkAssignment, canUploadWorkAssignment, canSetActiveWorkForMember, isDeadlineNear, isLeaderboardUser, isWorkAssignmentAssignee, sortWorkAssignments } from '../lib/workAssignmentUtils';
+import { Priority, Task, Role, User } from '../lib/types';
+import { canReassignWorkflowTask, canCreateWorkAssignment, canDeleteWorkAssignment, canManageWorkAssignment, canUploadWorkAssignment, canSetActiveWorkForMember, isDeadlineNear, isLeaderboardUser, isWorkAssignmentAssignee, sortWorkAssignments } from '../lib/workAssignmentUtils';
 import { getPriorityLabel, getTaskTypeLabel, getStatusInfo } from '../lib/taskUtils';
 import { isAssignableContributorForTask } from '../lib/handlerUtils';
 import { CustomSelect } from './CustomSelect';
@@ -12,8 +13,15 @@ import { ThemedDatePicker } from './ThemedDatePicker';
 import { ThemedTimePicker } from './ThemedTimePicker';
 import { cn } from '../lib/utils';
 import { initialUsers } from '../lib/mockData';
-import { getActivePriorityOptions, getPriorityTone, isDeadlineInsideBusinessHours, getWorkingHoursForUser, priorityToneClasses, MINA_ID, DINA_ID, normalizeTaskTypeId, cleanTaskTypeKey, getTaskTypeConfigs } from '../lib/appSettings';
-import { canSkipWorkflowPhase, getPhaseOwnerRole, getWorkflowForTaskType, userCanViewFullWorkspace } from '../lib/workflowUtils';
+import { getActivePriorityOptions, getPriorityTone, isDeadlineInsideBusinessHours, getWorkingHoursForUser, priorityToneClasses, MINA_ID, DINA_ID, cleanTaskTypeKey, getTaskTypeConfigs, getWorkflowTaskTypeOptionLabel } from '../lib/appSettings';
+import { canSkipWorkflowPhase, canUserActAsCurrentOwner, getCurrentOwnerUserIds, getWorkflowForTaskType, isMandatoryFinalReview } from '../lib/workflowUtils';
+import { formatDeadlineInput, getTaskDeadlineAt, parseDeadlineInput } from '../lib/deadlinePolicy';
+import { canEditTask, canViewTask, hasTaskWorkHistory } from '../lib/taskPolicy';
+import { isContentReviewPhase, normalizeReviewPhase } from '../lib/reviewPolicy';
+import { prepareWorkflowAssignmentOwners, resolveWorkflowAssignment } from '../lib/workflowAssignment';
+import { getUniqueShazaUser, getVoiceOverProvider, isVoiceOverPhase, VOICE_OVER_PROVIDER_OPTIONS } from '../lib/voiceOverPolicy';
+import { canChangeWorkflowPhaseOmission, canManageWorkflowOmissions } from '../lib/workflowOmissions';
+import { resolveFixedArtDirector, resolveTaskFinalArtDirector } from '../lib/finalApprovalPolicy';
 
 const CONTROL_CLASS = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10';
 const SELECT_BUTTON_CLASS = 'rounded-xl border-slate-200 px-3 py-2.5 text-sm font-black text-slate-900 shadow-sm hover:bg-slate-50 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10';
@@ -50,8 +58,10 @@ function isValidUrl(str: string) {
 
 function formatDeadline(value?: string | null) {
   if (!value) return 'No deadline';
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  const parsed = getTaskDeadlineAt({ deadlineAt: value, deadlineText: null });
+  return !parsed
+    ? value
+    : parsed.toLocaleString('en-EG', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Africa/Cairo' });
 }
 
 function formatAssignmentDate(value?: string | null) {
@@ -64,9 +74,17 @@ function normalizeLinks(links: string[]) {
   return links.map(link => link.trim()).filter(Boolean);
 }
 
+function taskIncludesContentReview(task: Task) {
+  if (!task.workflowSnapshot) return Boolean(task.needsContentRevision);
+  const skippedPhaseIds = new Set(task.workflowSkippedPhaseIds || []);
+  return task.workflowSnapshot.phases.some(phase => !phase.disabled && isContentReviewPhase(phase) && !skippedPhaseIds.has(phase.id));
+}
+
 function splitDeadline(value?: string | null) {
   if (!value) return { date: '', time: '' };
-  const [datePart, timePart = ''] = value.split('T');
+  const parsed = getTaskDeadlineAt({ deadlineAt: value, deadlineText: null });
+  if (!parsed) return { date: '', time: '' };
+  const [datePart, timePart = ''] = formatDeadlineInput(parsed).split('T');
   return {
     date: datePart || '',
     time: timePart.slice(0, 5),
@@ -80,7 +98,7 @@ function isDateValue(value: string) {
 }
 
 function getTodayInputValue() {
-  return getDateInputValue(new Date().toISOString());
+  return formatDeadlineInput(new Date()).slice(0, 10);
 }
 
 function isTimeValue(value: string) {
@@ -88,11 +106,8 @@ function isTimeValue(value: string) {
 }
 
 function combineDeadline(date: string, time: string) {
-  return isDateValue(date) && isTimeValue(time) ? `${date}T${time}` : '';
-}
-
-function toggleValue(values: string[], value: string) {
-  return values.includes(value) ? values.filter(item => item !== value) : [...values, value];
+  if (!isDateValue(date) || !isTimeValue(time)) return '';
+  return parseDeadlineInput(`${date}T${time}`)?.toISOString() || '';
 }
 
 function splitMemberResponsibilities(value?: string) {
@@ -117,11 +132,23 @@ function userMatchesResponsibilityLabel(user: User, responsibilityId: string, ap
   return searchParts.some(part => jobTitle.includes(part));
 }
 
-function getAssignmentGroups(tasks: Task[], users: ReturnType<typeof useAppStore>['users'], currentUserId: string, appSettings: ReturnType<typeof useAppStore>['appSettings']) {
+function hasAssignmentParticipation(task: Task, userId: string, appSettings: ReturnType<typeof useAppStore>['appSettings'], userList: User[]) {
+  if (!task.handledBy.includes(userId)) return false;
+  const user = userList.find(candidate => candidate.id === userId);
+  return Boolean(user && (
+    canUserActAsCurrentOwner(task, user, undefined, appSettings, userList) || hasTaskWorkHistory(task, userId)
+  ));
+}
+
+function getAssignmentGroups(tasks: Task[], users: ReturnType<typeof useAppStore>['users'], currentUserId: string, appSettings: ReturnType<typeof useAppStore>['appSettings'], userList: User[]) {
   const groups = new Map<string, Task[]>();
 
   sortWorkAssignments(tasks, appSettings).forEach(task => {
-    task.handledBy.forEach(userId => {
+    const participating = task.handledBy.filter(userId => hasAssignmentParticipation(task, userId, appSettings, userList));
+    // Omitting all work can route directly to AD before any contributor has
+    // history. Keep already-authorized tasks reachable for their creator.
+    const groupIds = participating.length ? participating : getCurrentOwnerUserIds(task).length ? getCurrentOwnerUserIds(task) : [task.createdBy];
+    groupIds.forEach(userId => {
       groups.set(userId, [...(groups.get(userId) || []), task]);
     });
   });
@@ -150,8 +177,8 @@ export function AssignedWorkSection({
   onOpenTask?: (taskId: string) => void;
   mode?: 'create' | 'tracking';
 }) {
-  const { currentUser, userList, users, appSettings, updateAppSettings, createManualUser, updateUserProfile, addCustomResponsibility, deleteUserAccount, createWorkAssignment, updateWorkAssignment, deleteWorkAssignment, addTaskComment, addNotifications, setTaskActiveWorkByLeader } = useAppStore();
-  const [activeTab, setActiveTab] = useState<'assign_task' | 'task_list' | 'task_types'>('assign_task');
+  const { currentUser, userList, users, appSettings, createManualUser, updateUserProfile, addCustomResponsibility, createWorkAssignment, updateWorkAssignment, deleteWorkAssignment, addTaskComment, setTaskActiveWorkByLeader } = useAppStore();
+  const [activeTab, setActiveTab] = useState<'assign_task' | 'task_list'>('assign_task');
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [name, setName] = useState('');
 
@@ -185,11 +212,12 @@ export function AssignedWorkSection({
   const [contentRevisionAssigneeIds, setContentRevisionAssigneeIds] = useState<string[]>([]);
   const [isTemporarySelfTask, setIsTemporarySelfTask] = useState(false);
   const [submittedOnBehalfOfIds, setSubmittedOnBehalfOfIds] = useState<string[]>([]);
-  const [taskType, setTaskType] = useState<string>('video');
+  const [taskType, setTaskType] = useState<string>('');
   const [showAllUsers, setShowAllUsers] = useState(false);
   const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
   const [workflowNodeAssigneeIds, setWorkflowNodeAssigneeIds] = useState<Record<string, string[]>>({});
   const [workflowNodeAIAssigneeIds, setWorkflowNodeAIAssigneeIds] = useState<Record<string, string>>({});
+  const [workflowNodeVoiceOverDeliveryOwnerIds, setWorkflowNodeVoiceOverDeliveryOwnerIds] = useState<Record<string, string>>({});
   const [workflowSkippedPhaseIds, setWorkflowSkippedPhaseIds] = useState<string[]>([]);
   const [links, setLinks] = useState<string[]>([]);
   const [linkInput, setLinkInput] = useState('');
@@ -197,21 +225,6 @@ export function AssignedWorkSection({
   const [deadlineError, setDeadlineError] = useState('');
   const [workflowAssignmentError, setWorkflowAssignmentError] = useState('');
 
-  // Task type management states
-  const [taskTypeName, setTaskTypeName] = useState('');
-  const [taskTypeJobTitles, setTaskTypeJobTitles] = useState<string[]>([]);
-  const [taskTypeDetailed, setTaskTypeDetailed] = useState(false);
-  const [taskTypeFullReviewers, setTaskTypeFullReviewers] = useState<string[]>([]);
-  const [taskTypeQuickLookReviewers, setTaskTypeQuickLookReviewers] = useState<string[]>([]);
-  const [taskTypeFinalReviewers, setTaskTypeFinalReviewers] = useState<string[]>([]);
-
-  const [editingTaskTypeId, setEditingTaskTypeId] = useState<string | null>(null);
-  const [editingLabel, setEditingLabel] = useState('');
-  const [editingJobTitles, setEditingJobTitles] = useState<string[]>([]);
-  const [editingDetailed, setEditingDetailed] = useState(false);
-  const [editingFullReviewers, setEditingFullReviewers] = useState<string[]>([]);
-  const [editingQuickLookReviewers, setEditingQuickLookReviewers] = useState<string[]>([]);
-  const [editingFinalReviewers, setEditingFinalReviewers] = useState<string[]>([]);
   const [clarificationTaskId, setClarificationTaskId] = useState<string | null>(null);
   const [clarificationQuestion, setClarificationQuestion] = useState('');
   const [isAddingLinkInput, setIsAddingLinkInput] = useState(false);
@@ -227,6 +240,8 @@ export function AssignedWorkSection({
   const handleSendClarification = (e: React.FormEvent) => {
     e.preventDefault();
     if (!clarificationTaskId || !clarificationQuestion.trim()) return;
+    const task = tasks.find(item => item.id === clarificationTaskId);
+    if (!task || !canEditTask(task, currentUser, appSettings, userList)) return;
 
     addTaskComment(clarificationTaskId, {
       authorId: currentUser.id,
@@ -235,31 +250,11 @@ export function AssignedWorkSection({
       sections: [],
     });
 
-    const task = tasks.find(t => t.id === clarificationTaskId);
-    if (task) {
-      const notifyUsers = new Set<string>();
-      if (task.createdBy && task.createdBy !== currentUser.id) {
-        notifyUsers.add(task.createdBy);
-      }
-      task.handledBy.forEach(userId => {
-        if (userId !== currentUser.id) {
-          notifyUsers.add(userId);
-        }
-      });
-      if (notifyUsers.size > 0) {
-        addNotifications(
-          Array.from(notifyUsers),
-          clarificationTaskId,
-          `${currentUser.name} requested clarifications on "${task.name}": ${clarificationQuestion.trim().slice(0, 60)}${clarificationQuestion.trim().length > 60 ? '...' : ''}`
-        );
-      }
-    }
-
     setClarificationTaskId(null);
     setClarificationQuestion('');
   };
 
-  const isLeadershipAssigner = isLeaderboardUser(currentUser.id) || Boolean(currentUser.isAdmin) || currentUser.role === 'admin';
+  const isLeadershipAssigner = canReassignWorkflowTask(currentUser);
   const canCreate = canCreateWorkAssignment(currentUser, appSettings);
   const priorityOptions = getActivePriorityOptions(appSettings);
   const assigneeOptions = userList.filter(user => {
@@ -273,17 +268,31 @@ export function AssignedWorkSection({
   });
 
   const otherUsers = assigneeOptions.filter(user => !suggestedUsers.some(su => su.id === user.id));
-  const selectedWorkflowForTaskType = getWorkflowForTaskType(appSettings, taskType);
+  const editingTask = editingTaskId ? tasks.find(task => task.id === editingTaskId) : null;
+  const canManageStepOmissions = canManageWorkflowOmissions(currentUser, appSettings, editingTask || undefined, userList);
+  const editingOriginalTaskType = Boolean(editingTask && cleanTaskTypeKey(taskType) === cleanTaskTypeKey(editingTask.taskType));
+  const selectedWorkflowForTaskType = editingOriginalTaskType
+    ? editingTask?.workflowSnapshot || getWorkflowForTaskType(appSettings, taskType)
+    : getWorkflowForTaskType(appSettings, taskType);
   const workflowSteps = (selectedWorkflowForTaskType?.phases || []).filter(phase => (phase.nodeType || 'step') === 'step' && !phase.disabled);
+  const fixedFinalPhaseIds = new Set(workflowSteps.filter(isMandatoryFinalReview).map(phase => phase.id));
+  const contentReviewPhaseIds = workflowSteps.filter(isContentReviewPhase).map(phase => phase.id);
+  const hasContentReviewStep = contentReviewPhaseIds.length > 0;
+  const canToggleContentReview = !editingTask || (canManageStepOmissions && (!editingOriginalTaskType || workflowSteps
+    .filter(isContentReviewPhase)
+    .every(phase => canChangeWorkflowPhaseOmission(editingTask, phase, needsContentRevision).ok)));
   const workflowNodeSelectedIds = Array.from(new Set([
-    ...Object.values(workflowNodeAssigneeIds).flat().filter((id): id is string => typeof id === 'string' && Boolean(id) && !id.startsWith('voice_over_')),
+    ...Object.entries(workflowNodeAssigneeIds)
+      .filter(([phaseId]) => !fixedFinalPhaseIds.has(phaseId))
+      .flatMap(([, ids]) => ids)
+      .filter((id): id is string => typeof id === 'string' && Boolean(id) && !id.startsWith('voice_over_')),
     ...Object.values(workflowNodeAIAssigneeIds).filter(Boolean),
+    ...Object.values(workflowNodeVoiceOverDeliveryOwnerIds).filter(Boolean),
   ]));
   const effectiveAssigneeIds = isLeadershipAssigner
     ? Array.from(new Set([...assigneeIds, ...workflowNodeSelectedIds]))
     : [currentUser.id];
-
-  const canViewAllWorkload = userCanViewFullWorkspace(currentUser, appSettings);
+  const workContributorIds = isLeadershipAssigner ? assigneeIds : [currentUser.id];
 
   useEffect(() => {
     if (!canCreate || isLeadershipAssigner || editingTaskId) return;
@@ -298,18 +307,31 @@ export function AssignedWorkSection({
       return Object.keys(next).length === Object.keys(prev).length ? prev : next;
     });
     setWorkflowNodeAIAssigneeIds(prev => Object.fromEntries(Object.entries(prev).filter(([phaseId]) => validStepIds.has(phaseId))));
+    setWorkflowNodeVoiceOverDeliveryOwnerIds(prev => Object.fromEntries(Object.entries(prev).filter(([phaseId]) => validStepIds.has(phaseId))));
     setWorkflowSkippedPhaseIds(prev => prev.filter(phaseId => validStepIds.has(phaseId)));
   }, [selectedWorkflowForTaskType?.id, taskType]);
 
   useEffect(() => {
+    if (!hasContentReviewStep && needsContentRevision) {
+      setNeedsContentRevision(false);
+      setContentRevisionAssigneeIds([]);
+    }
+  }, [hasContentReviewStep, needsContentRevision]);
+
+  useEffect(() => {
     const availableTypes = getTaskTypeConfigs(appSettings);
-    if (availableTypes.length > 0 && !availableTypes.some(config => cleanTaskTypeKey(config.id) === cleanTaskTypeKey(taskType))) {
+    if (editingTaskId) return;
+    if (availableTypes.length === 0) {
+      if (taskType) setTaskType('');
+      return;
+    }
+    if (!availableTypes.some(config => cleanTaskTypeKey(config.id) === cleanTaskTypeKey(taskType))) {
       setTaskType(availableTypes[0].id);
     }
-  }, [appSettings, taskType]);
+  }, [appSettings, editingTaskId, taskType]);
 
   const visibleTasks = tasks.filter(task => {
-    return canViewAllWorkload || task.handledBy.includes(currentUser.id) || task.createdBy === currentUser.id;
+    return canViewTask(task, currentUser, appSettings, userList);
   });
 
   const filteredTasks = visibleTasks.filter(task => {
@@ -320,12 +342,7 @@ export function AssignedWorkSection({
       if (filterTeamMode === 'cooperation' && task.handledBy.length <= 1) return false;
     }
     if (filterAssignee !== 'all') {
-      const involvedIds = new Set([
-        ...task.handledBy,
-        ...(task.contentRevisionAssigneeIds || []),
-        ...Object.values(task.workflowNodeAssigneeIds || {}).flat(),
-      ]);
-      if (!involvedIds.has(filterAssignee)) return false;
+      if (!hasAssignmentParticipation(task, filterAssignee, appSettings, userList)) return false;
     }
     if (filterPriority !== 'all' && task.priority !== filterPriority) return false;
 
@@ -372,7 +389,7 @@ export function AssignedWorkSection({
     return true;
   });
 
-  const assignmentGroups = getAssignmentGroups(filteredTasks, users, currentUser.id, appSettings);
+  const assignmentGroups = getAssignmentGroups(filteredTasks, users, currentUser.id, appSettings, userList);
 
   const getUserById = (id: string) => users[id] || (id === currentUser.id ? currentUser : undefined) || initialUsers.find(user => user.id === id);
 
@@ -382,11 +399,7 @@ export function AssignedWorkSection({
     ...uniqueCreators.map(u => ({ value: u.id, label: u.name }))
   ];
 
-  const uniqueAssignees = Array.from(new Set(visibleTasks.flatMap(task => [
-    ...task.handledBy,
-    ...(task.contentRevisionAssigneeIds || []),
-    ...Object.values(task.workflowNodeAssigneeIds || {}).flat(),
-  ]))).map(getUserById).filter(Boolean) as Array<NonNullable<ReturnType<typeof getUserById>>>;
+  const uniqueAssignees = userList.filter(user => visibleTasks.some(task => hasAssignmentParticipation(task, user.id, appSettings, userList)));
 
   const filterTeamModeOptions = [
     { value: 'all', label: 'All (Solo/Coop)' },
@@ -454,6 +467,7 @@ export function AssignedWorkSection({
     setAssigneeIds([]);
     setWorkflowNodeAssigneeIds({});
     setWorkflowNodeAIAssigneeIds({});
+    setWorkflowNodeVoiceOverDeliveryOwnerIds({});
     setWorkflowSkippedPhaseIds([]);
     setLinks([]);
     setLinkInput('');
@@ -470,12 +484,6 @@ export function AssignedWorkSection({
     ...appSettings.responsibilities.map(responsibility => responsibility.label),
     ...memberOptions.flatMap(user => splitMemberResponsibilities(user.jobTitle)),
   ]);
-  const jobTitleResponsibilities = appSettings.responsibilities.filter(responsibility => {
-    const label = responsibility.label.toLowerCase();
-    if (['admin', 'reviewer', 'team leader', 'manager', 'developer', 'marketing manager', 'art director', 'hr'].includes(label)) return false;
-    return true;
-  });
-
   const openMemberModal = (user?: User) => {
     const parts = splitMemberResponsibilities(user?.jobTitle);
     setEditingMemberId(user?.id || null);
@@ -538,98 +546,6 @@ export function AssignedWorkSection({
     closeMemberModal();
   };
 
-  const confirmDeleteMember = (user: User) => {
-    if (!canManageMembers || user.id === currentUser.id) return;
-    if (!window.confirm(`Delete ${user.name}? This removes the member from the tool.`)) return;
-    deleteUserAccount(user.id);
-  };
-
-  const handleAddTaskType = () => {
-    const name = taskTypeName.trim();
-    if (!name) return;
-    const normalized = normalizeTaskTypeId(name);
-
-    if (taskTypeConfigs.some(c => cleanTaskTypeKey(c.id) === cleanTaskTypeKey(normalized))) {
-      alert('This task type already exists.');
-      return;
-    }
-
-    const newConfig: TaskTypeConfig = {
-      id: normalized,
-      label: name,
-      suggestedJobTitles: taskTypeJobTitles,
-      isDetailedReview: taskTypeDetailed,
-      fullReviewerUserIds: taskTypeFullReviewers,
-      quickLookUserIds: taskTypeQuickLookReviewers,
-      finalReviewerUserIds: taskTypeFinalReviewers,
-    };
-
-    updateAppSettings(settings => {
-      const current = settings.taskTypes || [];
-      return {
-        ...settings,
-        taskTypes: [...current, newConfig]
-      };
-    });
-
-    setTaskTypeName('');
-    setTaskTypeJobTitles([]);
-    setTaskTypeDetailed(false);
-    setTaskTypeFullReviewers([]);
-    setTaskTypeQuickLookReviewers([]);
-    setTaskTypeFinalReviewers([]);
-  };
-
-  const handleDeleteTaskType = (id: string) => {
-    if (!confirm(`Are you sure you want to delete the task type "${id}"?`)) return;
-    updateAppSettings(settings => {
-      const current = settings.taskTypes || [];
-      return {
-        ...settings,
-        taskTypes: current.filter(t => {
-          const tId = typeof t === 'object' && t !== null ? t.id : String(t);
-          return cleanTaskTypeKey(tId) !== cleanTaskTypeKey(id);
-        })
-      };
-    });
-  };
-
-  const handleStartEditingTaskType = (config: TaskTypeConfig) => {
-    setEditingTaskTypeId(config.id);
-    setEditingLabel(config.label);
-    setEditingJobTitles(config.suggestedJobTitles);
-    setEditingDetailed(config.isDetailedReview);
-    setEditingFullReviewers(config.fullReviewerUserIds || []);
-    setEditingQuickLookReviewers(config.quickLookUserIds || []);
-    setEditingFinalReviewers(config.finalReviewerUserIds || []);
-  };
-
-  const handleSaveEditTaskType = () => {
-    if (!editingLabel.trim()) return;
-    updateAppSettings(settings => {
-      const current = settings.taskTypes || [];
-      return {
-        ...settings,
-        taskTypes: current.map(t => {
-          const tId = typeof t === 'object' && t !== null ? t.id : String(t);
-          if (cleanTaskTypeKey(tId) === cleanTaskTypeKey(editingTaskTypeId || '')) {
-            return {
-              id: tId,
-              label: editingLabel.trim(),
-              suggestedJobTitles: editingJobTitles,
-              isDetailedReview: editingDetailed,
-              fullReviewerUserIds: editingFullReviewers,
-              quickLookUserIds: editingQuickLookReviewers,
-              finalReviewerUserIds: editingFinalReviewers,
-            };
-          }
-          return t;
-        })
-      };
-    });
-    setEditingTaskTypeId(null);
-  };
-
   const addLink = async () => {
     const nextLink = linkInput.trim();
     if (!nextLink || !isValidUrl(nextLink) || isAddingLinkInput) return;
@@ -663,6 +579,7 @@ export function AssignedWorkSection({
 
   const submitAssignment = (event: React.FormEvent) => {
     event.preventDefault();
+    setWorkflowAssignmentError('');
 
     const todayInputValue = getTodayInputValue();
     if (assignmentDate && (!isDateValue(assignmentDate) || assignmentDate < todayInputValue)) {
@@ -679,19 +596,41 @@ export function AssignedWorkSection({
       }
     }
 
-    const hasRequiredFinalApprovalOwner = workflowSteps
-      .filter(phase => getPhaseOwnerRole(phase) === 'art_director')
-      .every(phase => {
-        const manuallyAssignedIds = workflowNodeAssigneeIds[phase.id] || [];
-        if (manuallyAssignedIds.some(userId => Boolean(users[userId]))) return true;
-        if ((phase.userIds || []).some(userId => Boolean(users[userId]))) return true;
-        return userList.some(user => user.id !== 'guest' && user.role === 'art_director');
-      });
-    if (!hasRequiredFinalApprovalOwner) {
-      setWorkflowAssignmentError('This workflow requires an Art Director before it can be assigned. Add or update that member in Members Roles and Positions.');
-      return;
-    }
+    const selectedPhaseIds = new Set(workflowSteps.map(phase => phase.id));
+    const syncedSkippedPhaseIds = (needsContentRevision
+      ? workflowSkippedPhaseIds.filter(phaseId => !contentReviewPhaseIds.includes(phaseId))
+      : Array.from(new Set([...workflowSkippedPhaseIds, ...contentReviewPhaseIds])))
+      .filter(phaseId => selectedPhaseIds.has(phaseId));
+    let preparedWorkflowNodeAssigneeIds = Object.fromEntries(Object.entries(workflowNodeAssigneeIds).filter(([phaseId]) => selectedPhaseIds.has(phaseId) && !fixedFinalPhaseIds.has(phaseId))) as Record<string, string[]>;
+    const preparedWorkflowNodeAIAssigneeIds = Object.fromEntries(Object.entries(workflowNodeAIAssigneeIds).filter(([phaseId]) => selectedPhaseIds.has(phaseId))) as Record<string, string>;
+    let preparedVoiceOverDeliveryOwnerIds = Object.fromEntries(Object.entries(workflowNodeVoiceOverDeliveryOwnerIds).filter(([phaseId]) => selectedPhaseIds.has(phaseId))) as Record<string, string>;
 
+    if (!editingTaskId) {
+      const workflowSelection = resolveWorkflowAssignment(appSettings, taskType, selectedWorkflowForTaskType?.id);
+      if (!workflowSelection.ok || !workflowSelection.workflow) {
+        setWorkflowAssignmentError(workflowSelection.message || 'This task type does not have a valid active workflow.');
+        return;
+      }
+      const ownerPreparation = prepareWorkflowAssignmentOwners(workflowSelection.workflow, {
+        id: 'new-work-assignment',
+        createdBy: currentUser.id,
+        handledBy: effectiveAssigneeIds,
+        versions: [],
+        assignmentLinks: normalizeLinks(links),
+        contentRevisionAssigneeIds: needsContentRevision ? contentRevisionAssigneeIds : [],
+        workflowNodeAssigneeIds: preparedWorkflowNodeAssigneeIds,
+        workflowNodeAIAssigneeIds: preparedWorkflowNodeAIAssigneeIds,
+        workflowNodeVoiceOverDeliveryOwnerIds: preparedVoiceOverDeliveryOwnerIds,
+        workflowSkippedPhaseIds: syncedSkippedPhaseIds,
+        needsContentRevision,
+      }, appSettings, userList, workContributorIds);
+      if (!ownerPreparation.ok) {
+        setWorkflowAssignmentError(ownerPreparation.message || 'Select an accountable member for every required workflow step.');
+        return;
+      }
+      preparedWorkflowNodeAssigneeIds = ownerPreparation.workflowNodeAssigneeIds || {};
+      preparedVoiceOverDeliveryOwnerIds = ownerPreparation.workflowNodeVoiceOverDeliveryOwnerIds || {};
+    }
     const input = {
       name,
       description,
@@ -700,9 +639,11 @@ export function AssignedWorkSection({
       deadlineAt: hasDeadlineInput ? deadlineAt : null,
       assignmentLinks: normalizeLinks(links),
       handledByIds: effectiveAssigneeIds,
-      workflowNodeAssigneeIds,
-      workflowNodeAIAssigneeIds,
-      workflowSkippedPhaseIds,
+      workContributorIds,
+      workflowNodeAssigneeIds: preparedWorkflowNodeAssigneeIds,
+      workflowNodeAIAssigneeIds: preparedWorkflowNodeAIAssigneeIds,
+      workflowNodeVoiceOverDeliveryOwnerIds: preparedVoiceOverDeliveryOwnerIds,
+      workflowSkippedPhaseIds: syncedSkippedPhaseIds,
       isOvertime,
       taskType,
       needsContentRevision,
@@ -711,10 +652,12 @@ export function AssignedWorkSection({
       submittedOnBehalfOfIds,
     };
 
-    if (editingTaskId) {
-      updateWorkAssignment(editingTaskId, input);
-    } else {
-      createWorkAssignment(input);
+    const result = editingTaskId
+      ? updateWorkAssignment(editingTaskId, input)
+      : createWorkAssignment(input);
+    if (!result.ok) {
+      setWorkflowAssignmentError(result.message || 'This assignment could not be saved. Review the workflow and try again.');
+      return;
     }
     resetForm();
   };
@@ -729,15 +672,17 @@ export function AssignedWorkSection({
     setDeadlineDate(deadline.date);
     setDeadlineTime(deadline.time);
     setIsOvertime(task.isOvertime || false);
-    setNeedsContentRevision(task.needsContentRevision || false);
+    const savedSkippedPhaseIds = task.workflowSkippedPhaseIds || [];
+    setNeedsContentRevision(taskIncludesContentReview(task));
     setContentRevisionAssigneeIds(task.contentRevisionAssigneeIds || []);
     setIsTemporarySelfTask(Boolean(task.isTemporarySelfTask));
     setSubmittedOnBehalfOfIds(task.submittedOnBehalfOfIds || []);
     setTaskType(task.taskType || 'video');
-    setAssigneeIds(task.handledBy);
+    setAssigneeIds(task.workContributorIds ?? task.handledBy);
     setWorkflowNodeAssigneeIds(task.workflowNodeAssigneeIds || {});
     setWorkflowNodeAIAssigneeIds(task.workflowNodeAIAssigneeIds || {});
-    setWorkflowSkippedPhaseIds(task.workflowSkippedPhaseIds || []);
+    setWorkflowNodeVoiceOverDeliveryOwnerIds(task.workflowNodeVoiceOverDeliveryOwnerIds || {});
+    setWorkflowSkippedPhaseIds(savedSkippedPhaseIds);
     setLinks(task.assignmentLinks || []);
     setActiveTab('assign_task');
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
@@ -752,12 +697,14 @@ export function AssignedWorkSection({
       deadlineAt: task.deadlineAt || null,
       assignmentLinks: normalizeLinks(task.assignmentLinks || []),
       handledByIds: task.handledBy,
+      workContributorIds: task.workContributorIds ?? task.handledBy,
       workflowNodeAssigneeIds: task.workflowNodeAssigneeIds || {},
       workflowNodeAIAssigneeIds: task.workflowNodeAIAssigneeIds || {},
+      workflowNodeVoiceOverDeliveryOwnerIds: task.workflowNodeVoiceOverDeliveryOwnerIds || {},
       workflowSkippedPhaseIds: task.workflowSkippedPhaseIds || [],
       isOvertime: Boolean(task.isOvertime),
       taskType: task.taskType || 'others',
-      needsContentRevision: Boolean(task.needsContentRevision),
+      needsContentRevision: taskIncludesContentReview(task),
       contentRevisionAssigneeIds: task.contentRevisionAssigneeIds || [],
       isTemporarySelfTask: Boolean(task.isTemporarySelfTask),
       submittedOnBehalfOfIds: task.submittedOnBehalfOfIds || [],
@@ -778,7 +725,8 @@ export function AssignedWorkSection({
   const todayInputValue = getTodayInputValue();
   const assignmentDateIsValid = !assignmentDate || (isDateValue(assignmentDate) && assignmentDate >= todayInputValue);
   const deadlineIsValid = !hasDeadlineInput || (Boolean(deadlineDate && deadlineTime) && deadlineValidation.ok);
-  const formIsValid = name.trim() && Boolean(taskType) && assignmentDateIsValid && deadlineIsValid && effectiveAssigneeIds.length > 0;
+  const hasValidTaskType = Boolean(editingTaskId) || taskTypeConfigs.some(config => cleanTaskTypeKey(config.id) === cleanTaskTypeKey(taskType));
+  const formIsValid = name.trim() && hasValidTaskType && assignmentDateIsValid && deadlineIsValid && effectiveAssigneeIds.length > 0;
   const sectionTitle = mode === 'tracking'
     ? 'Task List'
     : activeTab === 'task_list'
@@ -819,391 +767,7 @@ export function AssignedWorkSection({
         )}
       </div>
 
-      {activeTab === 'task_types' && canCreate && mode === 'create' ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 space-y-6">
-          <div>
-            <h4 className="text-base font-black text-slate-900">Configure Workflow Task Types</h4>
-            <p className="text-xs font-semibold text-slate-500">Configure task type names, suggested positions, and reviewer ownership.</p>
-          </div>
-
-          {/* Add form */}
-          <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-4 space-y-4">
-            <h5 className="text-xs font-black uppercase tracking-wider text-slate-500">Create Task Type</h5>
-            <div className="grid gap-3 sm:grid-cols-[1fr,auto]">
-              <input
-                value={taskTypeName}
-                onChange={event => setTaskTypeName(event.target.value)}
-                placeholder="Task Type Name (e.g. Video, Content Revision)"
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-900 shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-              />
-              <button
-                type="button"
-                onClick={handleAddTaskType}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-black text-white hover:bg-indigo-700 transition-colors"
-              >
-                <Plus className="h-4 w-4" /> Add Type
-              </button>
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Suggested Roles / Job Titles</label>
-              <div className="flex flex-wrap gap-2">
-                {jobTitleResponsibilities.map(r => {
-                  const active = taskTypeJobTitles.includes(r.label);
-                  return (
-                    <button
-                      key={r.id}
-                      type="button"
-                      onClick={() => {
-                        setTaskTypeJobTitles(prev =>
-                          prev.includes(r.label) ? prev.filter(l => l !== r.label) : [...prev, r.label]
-                        );
-                      }}
-                      className={cn(
-                        "rounded-full border px-3 py-1 text-xs font-bold transition-all",
-                        active
-                          ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-black"
-                          : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                      )}
-                    >
-                      {r.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-3 pt-2">
-              <div className="space-y-1.5">
-                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">First Reviewers (Custom)</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {seedUsers.map(user => {
-                    const active = taskTypeFullReviewers.includes(user.id);
-                    return (
-                      <button
-                        key={user.id}
-                        type="button"
-                        onClick={() => {
-                          setTaskTypeFullReviewers(prev => toggleValue(prev, user.id));
-                        }}
-                        className={cn(
-                          "rounded-full border px-2.5 py-0.5 text-xs font-bold transition-all",
-                          active
-                            ? "bg-blue-50 border-blue-200 text-blue-700 font-black"
-                            : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                        )}
-                      >
-                        {user.name}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Content Reviewers (Custom)</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {seedUsers.map(user => {
-                    const active = taskTypeQuickLookReviewers.includes(user.id);
-                    return (
-                      <button
-                        key={user.id}
-                        type="button"
-                        onClick={() => {
-                          setTaskTypeQuickLookReviewers(prev => toggleValue(prev, user.id));
-                        }}
-                        className={cn(
-                          "rounded-full border px-2.5 py-0.5 text-xs font-bold transition-all",
-                          active
-                            ? "bg-amber-50 border-amber-200 text-amber-700 font-black"
-                            : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                        )}
-                      >
-                        {user.name}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Final Reviewers (Custom)</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {seedUsers.map(user => {
-                    const active = taskTypeFinalReviewers.includes(user.id);
-                    return (
-                      <button
-                        key={user.id}
-                        type="button"
-                        onClick={() => {
-                          setTaskTypeFinalReviewers(prev => toggleValue(prev, user.id));
-                        }}
-                        className={cn(
-                          "rounded-full border px-2.5 py-0.5 text-xs font-bold transition-all",
-                          active
-                            ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-black"
-                            : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                        )}
-                      >
-                        {user.name}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-white px-2 py-1 text-xs font-bold text-slate-600 shadow-sm">
-                <input
-                  type="checkbox"
-                  checked={taskTypeDetailed}
-                  onChange={event => setTaskTypeDetailed(event.target.checked)}
-                  className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
-                />
-                Revision request form
-              </label>
-            </div>
-          </div>
-
-          {/* List */}
-          <div className="space-y-3">
-            <h5 className="text-xs font-black uppercase tracking-wider text-slate-500">Existing Task Types</h5>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {taskTypeConfigs.map(config => {
-                const isEditing = editingTaskTypeId === config.id;
-                return (
-                  <div key={config.id} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-all hover:border-slate-300">
-                    {isEditing ? (
-                      <div className="space-y-3">
-                        <div className="flex gap-2">
-                          <input
-                            value={editingLabel}
-                            onChange={event => setEditingLabel(event.target.value)}
-                            className="flex-1 rounded-xl border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-900 shadow-sm"
-                          />
-                          <button
-                            type="button"
-                            onClick={handleSaveEditTaskType}
-                            className="rounded-xl bg-indigo-600 px-3 py-1.5 text-xs font-black text-white hover:bg-indigo-700 transition-colors"
-                          >
-                            Save
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setEditingTaskTypeId(null)}
-                            className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-black text-slate-600 hover:bg-slate-50 transition-colors"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Suggested Roles</label>
-                          <div className="flex flex-wrap gap-1.5">
-                            {jobTitleResponsibilities.map(r => {
-                              const active = editingJobTitles.includes(r.label);
-                              return (
-                                <button
-                                  key={r.id}
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingJobTitles(prev =>
-                                      prev.includes(r.label) ? prev.filter(l => l !== r.label) : [...prev, r.label]
-                                    );
-                                  }}
-                                  className={cn(
-                                    "rounded-full border px-2.5 py-0.5 text-[11px] font-bold transition-all",
-                                    active
-                                      ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-black"
-                                      : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                                  )}
-                                >
-                                  {r.label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        <div className="grid gap-3 md:grid-cols-3 pt-1">
-                          <div className="space-y-1">
-                            <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">First Reviewers (Custom)</label>
-                            <div className="flex flex-wrap gap-1.5">
-                              {seedUsers.map(user => {
-                                const active = editingFullReviewers.includes(user.id);
-                                return (
-                                  <button
-                                    key={user.id}
-                                    type="button"
-                                    onClick={() => {
-                                      setEditingFullReviewers(prev => toggleValue(prev, user.id));
-                                    }}
-                                    className={cn(
-                                      "rounded-full border px-2 py-0.5 text-[11px] font-bold transition-all",
-                                      active
-                                        ? "bg-blue-50 border-blue-200 text-blue-700 font-black"
-                                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                                    )}
-                                  >
-                                    {user.name}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-
-                          <div className="space-y-1">
-                            <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Content Reviewers (Custom)</label>
-                            <div className="flex flex-wrap gap-1.5">
-                              {seedUsers.map(user => {
-                                const active = editingQuickLookReviewers.includes(user.id);
-                                return (
-                                  <button
-                                    key={user.id}
-                                    type="button"
-                                    onClick={() => {
-                                      setEditingQuickLookReviewers(prev => toggleValue(prev, user.id));
-                                    }}
-                                    className={cn(
-                                      "rounded-full border px-2 py-0.5 text-[11px] font-bold transition-all",
-                                      active
-                                        ? "bg-amber-50 border-amber-200 text-amber-700 font-black"
-                                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                                    )}
-                                  >
-                                    {user.name}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-
-                          <div className="space-y-1">
-                            <label className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Final Reviewers (Custom)</label>
-                            <div className="flex flex-wrap gap-1.5">
-                              {seedUsers.map(user => {
-                                const active = editingFinalReviewers.includes(user.id);
-                                return (
-                                  <button
-                                    key={user.id}
-                                    type="button"
-                                    onClick={() => {
-                                      setEditingFinalReviewers(prev => toggleValue(prev, user.id));
-                                    }}
-                                    className={cn(
-                                      "rounded-full border px-2 py-0.5 text-[11px] font-bold transition-all",
-                                      active
-                                        ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-black"
-                                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                                    )}
-                                  >
-                                    {user.name}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-0.5 text-xs font-bold text-slate-600 font-medium">
-                            <input
-                              type="checkbox"
-                              checked={editingDetailed}
-                              onChange={event => setEditingDetailed(event.target.checked)}
-                              className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
-                            />
-                            Revision request form
-                          </label>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="space-y-1 min-w-0 flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <h4 className="text-sm font-black text-slate-900">{config.label}</h4>
-                            <span className="text-[10px] font-bold text-slate-400 font-mono">ID: {config.id}</span>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 font-medium">Suggested:</span>
-                            {config.suggestedJobTitles.length > 0 ? (
-                              config.suggestedJobTitles.map(title => (
-                                <span key={title} className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">{title}</span>
-                              ))
-                            ) : (
-                              <span className="text-[10px] font-medium text-slate-500 italic">Anyone</span>
-                            )}
-                            <span className="text-[10px] text-slate-300 font-bold">|</span>
-                            <span className={cn(
-                              "rounded-full px-2 py-0.5 text-[10px] font-bold",
-                              config.isDetailedReview
-                                ? "bg-amber-50 text-amber-700 border border-amber-200/50"
-                                : "bg-slate-50 text-slate-500 border border-slate-200/50"
-                            )}>
-                              {config.isDetailedReview ? 'Revision form' : 'Simple feedback'}
-                            </span>
-                          </div>
-
-                          {/* Custom Reviewers Display */}
-                          {((config.fullReviewerUserIds?.length || 0) > 0 ||
-                            (config.quickLookUserIds?.length || 0) > 0 ||
-                            (config.finalReviewerUserIds?.length || 0) > 0) && (
-                            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-                              {config.fullReviewerUserIds && config.fullReviewerUserIds.length > 0 && (
-                                <div className="flex items-center gap-1">
-                                  <span className="font-black text-blue-600 uppercase tracking-wider text-[9px]">First Reviewers:</span>
-                                  <span className="font-bold text-slate-700 bg-blue-50/50 px-1.5 py-0.5 rounded border border-blue-100/50">
-                                    {config.fullReviewerUserIds.map(uid => users[uid]?.name || uid).join(', ')}
-                                  </span>
-                                </div>
-                              )}
-                              {config.quickLookUserIds && config.quickLookUserIds.length > 0 && (
-                                <div className="flex items-center gap-1">
-                                  <span className="font-black text-amber-600 uppercase tracking-wider text-[9px]">Content Reviewers:</span>
-                                  <span className="font-bold text-slate-700 bg-amber-50/50 px-1.5 py-0.5 rounded border border-amber-100/50">
-                                    {config.quickLookUserIds.map(uid => users[uid]?.name || uid).join(', ')}
-                                  </span>
-                                </div>
-                              )}
-                              {config.finalReviewerUserIds && config.finalReviewerUserIds.length > 0 && (
-                                <div className="flex items-center gap-1">
-                                  <span className="font-black text-indigo-600 uppercase tracking-wider text-[9px]">Final Review:</span>
-                                  <span className="font-bold text-slate-700 bg-indigo-50/50 px-1.5 py-0.5 rounded border border-indigo-100/50">
-                                    {config.finalReviewerUserIds.map(uid => users[uid]?.name || uid).join(', ')}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleStartEditingTaskType(config)}
-                            className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-50 transition-colors"
-                            title="Edit task type"
-                          >
-                            <Settings className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteTaskType(config.id)}
-                            className="rounded-lg border border-rose-200 bg-white p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors"
-                            title="Delete task type"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      ) : (
+      {(
         <>
           {((canCreate && mode === 'create' && activeTab === 'assign_task') || Boolean(editingTaskId)) && (
             <form onSubmit={submitAssignment} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
@@ -1289,9 +853,12 @@ export function AssignedWorkSection({
                     <CustomSelect
                       value={taskType}
                       onChange={value => setTaskType(value)}
-                    options={taskTypeConfigs.map(config => ({ value: config.id, label: config.label.toUpperCase() }))}
-                    buttonClassName={SELECT_BUTTON_CLASS}
-                  />
+                      options={taskTypeConfigs.map(config => ({ value: config.id, label: getWorkflowTaskTypeOptionLabel(appSettings, config).toUpperCase() }))}
+                      buttonClassName={SELECT_BUTTON_CLASS}
+                    />
+                    {taskTypeConfigs.length === 0 && !editingTaskId && (
+                      <p className="mt-1 text-xs font-bold text-rose-600">Create and activate a workflow before assigning work.</p>
+                    )}
                 </div>
                 </div>
               </div>
@@ -1324,7 +891,7 @@ export function AssignedWorkSection({
                 </p>
               </div>
               <div>
-                <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Deadline</label>
+                <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">Deadline (Africa/Cairo)</label>
                 <div className="grid gap-2 sm:grid-cols-[1fr,140px]">
                   <ThemedDatePicker
                     value={deadlineDate}
@@ -1373,20 +940,24 @@ export function AssignedWorkSection({
                       />
                       Overtime Task
                     </label>
-                    <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-0.5 text-[11px] font-black uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors">
+                    {hasContentReviewStep && !canManageStepOmissions && <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[11px] font-black uppercase tracking-wider text-indigo-700 hover:bg-indigo-100 transition-colors">
                       <input
                         type="checkbox"
                         checked={needsContentRevision}
+                        disabled={!canToggleContentReview}
                         onChange={event => {
                           setNeedsContentRevision(event.target.checked);
+                          setWorkflowSkippedPhaseIds(previous => event.target.checked
+                            ? previous.filter(phaseId => !contentReviewPhaseIds.includes(phaseId))
+                            : Array.from(new Set([...previous, ...contentReviewPhaseIds])));
                           if (!event.target.checked) {
                             setContentRevisionAssigneeIds([]);
                           }
                         }}
-                        className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
+                        className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
                       />
-                      Needs Content Revision
-                    </label>
+                      Include Content Review (optional)
+                    </label>}
                   </div>
                 </div>
               </div>
@@ -1413,19 +984,36 @@ export function AssignedWorkSection({
                   emptyText="No suggested users available"
                 />
 
-                {isLeadershipAssigner && workflowSteps.length > 0 && (
+                {!isLeadershipAssigner && !canManageStepOmissions && workflowSteps.filter(isMandatoryFinalReview).map(phase => {
+                  const fixed = editingTask ? resolveTaskFinalArtDirector(phase, editingTask, appSettings, userList) : resolveFixedArtDirector(phase, appSettings, userList);
+                  return <div key={phase.id} role={fixed.ok ? 'status' : 'alert'} aria-label={`${phase.name} fixed Art Director`} className="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs text-violet-900">
+                    <p className="font-black">{phase.name}: {fixed.ok ? getUserName(users, fixed.ownerId!) : 'Art Director configuration required'}</p>
+                    <p className="mt-1">{fixed.ok ? 'Required final approval. Assigned automatically and cannot be changed for this task.' : fixed.message}</p>
+                  </div>;
+                })}
+                {(isLeadershipAssigner || canManageStepOmissions) && workflowSteps.length > 0 && (
                   <div className="mt-4 space-y-3 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-3">
                     <div>
-                      <h5 className="text-xs font-black uppercase tracking-wider text-indigo-700">Workflow Step Assignees</h5>
+                      <h5 className="text-xs font-black uppercase tracking-wider text-indigo-700">{isLeadershipAssigner ? 'Workflow Step Assignees' : 'Workflow Steps'}</h5>
                       <p className="mt-1 text-[11px] font-semibold text-indigo-600">
-                        {selectedWorkflowForTaskType?.name || 'Selected workflow'} is used for this task type. Choose who completes each node.
+                        {selectedWorkflowForTaskType?.name || 'Selected workflow'} is used for this task type. {isLeadershipAssigner ? 'Choose who completes each node or omit non-required steps.' : 'Omit or restore non-required steps for this task.'}
                       </p>
                     </div>
                     {workflowSteps.map((phase, index) => {
                       const phaseResponsibilityLabels = (phase.responsibilityIds || []).map(id => appSettings.responsibilities.find(item => item.id === id)?.label || id.replace(/_/g, ' '));
-                      const isSkipped = workflowSkippedPhaseIds.includes(phase.id);
-                      const canSkipPhase = canSkipWorkflowPhase(phase);
-                      const isVoiceOver = (phase.responsibilityIds || []).includes('voice_over');
+                      const isContentReview = isContentReviewPhase(phase);
+                      const isSkipped = isContentReview ? !needsContentRevision : workflowSkippedPhaseIds.includes(phase.id);
+                      const omissionEligibility = editingTask && editingOriginalTaskType
+                        ? canChangeWorkflowPhaseOmission(editingTask, phase, !isSkipped)
+                        : { ok: canSkipWorkflowPhase(phase) };
+                      const canSkipPhase = omissionEligibility.ok;
+                      const isVoiceOver = isVoiceOverPhase(phase);
+                      const isFixedFinalReview = isMandatoryFinalReview(phase);
+                      const fixedArtDirector = isFixedFinalReview
+                        ? (editingTask
+                          ? resolveTaskFinalArtDirector(phase, editingTask, appSettings, userList)
+                          : resolveFixedArtDirector(phase, appSettings, userList))
+                        : null;
                       const phaseUsers = assigneeOptions.filter(user => {
                         const isExplicitPhaseMember = (phase.userIds || []).includes(user.id);
                         const hasRoleRestriction = (phase.roleIds || []).length > 0;
@@ -1436,6 +1024,11 @@ export function AssignedWorkSection({
                       });
                       const requiresConfiguredOwners = (phase.roleIds || []).length > 0 || (phase.responsibilityIds || []).length > 0;
                       const selectedIds = workflowNodeAssigneeIds[phase.id] || [];
+                      const voiceOverProvider = isVoiceOver ? getVoiceOverProvider({ workflowNodeAssigneeIds, workflowNodeAIAssigneeIds, workflowNodeVoiceOverDeliveryOwnerIds }, phase) : null;
+                      const shazaUser = isVoiceOver ? getUniqueShazaUser(userList) : null;
+                      const voiceOverDeliveryOwnerId = workflowNodeVoiceOverDeliveryOwnerIds[phase.id]
+                        || (voiceOverProvider === 'voice_over_ai' ? workflowNodeAIAssigneeIds[phase.id] : '')
+                        || '';
                       return (
                         <div key={phase.id} className={cn("rounded-xl border bg-white p-3", isSkipped ? "border-slate-200 opacity-65" : "border-indigo-100")}>
                           <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
@@ -1445,10 +1038,24 @@ export function AssignedWorkSection({
                               {phase.nodeNote && <p className="mt-1 text-xs font-semibold text-slate-500">{phase.nodeNote}</p>}
                             </div>
                             <div className="flex flex-wrap justify-end gap-1.5">
-                              {canSkipPhase && (
-                                <button type="button" onClick={() => setWorkflowSkippedPhaseIds(prev => isSkipped ? prev.filter(id => id !== phase.id) : [...prev, phase.id])} className={cn("rounded-lg border px-2 py-1 text-[10px] font-black", isSkipped ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700")}>
-                                  {isSkipped ? 'Include step' : 'Skip optional step'}
+                              {canManageStepOmissions && canSkipPhase && (
+                                <button
+                                  type="button"
+                                  aria-label={`${isSkipped ? 'Include' : 'Omit'} ${phase.name}`}
+                                  onClick={() => {
+                                    if (isContentReview) {
+                                      setNeedsContentRevision(isSkipped);
+                                      if (!isSkipped) setContentRevisionAssigneeIds([]);
+                                    }
+                                    setWorkflowSkippedPhaseIds(prev => isSkipped ? prev.filter(id => id !== phase.id) : Array.from(new Set([...prev, phase.id])));
+                                  }}
+                                  className={cn("rounded-lg border px-2 py-1 text-[10px] font-black", isSkipped ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700")}
+                                >
+                                  {isSkipped ? 'Include step' : 'Omit step'}
                                 </button>
+                              )}
+                              {isFixedFinalReview && (
+                                <span className="rounded-lg border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] font-black uppercase tracking-wide text-violet-700">Required</span>
                               )}
                               {phaseResponsibilityLabels.length > 0 ? phaseResponsibilityLabels.map(label => (
                                 <span key={label} className="rounded-full border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-indigo-700">{label}</span>
@@ -1457,45 +1064,85 @@ export function AssignedWorkSection({
                               )}
                             </div>
                           </div>
-                          {!isSkipped && (isVoiceOver ? (
-                            <div className="space-y-2">
-                              <CustomSelect
-                                value={selectedIds[0] || ''}
-                                onChange={value => {
-                                  setWorkflowNodeAssigneeIds(prev => ({ ...prev, [phase.id]: value ? [value] : [] }));
-                                  if (value !== 'voice_over_ai') setWorkflowNodeAIAssigneeIds(prev => ({ ...prev, [phase.id]: '' }));
-                                }}
-                                options={[
-                                  { value: '', label: 'Choose voice over provider' },
-                                  { value: 'voice_over_shaza', label: 'Shaza' },
-                                  { value: 'voice_over_ai', label: 'AI generated voice' },
-                                ]}
-                              />
-                              {selectedIds.includes('voice_over_ai') && (
-                                <CustomSelect
-                                  value={workflowNodeAIAssigneeIds[phase.id] || ''}
-                                  onChange={value => setWorkflowNodeAIAssigneeIds(prev => ({ ...prev, [phase.id]: value }))}
-                                  options={[
-                                    { value: '', label: 'Choose content team member' },
-                                    ...userList.filter(user => user.id !== 'guest' && /content creator/i.test(user.jobTitle || '')).map(user => ({ value: user.id, label: user.name })),
-                                  ]}
-                                />
+                          {!isSkipped && (isLeadershipAssigner || isFixedFinalReview) && (isFixedFinalReview ? (
+                            <div
+                              role={fixedArtDirector?.ok ? 'status' : 'alert'}
+                              aria-label={`${phase.name} fixed Art Director`}
+                              className={cn(
+                                "rounded-lg border px-3 py-2",
+                                fixedArtDirector?.ok ? "border-violet-200 bg-violet-50 text-violet-900" : "border-rose-200 bg-rose-50 text-rose-800",
                               )}
+                            >
+                              <div className="text-[10px] font-black uppercase tracking-wider">Fixed approver</div>
+                              <div className="mt-1 text-sm font-black">
+                                {fixedArtDirector?.ok && fixedArtDirector.ownerId
+                                  ? getUserName(users, fixedArtDirector.ownerId)
+                                  : 'Art Director configuration required'}
+                              </div>
+                              <p className="mt-1 text-[11px] font-semibold">
+                                {fixedArtDirector?.ok
+                                  ? 'Final Review is assigned automatically and cannot be changed for this task.'
+                                  : fixedArtDirector?.message}
+                              </p>
+                            </div>
+                          ) : isVoiceOver ? (
+                            <div className="space-y-2">
+                              <div role="group" aria-label={`${phase.name} voice over provider`}>
+                                <CustomSelect
+                                  value={voiceOverProvider || ''}
+                                  onChange={value => {
+                                    if (value === voiceOverProvider) return;
+                                    setWorkflowNodeAssigneeIds(prev => ({ ...prev, [phase.id]: value ? [value] : [] }));
+                                    setWorkflowNodeAIAssigneeIds(prev => ({ ...prev, [phase.id]: '' }));
+                                    setWorkflowNodeVoiceOverDeliveryOwnerIds(prev => ({ ...prev, [phase.id]: '' }));
+                                  }}
+                                  options={[
+                                    ...VOICE_OVER_PROVIDER_OPTIONS,
+                                  ]}
+                                  placeholder="Choose voice over provider"
+                                />
+                              </div>
+                              {voiceOverProvider === 'voice_over_shaza' && shazaUser && !voiceOverDeliveryOwnerId ? (
+                                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800">
+                                  Delivery owner: {shazaUser.name} (workspace member)
+                                </div>
+                              ) : voiceOverProvider ? (
+                                <div role="group" aria-label={`${phase.name} ${voiceOverProvider === 'voice_over_ai' ? 'human uploader' : 'delivery coordinator'}`} className="space-y-1.5">
+                                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500">
+                                    {voiceOverProvider === 'voice_over_ai' ? 'Human uploader' : 'Delivery coordinator'}
+                                  </label>
+                                  <CustomSelect
+                                    value={voiceOverDeliveryOwnerId}
+                                    onChange={value => setWorkflowNodeVoiceOverDeliveryOwnerIds(prev => ({ ...prev, [phase.id]: value }))}
+                                    options={[
+                                      { value: '', label: voiceOverProvider === 'voice_over_ai' ? 'Choose who uploads the AI audio' : 'Choose a coordinator for external Shaza' },
+                                      ...userList.filter(user => user.id !== 'guest').map(user => ({ value: user.id, label: user.name })),
+                                    ]}
+                                  />
+                                  <p className="text-[11px] font-semibold text-slate-500">
+                                    {voiceOverProvider === 'voice_over_ai'
+                                      ? 'This person is accountable for delivering and uploading the generated audio.'
+                                      : 'This person coordinates delivery and upload; Shaza remains the voice provider.'}
+                                  </p>
+                                </div>
+                              ) : null}
                             </div>
                           ) : (
-                            <UserMultiSelect
-                              users={phaseUsers.length > 0 || requiresConfiguredOwners ? phaseUsers : assigneeOptions}
-                              selectedIds={selectedIds}
-                              onChange={ids => setWorkflowNodeAssigneeIds(prev => ({ ...prev, [phase.id]: ids }))}
-                              emptyText={getPhaseOwnerRole(phase) === 'art_director' ? 'No Art Director is configured for this required final approval step' : 'No members match this node responsibility'}
-                            />
+                            <div className="space-y-1.5">
+                              <UserMultiSelect
+                                users={phaseUsers.length > 0 || requiresConfiguredOwners ? phaseUsers : assigneeOptions}
+                                selectedIds={selectedIds}
+                                onChange={ids => setWorkflowNodeAssigneeIds(prev => ({ ...prev, [phase.id]: ids }))}
+                                emptyText={normalizeReviewPhase(phase).phaseKind === 'final_review' ? 'No Art Director is configured for this required final review step' : 'No members match this node responsibility'}
+                              />
+                              {normalizeReviewPhase(phase).phaseKind === 'work' && !requiresConfiguredOwners && !(phase.userIds || []).length && !Object.prototype.hasOwnProperty.call(workflowNodeAssigneeIds, phase.id) && (
+                                <p className="text-[11px] font-semibold text-indigo-600">Uses the selected task assignees when left unchanged.</p>
+                              )}
+                            </div>
                           ))}
                         </div>
                       );
                     })}
-                    {workflowAssignmentError && (
-                      <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700">{workflowAssignmentError}</p>
-                    )}
                   </div>
                 )}
 
@@ -1553,6 +1200,9 @@ export function AssignedWorkSection({
                   </div>
                 )}
               </div>
+              {workflowAssignmentError && (
+                <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700">{workflowAssignmentError}</p>
+              )}
               <div className="flex flex-col gap-2 sm:flex-row">
                 <button
                   type="submit"
@@ -1785,8 +1435,9 @@ export function AssignedWorkSection({
             const creatorName = getUserName(users, task.createdBy);
             const isUploaded = Boolean(task.assignmentUploadedAt || task.status !== 'assigned_work');
             const canUpload = canUploadWorkAssignment(task, currentUser);
-            const canEdit = canManageWorkAssignment(task, currentUser, appSettings);
-            const canDelete = canDeleteWorkAssignment(task, currentUser);
+            const canMutateTask = canEditTask(task, currentUser, appSettings, userList);
+            const canEdit = canMutateTask && canManageWorkAssignment(task, currentUser, appSettings);
+            const canDelete = canMutateTask && canDeleteWorkAssignment(task, currentUser);
             const teamStatus = assigneeNames.length > 1 ? `Team task (${assigneeNames.length} people)` : 'Solo task';
             const statusInfo = getStatusInfo(task, currentUser.role, users);
 
@@ -1903,22 +1554,9 @@ export function AssignedWorkSection({
                   ))}
                 </div>
 
-                {task.workflowSnapshot && Object.keys(task.workflowNodeAssigneeIds || {}).length > 0 && (
-                  <div className="mb-3 space-y-1 rounded-xl border border-indigo-100 bg-indigo-50/40 p-2">
-                    <div className="text-[10px] font-black uppercase tracking-wider text-indigo-600">Workflow node owners</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {task.workflowSnapshot.phases
-                        .filter(phase => (task.workflowNodeAssigneeIds?.[phase.id] || []).length > 0)
-                        .map(phase => (
-                          <span key={phase.id} className="rounded-lg border border-indigo-100 bg-white px-2 py-1 text-[11px] font-bold text-slate-700">
-                            {phase.name}: {(task.workflowNodeAssigneeIds?.[phase.id] || []).map(id => getUserName(users, id)).join(', ')}
-                          </span>
-                        ))}
-                    </div>
-                  </div>
-                )}
+                <WorkflowRoadmap task={task} />
 
-                {task.needsContentRevision && (
+                {taskIncludesContentReview(task) && (
                   <div className="mb-3 flex items-center gap-1.5 text-xs font-bold text-slate-500">
                     <span className="rounded-lg bg-amber-50 border border-amber-200 px-2 py-1 text-amber-800">
                       Content Revision: {task.contentRevisionAssigneeIds && task.contentRevisionAssigneeIds.length > 0
@@ -1970,7 +1608,7 @@ export function AssignedWorkSection({
                     {isUploaded ? 'Finished Work Uploaded' : canUpload ? 'Upload Finished Work' : 'Waiting for Upload'}
                   </button>
 
-                  <button
+                  {canMutateTask && <button
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation();
@@ -1980,10 +1618,10 @@ export function AssignedWorkSection({
                   >
                     <HelpCircle className="h-4 w-4" />
                     Need Clarifications
-                  </button>
+                  </button>}
                 </div>
 
-                {canSetActiveWorkForMember(currentUser) && task.handledBy.includes(group.userId) && !isUploaded && (
+                {canMutateTask && canSetActiveWorkForMember(currentUser) && task.handledBy.includes(group.userId) && !isUploaded && (
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs">
                     <span className="font-bold text-amber-800">
                       {task.activeWorkSetById && task.activeWorkSetById === currentUser.id
@@ -2062,7 +1700,7 @@ export function AssignedWorkSection({
 
       {clarificationTaskId && (() => {
         const task = tasks.find(t => t.id === clarificationTaskId);
-        if (!task) return null;
+        if (!task || !canEditTask(task, currentUser, appSettings, userList)) return null;
         return (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm transition-all" onClick={() => { setClarificationTaskId(null); setClarificationQuestion(''); }}>
             <div className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>

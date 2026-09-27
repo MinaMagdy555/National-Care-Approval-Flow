@@ -5,6 +5,7 @@ export type Environment = 'production' | 'demo' | 'archived';
 export type ReviewMode = 'content_review' | 'first_review' | 'final_review' | 'full_review' | 'quick_look' | 'direct_to_ad';
 export type WorkflowReviewStyle = 'content_review' | 'first_review' | 'final_review' | 'full_review' | 'quick_look' | 'final_approval';
 export type WorkflowPhaseMode = 'sequential' | 'parallel';
+export type VoiceOverProvider = 'voice_over_shaza' | 'voice_over_ai';
 export type WorkflowNodeType = 'step' | 'note' | 'section';
 export type Priority = string;
 export type AssignmentPeriod = 'day' | 'week' | 'month';
@@ -46,6 +47,23 @@ export interface User {
   legacyId?: string | null;
   passwordHash?: string;
   passwordUpdatedAt?: string;
+}
+
+/** Permanent app-membership removal record; never contains credentials. */
+export interface DeletedMember {
+  id: string;
+  email?: string;
+  name: string;
+  role?: Role;
+  jobTitle?: string;
+  deletedAt: string;
+  deletedBy: string;
+}
+
+export interface MemberDeletionResult {
+  ok: boolean;
+  message?: string;
+  blockingTasks?: Array<{ taskId: string; taskCode: string; phaseName: string }>;
 }
 
 export type AccountApprovalStatus = 'pending' | 'approved' | 'rejected';
@@ -158,7 +176,7 @@ export interface WorkflowDefinition {
 export interface WorkflowPhaseHistoryEntry {
   phaseId: string;
   phaseName: string;
-  action: 'started' | 'approved' | 'changes_requested' | 'skipped' | 'completed' | 'workflow_changed';
+  action: 'started' | 'approved' | 'changes_requested' | 'skipped' | 'completed' | 'workflow_changed' | 'invalidated';
   actorId: string;
   targetUserIds?: string[];
   createdAt: string;
@@ -168,6 +186,7 @@ export interface WorkflowPhaseHistoryEntry {
 export interface AppSettings {
   responsibilities: ResponsibilityOption[];
   manualUsers?: User[];
+  deletedMembers?: DeletedMember[];
   priorities: PriorityOption[];
   businessCalendar: BusinessCalendarSettings;
   settingsManagerUserIds: string[];
@@ -195,6 +214,8 @@ export interface AppSettings {
   dailyReportAutoSendEnabled?: boolean;
   dailyReportAutoSendTime?: string | null;
   dailyReportReceiverUserIds?: string[];
+  /** Explicit null disables automatic senior inference for this member. */
+  reportingSeniorByUserId?: Record<string, string | null>;
   /** One-time shared-data migration marker for clearing stale legacy notifications. */
   notificationResetVersion?: number;
   /** One-time migration that removes the placeholder task types from the early prototype. */
@@ -250,6 +271,9 @@ export interface Notification {
   message: string;
   read: boolean;
   createdAt: string;
+  /** Report audience is checked again whenever this notification is read. */
+  dailyReportId?: string;
+  deadlineReminder?: { deadlineAt: string; hours: 24 | 1 };
 }
 
 export interface TaskCommentSection {
@@ -327,8 +351,14 @@ export interface Task {
   workflowActivePhaseIds?: string[];
   /** Assignment-time optional steps intentionally omitted from this task's workflow. */
   workflowSkippedPhaseIds?: string[];
-  /** A Voice Over node can be routed to external Shaza or AI plus a content owner. */
+/** A Voice Over node can be routed to external Shaza or AI plus a content owner. */
   workflowNodeAIAssigneeIds?: Record<string, string>;
+  /** Accountable delivery person for a VO provider; old AI-owner maps remain readable. */
+  workflowNodeVoiceOverDeliveryOwnerIds?: Record<string, string>;
+  /** Durable per-task final Art Director assigned at task creation or workflow replacement. */
+  workflowFinalApproverIdsByPhaseId?: Record<string, string>;
+  /** Explicit general work contributors, separate from future phase participants. */
+  workContributorIds?: string[];
   environment: Environment;
   createdBy: string; // user id
   handledBy: string[]; // user ids
@@ -338,6 +368,8 @@ export interface Task {
   currentOwnerUserIds: string[];
   priority: Priority;
   deadlineText: string | null;
+  /** Delivery receipts survive notification dismissal; keys include the deadline and recipient. */
+  deadlineReminderReceipts?: Record<string, string>;
   assignmentPeriod?: AssignmentPeriod | null;
   assignmentLinks?: string[];
   assignmentDate?: string | null;
@@ -363,9 +395,11 @@ export interface Task {
   archivedAt?: string | null;
   archivedReason?: string | null;
   isOvertime?: boolean | null;
+  /** Legacy/UI preference. Saved workflowSkippedPhaseIds remain the routing authority. */
   needsContentRevision?: boolean | null;
   contentRevisionAssigneeIds?: string[];
   activeWorkBy?: string | null;
+  workSessions?: Array<{ id: string; userId: string; phaseId: string | null; startedAt: string; finishedAt: string | null; note?: string | null; endReason?: 'finished' | 'reassigned' | 'step_closed' }>;
   activeWorkStartedAt?: string | null;
   activeWorkFinishedAt?: string | null;
   activeWorkNote?: string | null;
@@ -377,6 +411,12 @@ export interface Task {
   activeWorkSetAt?: string | null;
   activeWorkFinishedById?: string | null;
   workflowPhaseAvailableAt?: string | null;
+  /** Independent availability for parallel phases; this map is authoritative when present. */
+  workflowPhaseAvailableAtByPhaseId?: Record<string, string>;
+  /** Active phases awaiting their individual delayed handoff notification. */
+  workflowPendingHandoffPhaseIds?: string[];
+  /** Phases whose handoff notification is held back until workflowPhaseAvailableAt passes. */
+  workflowPhaseHandoffPendingPhaseIds?: string[];
   workflowPhaseRevisionCounts?: Record<string, number>;
   createdAt: string;
   updatedAt: string;
@@ -384,6 +424,12 @@ export interface Task {
 
 export interface DailyReportEntry {
   taskId: string;
+  title?: string;
+  taskCode?: string;
+  source?: 'work' | 'manual';
+  taskStatus?: TaskStatus;
+  workState?: 'active' | 'finished';
+  manuallyEdited?: boolean;
   startTime?: string | null;
   endTime?: string | null;
   durationMinutes?: number | null;
@@ -414,6 +460,7 @@ export interface DailyReport {
   sentAt?: string | null;
   sentBy?: string | null;
   autoSent?: boolean;
+  autoSendWarningAt?: string | null;
   editHistory: DailyReportEditVersion[];
   createdAt: string;
   updatedAt: string;

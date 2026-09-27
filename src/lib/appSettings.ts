@@ -1,3 +1,5 @@
+import { applyMemberDeletions } from './memberIdentity';
+import { normalizeReviewPhase } from './reviewPolicy';
 import { AppSettings, Priority, PriorityOption, PriorityTone, ResponsibilityOption, Role, TaskType, User, TaskTypeConfig, CustomWorkingHours, WorkflowDefinition, WorkflowPhaseDefinition } from './types';
 
 export const MINA_ID = '83e02bb4-11f9-41b0-becb-33e6c4c52b2a';
@@ -18,6 +20,60 @@ const now = new Date().toISOString();
 export const FULL_REVIEW_WORKFLOW_ID = 'workflow_full_review_default';
 export const QUICK_LOOK_WORKFLOW_ID = 'workflow_quick_look_default';
 export const SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID = 'workflow_social_media_campaigns_default';
+
+const LEGACY_INTERNAL_EDITS_NAME = 'Any Internal Edits?';
+const LEGACY_INTERNAL_EDITS_COPY = 'Decision point: if internal comments exist, route edits to the correct creative owner; if not, notify senior video editor.';
+const INTERNAL_EDITS_NAME = 'Submit Internally Reviewed Assets';
+const INTERNAL_EDITS_SEED_COPY = 'The assigned content or senior creative owner uploads the files after internal review. Submission continues to Notify Senior Video Editor. If changes are requested from this step, the task returns to Write Content.';
+const INTERNAL_EDITS_GENERIC_COPY = "The assigned content or senior creative owner uploads the files after internal review. Submission continues to the next configured step. If changes are requested, the task follows this workflow's configured return route.";
+const LEGACY_INTERNAL_REVIEW_SECTION_COPY = 'Content team and senior video editor review in parallel before the internal edits decision.';
+const INTERNAL_REVIEW_SECTION_COPY = 'Content team and senior video editor review in parallel before the reviewed assets are submitted.';
+const LEGACY_APPROVAL_OUTCOME_COPY = 'Decision point: approved campaigns move to ready for posting; returned campaigns go back for edits.';
+const APPROVAL_OUTCOME_COPY = 'Outcome of Final Art Director Approval: approval marks the campaign ready for posting; Return for Changes sends it back for revisions and another review. This is an informational note, with no extra approval action.';
+const APPROVAL_DECISION_COPY = 'This saved workflow includes an explicit Art Director decision. Approve continues to its configured next step; Return for Changes follows its configured revision route.';
+
+function getCampaignCopyUpgrade(workflow: WorkflowDefinition, phase: WorkflowPhaseDefinition): Partial<WorkflowPhaseDefinition> {
+  if (phase.id === 'approved' && phase.name === 'Approved?') {
+    const isNote = phase.nodeType === 'note';
+    const copy = isNote ? APPROVAL_OUTCOME_COPY : APPROVAL_DECISION_COPY;
+    return {
+      name: isNote ? 'Art Director Review Outcome' : 'Art Director Decision',
+      ...(!phase.instructions || phase.instructions === LEGACY_APPROVAL_OUTCOME_COPY ? { instructions: copy } : {}),
+      ...(!phase.nodeNote || phase.nodeNote === LEGACY_APPROVAL_OUTCOME_COPY ? { nodeNote: copy } : {}),
+    };
+  }
+  if (phase.id === 'section_internal_review') {
+    return {
+      ...(phase.instructions === LEGACY_INTERNAL_REVIEW_SECTION_COPY ? { instructions: INTERNAL_REVIEW_SECTION_COPY } : {}),
+      ...(phase.nodeNote === LEGACY_INTERNAL_REVIEW_SECTION_COPY ? { nodeNote: INTERNAL_REVIEW_SECTION_COPY } : {}),
+    };
+  }
+  if (phase.id !== 'any_internal_edits' || phase.name !== LEGACY_INTERNAL_EDITS_NAME || normalizeReviewPhase(phase).phaseKind !== 'work') return {};
+
+  const returnTarget = workflow.phases.find(candidate => candidate.id === 'write_content');
+  const forwardTarget = workflow.phases.find(candidate => candidate.id === 'notify_senior_video_editor');
+  const ordinaryChildSteps = workflow.phases.filter(candidate => (candidate.nodeType || 'step') === 'step'
+    && (candidate.parentPhaseId === phase.id || (candidate.parentPhaseIds || []).includes(phase.id)));
+  const followsExpectedRoute = Boolean(returnTarget
+    && forwardTarget
+    && !returnTarget.disabled
+    && !forwardTarget.disabled
+    && phase.returnToPhaseId === returnTarget.id
+    && phase.failToPhaseId === returnTarget.id
+    && returnTarget.name === 'Write Content'
+    && (returnTarget.nodeType || 'step') === 'step'
+    && forwardTarget.name === 'Notify Senior Video Editor'
+    && (forwardTarget.nodeType || 'step') === 'step'
+    && ordinaryChildSteps.length === 1
+    && ordinaryChildSteps[0].id === forwardTarget.id
+    && (!phase.passToPhaseId || phase.passToPhaseId === forwardTarget.id));
+  const replacementCopy = followsExpectedRoute ? INTERNAL_EDITS_SEED_COPY : INTERNAL_EDITS_GENERIC_COPY;
+  return {
+    name: INTERNAL_EDITS_NAME,
+    ...(!phase.instructions || phase.instructions === LEGACY_INTERNAL_EDITS_COPY ? { instructions: replacementCopy } : {}),
+    ...(!phase.nodeNote || phase.nodeNote === LEGACY_INTERNAL_EDITS_COPY ? { nodeNote: replacementCopy } : {}),
+  };
+}
 
 function campaignPhase(
   id: string,
@@ -46,7 +102,7 @@ function campaignPhase(
     id,
     name,
     phaseKind,
-    reviewStyle,
+    reviewStyle: phaseKind === 'final_review' ? 'final_review' : phaseKind === 'content_review' ? 'content_review' : 'first_review',
     mode,
     userIds: [],
     roleIds,
@@ -285,13 +341,13 @@ const seededWorkflows: WorkflowDefinition[] = [
       ),
       campaignPhase(
         'any_internal_edits',
-        'Any Internal Edits?',
+        INTERNAL_EDITS_NAME,
         'content_team_review',
         ['content_team_review', 'senior_video_editor_review'],
         600,
         1460,
         ['content_creator', 'senior_brand_designer_video_editor'],
-        'Decision point: if internal comments exist, route edits to the correct creative owner; if not, notify senior video editor.',
+        INTERNAL_EDITS_SEED_COPY,
         'sequential',
         'quick_look',
         [],
@@ -433,7 +489,7 @@ const seededWorkflows: WorkflowDefinition[] = [
         650,
         200,
         '#f59e0b',
-        'Content team and senior video editor review in parallel before the internal edits decision.',
+        INTERNAL_REVIEW_SECTION_COPY,
       ),
       campaignNote(
         'note_legend',
@@ -535,7 +591,20 @@ const seededWorkflows: WorkflowDefinition[] = [
 // Older generic presets are retained above solely for old task snapshots.
 export const defaultWorkflows: WorkflowDefinition[] = seededWorkflows.filter(
   workflow => workflow.id === SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID,
-);
+).map(workflow => ({
+  ...workflow,
+  // This fixes only the new-workspace seed. Saved templates and task snapshots
+  // are never rewritten: revision work returns to existing production steps.
+  phases: workflow.phases.filter(phase => !['making_internal_edits', 'content_team_review_loop', 'making_art_director_edits'].includes(phase.id)).map(phase => {
+    if (phase.id === 'any_internal_edits') return { ...phase, returnToPhaseId: 'write_content', failToPhaseId: 'write_content' };
+    if (phase.id === 'submit_to_art_director') return { ...phase, phaseKind: 'work', reviewStyle: 'first_review' };
+    if (phase.id === 'art_director_review') return { ...phase, parentPhaseIds: ['submit_to_art_director'], parentPhaseId: 'submit_to_art_director', returnToPhaseId: 'final_creative', failToPhaseId: 'final_creative' };
+    if (phase.id === 'approved' || phase.id === 'ready_for_posting') return { ...phase,
+      ...(phase.id === 'approved' ? { name: 'Art Director Review Outcome', instructions: APPROVAL_OUTCOME_COPY, nodeNote: APPROVAL_OUTCOME_COPY } : {}),
+      nodeType: 'note', phaseKind: 'work', reviewStyle: 'first_review', parentPhaseId: null, parentPhaseIds: [], returnToPhaseId: null, failToPhaseId: null };
+    return { ...phase };
+  }),
+}));
 
 export function getDefaultWorkflowIdForTaskType(taskType: string): string | null {
   const clean = cleanTaskTypeKey(taskType);
@@ -617,34 +686,45 @@ export function normalizeSettingId(value: string) {
 }
 
 export function normalizeTaskTypeId(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]+/g, '')
-    .replace(/\s+/g, ' ') || `custom_${Date.now().toString(36)}`;
+  return normalizeWorkflowTaskTypeId(value) || `custom_${Date.now().toString(36)}`;
 }
 
 export function makeTaskTypeIdForWorkflowName(name: string, fallbackId = 'workflow') {
-  const fromName = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  if (fromName) return fromName;
-
-  return fallbackId
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim() || 'workflow';
+  return normalizeWorkflowTaskTypeId(name) || normalizeWorkflowTaskTypeId(fallbackId) || 'workflow';
 }
 
 export function cleanTaskTypeKey(type: string): string {
-  if (!type) return '';
-  return type.toLowerCase().replace(/_/g, ' ').trim();
+  return normalizeWorkflowTaskTypeId(type);
+}
+
+export function normalizeWorkflowTaskTypeId(type: string): string {
+  const normalized = (type || '').normalize('NFKC').toLowerCase()
+    .replace(/[^\p{L}\p{N}\p{M}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized === 'social media campaign' || normalized === 'social media campaigns'
+    ? 'campaign'
+    : normalized;
+}
+
+export function findWorkflowTaskTypeCollisions(workflows: WorkflowDefinition[]): Array<{ taskTypeId: string; workflowIds: string[] }> {
+  const owners = new Map<string, Set<string>>();
+  for (const workflow of workflows) {
+    if (workflow.active === false) continue;
+    const ids = workflow.taskTypeIds?.length ? workflow.taskTypeIds : [makeTaskTypeIdForWorkflowName(workflow.name, workflow.id)];
+    for (const id of ids.map(normalizeWorkflowTaskTypeId).filter(Boolean)) {
+      if (!owners.has(id)) owners.set(id, new Set());
+      owners.get(id)!.add(workflow.id);
+    }
+  }
+  return [...owners].filter(([, ids]) => ids.size > 1).map(([taskTypeId, ids]) => ({ taskTypeId, workflowIds: [...ids] }));
+}
+
+export function getWorkflowTaskTypeOptionLabel(settings: AppSettings, config: Pick<TaskTypeConfig, 'label' | 'workflowId'>): string {
+  const workflowName = (settings.workflows || []).find(workflow => workflow.id === config.workflowId)?.name.trim();
+  return workflowName && normalizeWorkflowTaskTypeId(config.label) !== normalizeWorkflowTaskTypeId(workflowName)
+    ? `${config.label} (${workflowName})`
+    : config.label;
 }
 
 function getTaskTypeLabelSimple(type: string): string {
@@ -670,100 +750,48 @@ function getTaskTypeLabelSimple(type: string): string {
 }
 
 export function getTaskTypeConfigs(settings: AppSettings): TaskTypeConfig[] {
-  const canonicalTaskTypeId = (id: string) => {
-    const normalized = cleanTaskTypeKey(id);
-    return normalized === 'social media campaign' || normalized === 'social media campaigns'
-      ? 'campaign'
-      : id;
-  };
-  const workflowTypes = (settings.workflows || [])
-    .filter(workflow => workflow.active !== false)
-    .flatMap(workflow => {
-      const taskTypeIds = Array.isArray(workflow.taskTypeIds) && workflow.taskTypeIds.length > 0
-        ? workflow.taskTypeIds
-        : [makeTaskTypeIdForWorkflowName(workflow.name, workflow.id)];
-      return taskTypeIds.map(id => ({ id: canonicalTaskTypeId(id), workflowId: workflow.id }));
-    });
-  const mappedLegacyTypes = Object.entries(settings.taskTypeWorkflowIds || {})
-    .filter(([, workflowId]) => (settings.workflows || []).some(workflow => workflow.id === workflowId))
-    .map(([id, workflowId]) => ({ id: canonicalTaskTypeId(id), workflowId }));
-  const explicitWorkflowTypes = (settings.taskTypes || [])
-    .filter((item): item is TaskTypeConfig => (
-      typeof item === 'object' && item !== null && Boolean((item as TaskTypeConfig).workflowId)
-    ))
-    .map(item => ({ ...item, id: canonicalTaskTypeId(item.id) }));
-  const types: Array<string | TaskTypeConfig> = [
-    ...workflowTypes.map(item => ({ id: item.id, label: getTaskTypeLabelSimple(item.id), suggestedJobTitles: [], isDetailedReview: false, workflowId: item.workflowId })),
-    ...mappedLegacyTypes.map(item => ({ id: item.id, label: getTaskTypeLabelSimple(item.id), suggestedJobTitles: [], isDetailedReview: false, workflowId: item.workflowId })),
-    ...explicitWorkflowTypes,
-  ];
-  const seen = new Set<string>();
-  return types.filter(item => {
-    const id = typeof item === 'string' ? item : item.id;
-    const key = cleanTaskTypeKey(id);
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).map(t => {
-    if (typeof t === 'object' && t !== null) {
-      return {
-        id: (t as any).id,
-        label: (t as any).label || getTaskTypeLabelSimple((t as any).id),
-        suggestedJobTitles: Array.isArray((t as any).suggestedJobTitles) ? (t as any).suggestedJobTitles : [],
-        isDetailedReview: typeof (t as any).isDetailedReview === 'boolean' ? (t as any).isDetailedReview : false,
-        fullReviewerUserIds: Array.isArray((t as any).fullReviewerUserIds) ? (t as any).fullReviewerUserIds : [],
-        quickLookUserIds: Array.isArray((t as any).quickLookUserIds) ? (t as any).quickLookUserIds : [],
-        finalReviewerUserIds: Array.isArray((t as any).finalReviewerUserIds) ? (t as any).finalReviewerUserIds : [],
-        workflowId: typeof (t as any).workflowId === 'string' ? (t as any).workflowId : null,
-      };
-    }
-    
-    const id = String(t);
-    const label = getTaskTypeLabelSimple(id);
-    const cleanId = cleanTaskTypeKey(id);
-    let suggestedJobTitles: string[] = [];
-    let isDetailedReview = false;
-
-    if (cleanId === 'video') {
-      suggestedJobTitles = ['Video Editor', 'Senior Brand Designer & Video Editor'];
-      isDetailedReview = true;
-    } else if (['write content', 'write caption', 'reels voice over script'].includes(cleanId)) {
-      suggestedJobTitles = ['Content Creator'];
-      isDetailedReview = false;
-    } else if (cleanId === 'ai packet') {
-      suggestedJobTitles = ['Graphic Designer', 'Senior Brand Designer & Video Editor'];
-      isDetailedReview = true;
-    } else {
-      suggestedJobTitles = ['Graphic Designer', 'Senior Brand Designer & Video Editor'];
-      isDetailedReview = false;
-    }
-
-    return {
-      id,
-      label,
-      suggestedJobTitles,
-      isDetailedReview,
-      fullReviewerUserIds: [],
-      quickLookUserIds: [],
-      finalReviewerUserIds: [],
-      workflowId: null,
-    };
+  const deletedWorkflowIds = new Set(settings.deletedWorkflowIds || []);
+  const metadataByOwnedType = new Map<string, TaskTypeConfig>();
+  (settings.taskTypes || []).forEach(item => {
+    if (typeof item !== 'object' || item === null || !item.workflowId) return;
+    const id = normalizeWorkflowTaskTypeId(item.id);
+    if (!id) return;
+    const key = `${item.workflowId}\u0000${id}`;
+    if (!metadataByOwnedType.has(key)) metadataByOwnedType.set(key, item);
   });
+
+  const seen = new Set<string>();
+  const configs: TaskTypeConfig[] = [];
+  (settings.workflows || []).forEach(workflow => {
+    if (!workflow?.id || workflow.active === false || deletedWorkflowIds.has(workflow.id)) return;
+    const configuredIds = Array.isArray(workflow.taskTypeIds)
+      ? workflow.taskTypeIds.map(normalizeWorkflowTaskTypeId).filter(Boolean)
+      : [];
+    const ownedIds = configuredIds.length > 0
+      ? configuredIds
+      : [normalizeWorkflowTaskTypeId(makeTaskTypeIdForWorkflowName(workflow.name, workflow.id))];
+
+    ownedIds.forEach(id => {
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      const metadata = metadataByOwnedType.get(`${workflow.id}\u0000${id}`);
+      configs.push({
+        id,
+        label: metadata?.label || getTaskTypeLabelSimple(id),
+        suggestedJobTitles: Array.isArray(metadata?.suggestedJobTitles) ? metadata.suggestedJobTitles : [],
+        isDetailedReview: typeof metadata?.isDetailedReview === 'boolean' ? metadata.isDetailedReview : false,
+        fullReviewerUserIds: Array.isArray(metadata?.fullReviewerUserIds) ? metadata.fullReviewerUserIds : [],
+        quickLookUserIds: Array.isArray(metadata?.quickLookUserIds) ? metadata.quickLookUserIds : [],
+        finalReviewerUserIds: Array.isArray(metadata?.finalReviewerUserIds) ? metadata.finalReviewerUserIds : [],
+        workflowId: workflow.id,
+      });
+    });
+  });
+  return configs;
 }
 
 export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSettings {
-  const taskTypeCleanupVersion = typeof settings?.taskTypeCleanupVersion === 'number'
-    ? settings.taskTypeCleanupVersion
-    : 0;
-  // Version 2 also removes legacy TaskTypeConfig objects. Version 1 removed
-  // only their workflow mapping, leaving old testing types selectable in some
-  // persisted workspaces.
-  const shouldRemovePrototypeTaskTypes = taskTypeCleanupVersion < 2;
-  const prototypeTaskTypeIds = new Set([
-    'video', 'ai packet', 'new product', 'new products', 'sales material',
-    'website material', 'write content', 'write caption', 'reels voice over script', 'others',
-  ]);
-  const isPrototypeTaskType = (id: string) => prototypeTaskTypeIds.has(cleanTaskTypeKey(id));
+  settings = applyMemberDeletions(settings || {});
   const priorities = Array.isArray(settings?.priorities) && settings.priorities.length > 0
     ? settings.priorities
     : defaultAppSettings.priorities;
@@ -772,6 +800,12 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
   if (Array.isArray(settings?.responsibilities)) {
     settings.responsibilities.forEach(responsibility => {
       if (!responsibility?.id) return;
+      // "Senior Content" was a temporary duplicate of the real Senior Content
+      // Creator responsibility. Remove it from old saved workspaces on load.
+      if (
+        responsibility.id === 'senior_content' ||
+        responsibility.label?.trim().toLowerCase() === 'senior content'
+      ) return;
       responsibilityById.set(responsibility.id, {
         ...responsibility,
         label: responsibility.id === 'art_director' || responsibility.label === 'Final Approvement' || responsibility.label === 'Art Director' ? 'Art Director' : responsibility.label,
@@ -803,7 +837,7 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     if (!workflow?.id || deletedWorkflowIdSet.has(workflow.id)) return;
     const isSocialCampaignWorkflow = workflow.id === SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
     const savedTaskTypeIds = Array.isArray(workflow.taskTypeIds)
-      ? workflow.taskTypeIds.map(cleanTaskTypeKey).filter(id => Boolean(id) && (!shouldRemovePrototypeTaskTypes || !isPrototypeTaskType(id)))
+      ? workflow.taskTypeIds.map(normalizeWorkflowTaskTypeId).filter(Boolean)
       : [];
     const requiredWorkflowTaskTypeIds = isSocialCampaignWorkflow
       ? ['campaign']
@@ -831,19 +865,8 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
       ])),
       phases: Array.isArray(workflow.phases) ? workflow.phases.map(phase => ({
         ...phase,
+        ...normalizeReviewPhase({ ...phase, phaseKind: phase.phaseKind || (isSocialCampaignWorkflow ? campaignPhaseKinds[phase.id] : undefined) }),
         name: isSocialCampaignWorkflow ? (campaignPhaseNames[phase.id] || phase.name) : phase.name,
-        phaseKind: campaignPhaseKinds[phase.id] || phase.phaseKind || (
-          phase.reviewStyle === 'final_approval' || (phase.roleIds || []).includes('art_director')
-            ? 'final_review'
-            : phase.reviewStyle === 'full_review'
-              ? 'first_review'
-              : /content.*review/i.test(phase.name || '')
-                ? 'content_review'
-                : /review|approval/i.test(phase.name || '')
-                  ? 'first_review'
-                  : 'work'
-        ),
-        reviewStyle: phase.reviewStyle || 'quick_look',
         mode: phase.mode || 'parallel',
         userIds: Array.isArray(phase.userIds) ? phase.userIds : [],
         roleIds: Array.isArray(phase.roleIds) ? phase.roleIds : [],
@@ -878,6 +901,7 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
           note: subPhase.note || '',
           responsibilityIds: Array.isArray(subPhase.responsibilityIds) ? subPhase.responsibilityIds : [],
         })) : [],
+        ...(isSocialCampaignWorkflow ? getCampaignCopyUpgrade(workflow, phase) : {}),
       })) : [],
     });
   });
@@ -887,7 +911,7 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     ...(settings?.taskTypeWorkflowIds || {}),
   };
   Object.entries(taskTypeWorkflowIds).forEach(([key, workflowId]) => {
-    if (!workflowId || deletedWorkflowIdSet.has(workflowId) || !workflowIds.has(workflowId) || (shouldRemovePrototypeTaskTypes && isPrototypeTaskType(key))) {
+    if (!workflowId || deletedWorkflowIdSet.has(workflowId) || !workflowIds.has(workflowId)) {
       delete taskTypeWorkflowIds[key];
     }
   });
@@ -896,11 +920,13 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     taskTypeWorkflowIds['social media campaign'] = SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
     taskTypeWorkflowIds['social media campaigns'] = SOCIAL_MEDIA_CAMPAIGN_WORKFLOW_ID;
   }
+  const assignedTaskTypeIds = new Set<string>();
   workflows.forEach(workflow => {
     if (workflow.active === false) return;
     (workflow.taskTypeIds || []).forEach(taskTypeId => {
-      const clean = cleanTaskTypeKey(taskTypeId);
-      if (!clean || deletedWorkflowIdSet.has(workflow.id)) return;
+      const clean = normalizeWorkflowTaskTypeId(taskTypeId);
+      if (!clean || deletedWorkflowIdSet.has(workflow.id) || assignedTaskTypeIds.has(clean)) return;
+      assignedTaskTypeIds.add(clean);
       taskTypeWorkflowIds[clean] = workflow.id;
     });
   });
@@ -936,7 +962,7 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     ? (settings as any).dailyReportAutoSendTime
     : '17:29';
 
-  return {
+  return applyMemberDeletions({
     ...defaultAppSettings,
     ...settings,
     responsibilities,
@@ -963,15 +989,17 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     viewAllWorkloadUserIds,
     customPermissions: Array.isArray(settings?.customPermissions) ? settings.customPermissions : [],
     customWorkingHours: Array.isArray(settings?.customWorkingHours) ? settings.customWorkingHours : [],
-    // Standalone string task types were only test data. Keep only workflow-linked
-    // objects while the UI derives the available types from workflows themselves.
+    // Task-type metadata can decorate a type owned by its workflow, but it cannot
+    // introduce a selectable type of its own.
     taskTypes: Array.isArray(settings?.taskTypes)
       ? settings.taskTypes.filter(item => {
         if (typeof item !== 'object' || item === null) return false;
         const config = item as TaskTypeConfig;
-        return Boolean(config.workflowId) &&
-          workflowIds.has(config.workflowId!) &&
-          (!shouldRemovePrototypeTaskTypes || !isPrototypeTaskType(String(config.id || '')));
+        if (!config.workflowId || !workflowIds.has(config.workflowId)) return false;
+        const workflow = workflowsById.get(config.workflowId);
+        const configId = normalizeWorkflowTaskTypeId(String(config.id || ''));
+        return Boolean(configId) && (workflow?.taskTypeIds || [])
+          .some(id => normalizeWorkflowTaskTypeId(id) === configId);
       })
       : [],
     workflows,
@@ -984,12 +1012,15 @@ export function mergeAppSettings(settings?: Partial<AppSettings> | null): AppSet
     dailyReportAutoSendEnabled,
     dailyReportAutoSendTime,
     dailyReportReceiverUserIds,
+    reportingSeniorByUserId: settings?.reportingSeniorByUserId && typeof settings.reportingSeniorByUserId === 'object'
+      ? Object.fromEntries(Object.entries(settings.reportingSeniorByUserId).filter(([id, senior]) => id && (senior === null || typeof senior === 'string')))
+      : {},
     notificationResetVersion: typeof (settings as any)?.notificationResetVersion === 'number'
       ? (settings as any).notificationResetVersion
       : 0,
     taskTypeCleanupVersion: 2,
     updatedAt: settings?.updatedAt || defaultAppSettings.updatedAt,
-  };
+  });
 }
 
 export function getResponsibilityForLabel(settings: AppSettings, label: string) {
@@ -1169,7 +1200,7 @@ export function isDeadlineInsideBusinessHours(
   }
 
   const maxFutureDate = new Date(nowValue);
-  maxFutureDate.setMonth(maxFutureDate.getMonth() + 1);
+  maxFutureDate.setUTCMonth(maxFutureDate.getUTCMonth() + 1);
   if (deadline.getTime() > maxFutureDate.getTime()) {
     return { ok: false, message: 'Deadline cannot be more than a month in the future.' };
   }
@@ -1177,6 +1208,11 @@ export function isDeadlineInsideBusinessHours(
   if (isOvertime) {
     return { ok: true, message: '' };
   }
+  const cairoParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Africa/Cairo', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(deadline).map(part => [part.type, part.value]));
+  const deadlineWeekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(cairoParts.weekday);
+  const deadlineMinutes = Number(cairoParts.hour) * 60 + Number(cairoParts.minute);
 
   if (assigneeIds.length > 0 && userList.length > 0) {
     for (const assigneeId of assigneeIds) {
@@ -1184,14 +1220,14 @@ export function isDeadlineInsideBusinessHours(
       if (!user) continue;
 
       const schedule = getWorkingHoursForUser(settings, user);
-      if (!schedule.workdays.includes(deadline.getDay())) {
+      if (!schedule.workdays.includes(deadlineWeekday)) {
         return { 
           ok: false, 
           message: `Deadline must be on a configured working day for ${user.name}.` 
         };
       }
 
-      const minutes = deadline.getHours() * 60 + deadline.getMinutes();
+      const minutes = deadlineMinutes;
       const [startHour, startMinute] = schedule.startTime.split(':').map(Number);
       const [endHour, endMinute] = schedule.endTime.split(':').map(Number);
       const startMinutes = startHour * 60 + startMinute;
@@ -1207,11 +1243,11 @@ export function isDeadlineInsideBusinessHours(
     return { ok: true, message: '' };
   }
 
-  if (!settings.businessCalendar.workdays.includes(deadline.getDay())) {
+  if (!settings.businessCalendar.workdays.includes(deadlineWeekday)) {
     return { ok: false, message: 'Deadline must be on a configured working day.' };
   }
 
-  const minutes = deadline.getHours() * 60 + deadline.getMinutes();
+  const minutes = deadlineMinutes;
   const [startHour, startMinute] = settings.businessCalendar.startTime.split(':').map(Number);
   const [endHour, endMinute] = settings.businessCalendar.endTime.split(':').map(Number);
   const startMinutes = startHour * 60 + startMinute;

@@ -8,6 +8,7 @@ export function isTaskArchived(task: Task) {
 
 export function shouldAutoArchiveTask(task: Task, today = new Date()) {
   if (isTaskArchived(task)) return false;
+  if ((task.workflowSnapshot || task.workflowId) && !['approved_by_art_director', 'completed'].includes(task.status)) return false;
 
   const updatedAt = new Date(task.updatedAt);
   if (Number.isNaN(updatedAt.getTime())) return false;

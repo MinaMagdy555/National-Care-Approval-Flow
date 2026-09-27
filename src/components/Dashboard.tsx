@@ -1,3 +1,4 @@
+import { WorkflowRoadmap } from './WorkflowRoadmap';
 import React from 'react';
 import { useAppStore } from '../lib/store';
 import { TaskCard } from './TaskCard';
@@ -5,10 +6,11 @@ import { AlertCircle, Clock, CheckCircle2, History, LucideIcon, XCircle, Search,
 import { initialUsers } from '../lib/mockData';
 import { isDueThisWeek, isDueToday } from '../lib/deadlineUtils';
 import { isTaskArchived } from '../lib/archiveUtils';
-import { canUserAccessTask, canUserActAsCurrentOwner, getCurrentOwnerUserIds, getWorkflowPhase, resolveWorkflowPhaseReviewerIds, userCanViewFullWorkspace } from '../lib/workflowUtils';
+import { canUserActAsCurrentOwner, getCurrentOwnerUserIds, getWorkflowPhase, resolveWorkflowPhaseReviewerIds } from '../lib/workflowUtils';
+import { canViewTask, hasTaskWorkHistory } from '../lib/taskPolicy';
 import { cn } from '../lib/utils';
 import { getResponsibilityForLabel, MINA_ID, MARWA_ID, DINA_ID, FAWZY_ID, AHMED_SOBEEH_ID, getTaskTypeConfigs } from '../lib/appSettings';
-import { Task } from '../lib/types';
+import { Task, User } from '../lib/types';
 import { isLeaderboardUser } from '../lib/workAssignmentUtils';
 
 function SummaryCard({
@@ -99,6 +101,10 @@ export function Dashboard({
   const [popupState, setPopupState] = React.useState<'total' | 'finished' | 'active' | 'on_hold' | 'working' | 'waiting_review' | 'to_review' | null>(null);
   const [searchQuery, setSearchQuery] = React.useState('');
   const configs = getTaskTypeConfigs(appSettings);
+  const accessibleEnvironmentTasks = tasks.filter(task => (
+    task.environment === environment && canViewTask(task, currentUser, appSettings, userList)
+  ));
+  const envTasks = accessibleEnvironmentTasks.filter(task => !isTaskArchived(task));
 
   React.useEffect(() => {
     if (viewMode === 'performance') {
@@ -182,12 +188,13 @@ export function Dashboard({
     return Array.from(counts.entries()).map(([label, count]) => ({ label, count }));
   };
 
+  const hasPersonalTaskParticipation = (task: Task, user: User) => (
+    canUserActAsCurrentOwner(task, user, undefined, appSettings, userList) || hasTaskWorkHistory(task, user.id)
+  );
+
   const creatorsWithStats = React.useMemo(() => {
     return graphicAndVideoUsers.map(creator => {
-      const creatorTasks = tasks.filter(t => {
-        if (t.environment !== environment) return false;
-        return t.handledBy.includes(creator.id) || (t.contentRevisionAssigneeIds || []).includes(creator.id);
-      });
+      const creatorTasks = accessibleEnvironmentTasks.filter(task => hasPersonalTaskParticipation(task, creator));
       
       const onHoldTasks = creatorTasks.filter(t => t.status === 'on_hold');
       const onHoldCount = onHoldTasks.length;
@@ -224,22 +231,19 @@ export function Dashboard({
 
       let toReviewCount = 0;
       if (creatorIsFirstRev) {
-        toReviewCount = tasks.filter(t => 
-          t.environment === environment && 
+        toReviewCount = accessibleEnvironmentTasks.filter(t =>
           !isTaskArchived(t) &&
           ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status) &&
-          canUserActAsCurrentOwner(t, creator)
+          canUserActAsCurrentOwner(t, creator, undefined, appSettings, userList)
         ).length;
       } else if (creatorIsFinalRev) {
-        toReviewCount = tasks.filter(t => 
-          t.environment === environment && 
+        toReviewCount = accessibleEnvironmentTasks.filter(t =>
           !isTaskArchived(t) &&
           (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) &&
-          canUserActAsCurrentOwner(t, creator)
+          canUserActAsCurrentOwner(t, creator, undefined, appSettings, userList)
         ).length;
       } else if (creatorIsContentCreator) {
-        toReviewCount = tasks.filter(t => 
-          t.environment === environment && 
+        toReviewCount = accessibleEnvironmentTasks.filter(t =>
           !isTaskArchived(t) &&
           t.status === 'waiting_content_revision' &&
           (t.contentRevisionAssigneeIds || []).includes(creator.id)
@@ -261,7 +265,7 @@ export function Dashboard({
         totalCount: creatorTasks.length,
       };
     });
-  }, [graphicAndVideoUsers, tasks, environment, appSettings, configs]);
+  }, [graphicAndVideoUsers, accessibleEnvironmentTasks, appSettings, configs, userList]);
 
   const filteredCreators = React.useMemo(() => {
     if (!searchQuery.trim()) return creatorsWithStats;
@@ -280,14 +284,12 @@ export function Dashboard({
   const isContentCreator = currentUser.jobTitle === 'Content Creator' || (currentUser.role === 'team_member' && currentUser.jobTitle === 'Content Creator');
   const isHighboard = isFirstRev || isFinalRev || currentUser.role !== 'team_member' || isLeaderboardUser(currentUser.id);
 
-  const canViewFullWorkspace = userCanViewFullWorkspace(currentUser, appSettings);
-  const envTasks = tasks.filter(t => t.environment === environment && !isTaskArchived(t) && (canViewFullWorkspace || canUserAccessTask(t, currentUser, appSettings)));
   const workflowTasks = envTasks.filter(task => task.status !== 'assigned_work');
   const myActiveTasks = envTasks.filter(t => t.status === 'assigned_work' && t.handledBy.includes(currentUser.id));
   const isScopedToCurrentOwner = (task: typeof envTasks[number]) => (
     !isFirstRev && !isFinalRev
       ? true
-      : canUserActAsCurrentOwner(task, currentUser)
+      : canUserActAsCurrentOwner(task, currentUser, undefined, appSettings, userList)
   );
   const minaName = 'Mina';
   const marwaName = 'Marwa';
@@ -344,16 +346,15 @@ export function Dashboard({
       configs.some(c => c.finalReviewerUserIds?.includes(creator.id)) : false;
     const creatorIsContentCreator = creator ? (creator.jobTitle === 'Content Creator' || (creator.role === 'team_member' && creator.jobTitle === 'Content Creator')) : false;
 
-    return tasks.filter(t => {
-      if (t.environment !== environment) return false;
+    return accessibleEnvironmentTasks.filter(t => {
       
       // If we clicked on 'to_review' (from Team Performance)
       if (popupState === 'to_review') {
         if (creatorIsFirstRev) {
-          return ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status) && !isTaskArchived(t) && creator && canUserActAsCurrentOwner(t, creator);
+          return ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status) && !isTaskArchived(t) && creator && canUserActAsCurrentOwner(t, creator, undefined, appSettings, userList);
         }
         if (creatorIsFinalRev) {
-          return (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && !isTaskArchived(t) && creator && canUserActAsCurrentOwner(t, creator);
+          return (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && !isTaskArchived(t) && creator && canUserActAsCurrentOwner(t, creator, undefined, appSettings, userList);
         }
         if (creatorIsContentCreator) {
           return t.status === 'waiting_content_revision' && (t.contentRevisionAssigneeIds || []).includes(popupCreatorId) && !isTaskArchived(t);
@@ -362,7 +363,7 @@ export function Dashboard({
       }
 
       // Check if task belongs to the creator
-      const belongsToCreator = t.handledBy.includes(popupCreatorId) || (t.contentRevisionAssigneeIds || []).includes(popupCreatorId);
+      const belongsToCreator = Boolean(creator && hasPersonalTaskParticipation(t, creator));
 
       // If we are looking for 'active' tasks, for reviewers we also include tasks waiting for their review
       if (popupState === 'active') {
@@ -373,10 +374,10 @@ export function Dashboard({
         
         // If it doesn't belong to them but they are a reviewer, check if it is waiting for their review
         if (creatorIsFirstRev) {
-          return ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status) && creator && canUserActAsCurrentOwner(t, creator);
+          return ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status) && creator && canUserActAsCurrentOwner(t, creator, undefined, appSettings, userList);
         }
         if (creatorIsFinalRev) {
-          return (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && creator && canUserActAsCurrentOwner(t, creator);
+          return (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && creator && canUserActAsCurrentOwner(t, creator, undefined, appSettings, userList);
         }
         return false;
       }
@@ -402,7 +403,7 @@ export function Dashboard({
       
       return true;
     });
-  }, [tasks, popupCreatorId, popupState, environment, userList, appSettings, configs]);
+  }, [accessibleEnvironmentTasks, popupCreatorId, popupState, userList, appSettings, configs]);
 
   const getReviewOwnerNames = (task: Task) => {
     const explicitOwnerIds = getCurrentOwnerUserIds(task);
@@ -633,7 +634,12 @@ export function Dashboard({
               </>
             )}
 
-            {isLeaderboardOrMinaUser && creatorsWithStats.map(({ creator, workingCount, reviewCount, toReviewCount, creatorIsFirstRev, creatorIsFinalRev, creatorIsContentCreator }) => {
+          </div>
+        )}
+
+        {isLeaderboardOrMinaUser && (
+          <div className="grid auto-rows-fr grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-6">
+            {creatorsWithStats.map(({ creator, workingCount, reviewCount, toReviewCount, creatorIsFirstRev, creatorIsFinalRev, creatorIsContentCreator }) => {
               const isReviewer = creatorIsFirstRev || creatorIsFinalRev || creatorIsContentCreator;
               return (
                 <button
@@ -1046,6 +1052,7 @@ export function Dashboard({
                                   {task.name}
                                 </h4>
                               </div>
+                              <WorkflowRoadmap task={task} />
                               <p className="text-xs text-slate-500 mt-1 line-clamp-1">
                                 {task.description || 'No description provided.'}
                               </p>
@@ -1169,6 +1176,7 @@ export function Dashboard({
                                 {task.name}
                               </h4>
                             </div>
+                              <WorkflowRoadmap task={task} />
                             <p className="text-xs text-slate-500 mt-1 line-clamp-1">
                               {task.description || 'No description provided.'}
                             </p>

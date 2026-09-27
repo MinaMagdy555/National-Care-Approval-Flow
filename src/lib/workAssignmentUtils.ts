@@ -7,6 +7,10 @@ export function isLeaderboardUser(userId: string) {
   return LEADERBOARD_USER_IDS.includes(userId);
 }
 
+export function canReassignWorkflowTask(user: Pick<User, 'id' | 'role' | 'isAdmin'>) {
+  return Boolean(user.isAdmin) || ['admin', 'team_leader', 'manager', 'art_director', 'marketing_manager'].includes(user.role) || isLeaderboardUser(user.id);
+}
+
 export function canSetActiveWorkForMember(actor: Pick<User, 'id' | 'role' | 'isAdmin'>) {
   if (actor.isAdmin || actor.role === 'admin') return true;
   if (isLeaderboardUser(actor.id)) return true;
@@ -20,7 +24,7 @@ export function canCreateWorkAssignment(user: Pick<User, 'id' | 'role' | 'name' 
 
 export function canManageWorkAssignment(task: Task, user: Pick<User, 'id' | 'role' | 'name' | 'isAdmin'>, settings: AppSettings = defaultAppSettings) {
   const isFinished = ['approved_by_art_director', 'completed', 'archived'].includes(task.status);
-  return !isFinished && (isLeaderboardUser(user.id) || task.createdBy === user.id);
+  return !isFinished && (canReassignWorkflowTask(user) || task.createdBy === user.id);
 }
 
 export function canDeleteWorkAssignment(task: Task, user: Pick<User, 'id'>) {
