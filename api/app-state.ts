@@ -204,7 +204,7 @@ return async function handler(req: ApiRequest, res: ApiResponse) {
 
     res.setHeader('Cache-Control', 'no-store');
     if (req.method !== 'GET' && !isSameOriginRequest(req)) { res.status(403).json({ error: 'Cross-origin workspace writes are not allowed.' }); return; }
-    const currentRows = await sql`SELECT state, updated_at FROM app_state WHERE id = ${STATE_ID} LIMIT 1`;
+    const currentRows = await sql`SELECT state, updated_at::text AS updated_at FROM app_state WHERE id = ${STATE_ID} LIMIT 1`;
     const existingRecords = await getMemberTombstones(sql);
     const workflowTombstones = await getWorkflowTombstoneIds(sql);
     const canonical = applyStateMemberTombstones(applyWorkflowTombstones(currentRows[0]?.state || {}, workflowTombstones), existingRecords);
@@ -349,9 +349,8 @@ return async function handler(req: ApiRequest, res: ApiResponse) {
       const checkRevision = true;
       const expectedUpdatedAt = currentRows[0]?.updated_at || null;
       if (Object.prototype.hasOwnProperty.call(body, 'expectedUpdatedAt') &&
-        (body.expectedUpdatedAt ? new Date(body.expectedUpdatedAt).getTime() : null) !==
-        (expectedUpdatedAt ? new Date(expectedUpdatedAt).getTime() : null)) {
-        res.status(409).json({ error: 'The shared workspace changed while removing this member. Refresh and try again.' });
+        body.expectedUpdatedAt !== expectedUpdatedAt) {
+        res.status(409).json({ error: 'The shared workspace changed concurrently. Refresh and try again.' });
         return;
       }
       const rows = await sql`
@@ -360,7 +359,7 @@ return async function handler(req: ApiRequest, res: ApiResponse) {
           VALUES (${STATE_ID}, ${JSON.stringify(state)}::jsonb, now())
           ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()
           WHERE (NOT ${checkRevision}::boolean OR app_state.updated_at = ${expectedUpdatedAt}::timestamptz)
-          RETURNING updated_at
+          RETURNING updated_at::text AS updated_at
         ), removals AS (
           INSERT INTO deleted_member_tombstones (member_id, record)
           SELECT record->>'id', record FROM jsonb_array_elements(${JSON.stringify(records)}::jsonb) AS record
@@ -371,7 +370,7 @@ return async function handler(req: ApiRequest, res: ApiResponse) {
         SELECT updated_at FROM written
       `;
       if (!rows.length) {
-        res.status(409).json({ error: 'The shared workspace changed while removing this member. Refresh and try again.' });
+        res.status(409).json({ error: 'The shared workspace changed concurrently. Refresh and try again.' });
         return;
       }
       const settings = isRecord(state) && isRecord(state.settings) ? withoutPrivateSettings(state.settings) : undefined;
