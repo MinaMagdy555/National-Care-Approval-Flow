@@ -379,7 +379,7 @@ export function CreateTask({
     );
   }
 
-  if (assignmentTask && !canUploadAssignment) {
+  if (assignmentTask && !canUploadAssignment && !isSuccess) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 lg:px-8">
         <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
@@ -393,18 +393,18 @@ export function CreateTask({
     <div className="mx-auto max-w-4xl space-y-8 px-4 py-6 sm:px-6 lg:px-8">
       <div>
         <h2 className="mb-2 text-2xl font-black tracking-tight text-slate-900 sm:text-3xl">
-          {isAssignmentUploadMode ? 'Upload Assigned Work' : 'Create New Task'}
+          {assignmentTaskId ? 'Upload Assigned Work' : 'Create New Task'}
         </h2>
         <p className="text-slate-500 font-medium">
-          {isAssignmentUploadMode ? 'Submit a shared Drive link into the review flow.' : 'Attach a shared Drive link for review.'}
+          {assignmentTaskId ? 'Submit a shared Drive link into the review flow.' : 'Attach a shared Drive link for review.'}
         </p>
       </div>
 
       {isSuccess ? (
         <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-12 text-center flex flex-col items-center">
           <CheckCircle2 className="w-16 h-16 text-emerald-500 mb-4" />
-          <h3 className="text-xl font-black text-emerald-900 mb-2">{isAssignmentUploadMode ? 'Finished Work Uploaded!' : 'Task Submitted Successfully!'}</h3>
-          <p className="text-emerald-700 font-medium">The reviewer has been notified.</p>
+          <h3 className="text-xl font-black text-emerald-900 mb-2">{assignmentTaskId ? 'Finished Work Uploaded!' : 'Task Submitted Successfully!'}</h3>
+          <p className="text-emerald-700 font-medium">{assignmentTask?.status === 'completed' ? 'All workflow steps are complete.' : 'The next assigned employee has been notified.'}</p>
         </div>
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm">
