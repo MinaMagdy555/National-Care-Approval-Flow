@@ -1,6 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { AppSettings, User } from '../src/lib/types.js';
-import { isMemberDeleted, normalizeMemberEmail, visibleMemberRoster } from '../src/lib/memberIdentity.js';
+import { isMemberDeleted, normalizeMemberEmail } from '../src/lib/memberIdentity.js';
 
 export interface WorkspaceRequest {
   method?: string;
@@ -83,15 +83,18 @@ export function createWorkspaceAuth(options: WorkspaceAuthOptions = {}) {
     const identity = await response.json();
     const profile = profiles.find(user => user.id === identity.id);
     if (!profile || isMemberDeleted(profile, settings.deletedMembers)) return null;
-    // The directory uses manual identities for a matching registered email as well.
-    const canonical = visibleMemberRoster(profiles, settings.manualUsers || [], settings.deletedMembers || [])
-      .find(user => user.id === profile.id || (normalizeMemberEmail(profile.email) && normalizeMemberEmail(user.email) === normalizeMemberEmail(profile.email)));
-    return canonical ? safeUser(canonical) : null;
+    // A duplicate manual email must never replace a verified provider identity or its permissions.
+    return safeUser(profile);
   }
 
-  function login(req: WorkspaceRequest, settings: AppSettings, identifier: string, password: string) {
+  function login(req: WorkspaceRequest, settings: AppSettings, identifier: string, password: string, profiles: User[] = []) {
     const normalized = identifier.trim().toLowerCase();
     if (isMemberDeleted({ id: '', email: normalized }, settings.deletedMembers)) return { user: null, cookie: null, code: 'INVALID_CREDENTIALS' };
+    const registered = profiles.find(user => normalizeMemberEmail(user.email) === normalized || user.name.trim().toLowerCase() === normalized);
+    if (registered) {
+      // Let Supabase verify its own credentials; a manual duplicate cannot shadow this login.
+      return { user: null, cookie: null, code: isMemberDeleted(registered, settings.deletedMembers) ? 'INVALID_CREDENTIALS' : 'NOT_MANUAL' };
+    }
     const user = (settings.manualUsers || []).find(user => normalizeMemberEmail(user.email) === normalized || user.name.trim().toLowerCase() === normalized);
     if (!user) return { user: null, cookie: null, code: 'NOT_MANUAL' };
     if (!user.passwordHash || isMemberDeleted(user, settings.deletedMembers)) return { user: null, cookie: null, code: 'INVALID_CREDENTIALS' };

@@ -65,8 +65,9 @@ export function applyMemberDeletions<T extends Partial<AppSettings>>(settings: T
 
 export function visibleMemberRoster(profiles: User[], manualUsers: User[], deleted: DeletedMember[]): User[] {
   const manual = manualUsers.filter(user => !isMemberDeleted(user, deleted));
-  const emails = new Set(manual.map(user => normalizeMemberEmail(user.email)).filter(Boolean));
-  const visibleProfiles = profiles.filter(user => !isMemberDeleted(user, deleted) && !emails.has(normalizeMemberEmail(user.email)));
+  // Email collisions are separate persisted identities, not permission or ownership aliases.
+  // Keep both IDs visible so old assignments remain resolvable and registered members stay present.
+  const visibleProfiles = profiles.filter(user => !isMemberDeleted(user, deleted));
   const profileIds = new Set(visibleProfiles.map(user => user.id));
   return [...visibleProfiles, ...manual.filter(user => !profileIds.has(user.id))];
 }

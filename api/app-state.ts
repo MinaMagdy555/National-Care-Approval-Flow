@@ -219,7 +219,8 @@ return async function handler(req: ApiRequest, res: ApiResponse) {
       const body = parseBody(req.body);
       if (!isRecord(body) || typeof body.identifier !== 'string' || typeof body.password !== 'string'
         || body.identifier.length > 512 || body.password.length > 1024) { res.status(400).json({ error: 'Enter your account and password.' }); return; }
-      const result = auth.login(req, currentSettings, body.identifier, body.password);
+      const profiles = await auth.loadProfiles(req);
+      const result = auth.login(req, currentSettings, body.identifier, body.password, profiles);
       if (!result.user) { res.status(401).json({ error: 'Invalid account or password.', code: result.code }); return; }
       res.setHeader('Set-Cookie', result.cookie!);
       res.status(200).json({ ok: true, user: result.user }); return;
