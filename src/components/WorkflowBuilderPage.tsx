@@ -1412,6 +1412,10 @@ export function WorkflowBuilderPage() {
                         return {
                           ...phase,
                           phaseKind,
+                          // Responsibility chips control non-final ownership in
+                          // this editor. Do not retain an invisible role filter
+                          // from the starter review when changing step type.
+                          roleIds: [],
                           reviewStyle: phaseKind === 'first_review' ? 'first_review' : phaseKind === 'content_review' ? 'content_review' : phase.reviewStyle,
                         };
                       })}
