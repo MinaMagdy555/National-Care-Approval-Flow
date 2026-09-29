@@ -456,7 +456,7 @@ function WorkspaceContent() {
         return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={waitingForMarwa} title="Waiting for Final Rev." />;
       }
       case 'approved_by_me': {
-        const approved = workflowVisibleEnvTasks.filter(t => t.status === 'approved_by_art_director');
+        const approved = workflowVisibleEnvTasks.filter(t => ['approved_by_art_director', 'completed'].includes(t.status));
         return <ReviewQueue onOpenTask={handleOpenTask} onOpenUploadTask={handleOpenAssignmentUpload} tasks={approved} title="Approved Tasks" />;
       }
       case 'rejected_reopened': {

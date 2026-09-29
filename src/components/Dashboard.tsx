@@ -306,12 +306,12 @@ export function Dashboard({
   if (isFirstRev) {
     needsAction = workflowTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status) && isScopedToCurrentOwner(t));
     waitingOthers = workflowTasks.filter(t => ['sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
-    approved = workflowTasks.filter(t => t.status === 'approved_by_art_director');
+    approved = workflowTasks.filter(t => ['approved_by_art_director', 'completed'].includes(t.status));
     returned = workflowTasks.filter(t => ['changes_requested_by_reviewer', 'changes_requested_by_art_director'].includes(t.status));
   } else if (isFinalRev) {
     needsAction = workflowTasks.filter(t => (['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) || (t.reviewMode === 'direct_to_ad' && t.status === 'sent_to_art_director')) && isScopedToCurrentOwner(t));
     waitingOthers = workflowTasks.filter(t => t.status === 'changes_requested_by_art_director' || t.status === 'waiting_reviewer_full_review' || t.status === 'waiting_reviewer_quick_look');
-    approved = workflowTasks.filter(t => t.status === 'approved_by_art_director');
+    approved = workflowTasks.filter(t => ['approved_by_art_director', 'completed'].includes(t.status));
     returned = workflowTasks.filter(t => t.status === 'changes_requested_by_art_director');
     waitingForMina = workflowTasks.filter(t => ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
   } else if (isContentCreator) {
@@ -329,7 +329,7 @@ export function Dashboard({
   } else {
     needsAction = workflowTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && (t.status === 'changes_requested_by_reviewer' || t.status === 'changes_requested_by_art_director'));
     waitingOthers = workflowTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && ['waiting_reviewer_full_review', 'waiting_reviewer_quick_look', 'reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
-    approved = workflowTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && t.status === 'approved_by_art_director');
+    approved = workflowTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && ['approved_by_art_director', 'completed'].includes(t.status));
     returned = needsAction;
     waitingForMina = workflowTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && ['submitted', 'waiting_reviewer_full_review', 'waiting_reviewer_quick_look'].includes(t.status));
     waitingForMarwa = workflowTasks.filter(t => (t.createdBy === currentUser.id || t.handledBy.includes(currentUser.id) || (t.currentOwnerUserIds || []).includes(currentUser.id)) && ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status));
@@ -430,7 +430,7 @@ export function Dashboard({
 
   const needsFullReviewCount = workflowTasks.filter(t => ['submitted', 'waiting_reviewer_full_review'].includes(t.status) && isScopedToCurrentOwner(t)).length;
   const waitingMarwaCount = workflowTasks.filter(t => ['reviewer_approved', 'sent_to_art_director', 'waiting_art_director_approval'].includes(t.status) && (currentUser.role !== 'art_director' || isScopedToCurrentOwner(t))).length;
-  const approvedCount = workflowTasks.filter(t => t.status === 'approved_by_art_director').length;
+  const approvedCount = workflowTasks.filter(t => ['approved_by_art_director', 'completed'].includes(t.status)).length;
   const waitingContentRevCount = workflowTasks.filter(t => t.status === 'waiting_content_revision').length;
   const rejectedCount = returned.length;
   const dueTodayCount = workflowTasks.filter(isDueToday).length;

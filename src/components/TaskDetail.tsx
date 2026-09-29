@@ -331,7 +331,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
   const ownedActiveWorkflowWorkPhase = ownedActiveWorkflowPhases.find(phase => normalizeReviewPhase(phase).phaseKind === 'work') || null;
   const activeWorkflowPhase = ownedActiveWorkflowPhases.find(phase => normalizeReviewPhase(phase).phaseKind !== 'work') ||
     getActiveWorkflowPhaseForUser(task, currentUser.id, appSettings, userList);
-  const displayedWorkflowPhase = activeWorkflowPhase || getWorkflowPhase(task);
+  const displayedWorkflowPhase = taskHasClosedOwnership ? null : activeWorkflowPhase || getWorkflowPhase(task);
   const displayedFixedArtDirector = displayedWorkflowPhase && isMandatoryFinalReview(displayedWorkflowPhase)
     ? resolveTaskFinalArtDirector(displayedWorkflowPhase, task, appSettings, userList)
     : null;
@@ -1688,7 +1688,7 @@ export function TaskDetail({ taskId, onBack, onOpenUploadTask }: { taskId: strin
               ['Task type', getTaskTypeLabel(task.taskType, appSettings)],
               ['Review mode', getReviewModeLabel(task.reviewMode)],
               ['Workflow', task.workflowSnapshot?.name || 'Default route'],
-              [task.workflowSnapshot ? 'Active phases' : 'Active phase', activeWorkflowPhaseNames || displayedWorkflowPhase?.name || 'Not started'],
+              [task.workflowSnapshot ? 'Active phases' : 'Active phase', taskHasClosedOwnership ? 'No active phase' : activeWorkflowPhaseNames || displayedWorkflowPhase?.name || 'Not started'],
               ...(voiceOverAssignmentSummary ? [['Voice Over', voiceOverAssignmentSummary]] : []),
               ...(!task.workflowSnapshot && task.workflowPhaseAvailableAt ? [['Phase available at', new Date(task.workflowPhaseAvailableAt).toLocaleString()]] : []),
               ...(!task.workflowSnapshot && includesContentReview ? [['Content Review assignees', formatUserNames(task.contentRevisionAssigneeIds || [])]] : []),
