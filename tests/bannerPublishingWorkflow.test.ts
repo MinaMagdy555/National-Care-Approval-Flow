@@ -7,6 +7,7 @@ import { validateWorkflowGraph } from '../src/lib/workflowGraph';
 import { getHandoffNotifications } from '../src/lib/reassignmentNotifications';
 import { getWorkflowRoadmap } from '../src/lib/workflowRoadmap';
 import { canViewTask } from '../src/lib/taskPolicy';
+import { getStatusInfo } from '../src/lib/taskUtils';
 import { mergeAuthorizedTasks } from '../server/taskAccess';
 import type { Task, User, WorkflowDefinition, WorkflowPhaseDefinition } from '../src/lib/types';
 
@@ -40,6 +41,16 @@ function begin():Task {
   task.workflowPhaseHistory=appendStartedEntries(computeWorkflowInitialization(workflow,task,'dina').history,[workflow.phases[0]],'dina');
   return mergeAuthorizedTasks([], [task], users[0], settings, users).tasks[0];
 }
+
+test('previous revision comments do not obscure the current graph review queue', () => {
+  const task = begin();
+  task.status = 'sent_to_art_director';
+  task.comments = [{ id: 'old-return', authorId: 'mina', action: 'request_edits', message: 'Revise the design' } as Task['comments'][number]];
+  const userMap = Object.fromEntries(users.map(user => [user.id, user]));
+  assert.equal(getStatusInfo(task, 'team_member', userMap).label, 'Waiting for Final Review');
+  task.status = 'waiting_reviewer_full_review';
+  assert.equal(getStatusInfo(task, 'team_member', userMap).label, 'Waiting for First Review');
+});
 function project(task:Task,result:NonNullable<ReturnType<typeof computeWorkflowAdvance>>|NonNullable<ReturnType<typeof computeWorkflowReturn>>,actor:string):Task {
   const phases=workflow.phases.filter(p=>result.nextActivePhaseIds.includes(p.id));
   const finished='finished' in result && result.finished;

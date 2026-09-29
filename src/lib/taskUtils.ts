@@ -123,7 +123,9 @@ export function getStatusInfo(task: Task, viewerRole: Role, users?: Record<strin
     })
   );
 
-  if (waitingReviewStatuses.includes(status) && hasActiveComments) {
+  // Graph tasks must show the current review queue, even when an earlier
+  // revision cycle left comments in their permanent history.
+  if (!task.workflowSnapshot && waitingReviewStatuses.includes(status) && hasActiveComments) {
     return { label: 'Had some comments', color: 'amber' };
   }
 
