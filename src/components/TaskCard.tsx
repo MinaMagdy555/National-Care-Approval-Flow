@@ -33,7 +33,7 @@ export function TaskCard({ task, onClick }: { task: Task; onClick: (id: string) 
   return (
     <div 
       onClick={() => onClick(task.id)}
-      className="bg-white rounded-2xl border-2 border-slate-200 hover:border-indigo-400 transition-colors shadow-sm flex flex-col cursor-pointer overflow-hidden group h-full"
+      className="bg-white rounded-2xl border-2 border-slate-300 hover:border-indigo-400 transition-colors shadow-md flex flex-col cursor-pointer overflow-hidden group h-full"
     >
       <div className="h-40 bg-slate-100 relative overflow-hidden text-slate-900">
         <div className="h-full w-full transition-transform duration-500 group-hover:scale-105">

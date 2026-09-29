@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mergeAppSettings } from '../src/lib/appSettings';
-import { canSeeWorkflowRoadmap, getWorkflowRoadmap, formatUserLabel } from '../src/lib/workflowRoadmap';
+import { canSeeWorkflowRoadmap, getWorkflowRoadmap, formatUserLabel, formatGroupedOwners } from '../src/lib/workflowRoadmap';
 import type { Task, User, WorkflowDefinition } from '../src/lib/types';
 
 const usersList: User[] = [
@@ -164,4 +164,29 @@ test('skipped and disabled phases are distinct', () => {
   const roadmap = getWorkflowRoadmap(task, settings, usersList);
   assert.equal(roadmap.find(s => s.id === 'P2')?.state, 'Skipped');
   assert.equal(roadmap.find(s => s.id === 'P3')?.state, 'Disabled');
+});
+
+test('legacy progress fills proven predecessors but not unrelated branches or reopened work', () => {
+  const legacy = {...base,workflowActivePhaseIds:['P3'],workflowCurrentPhaseId:'P3'};
+  assert.deepEqual(getWorkflowRoadmap(legacy,settings,usersList).map(p=>p.state),['Finished','Finished','Current','Pending']);
+  const branch = structuredClone(legacy);
+  branch.workflowSnapshot!.phases.push(phase('Unrelated',['b']));
+  assert.equal(getWorkflowRoadmap(branch,settings,usersList).find(p=>p.id==='Unrelated')?.state,'Pending');
+  branch.workflowPhaseHistory=[{phaseId:'P2',phaseName:'P2',action:'invalidated',actorId:'senior',createdAt:new Date().toISOString()}];
+  assert.equal(getWorkflowRoadmap(branch,settings,usersList).find(p=>p.id==='P2')?.state,'Pending');
+  const finished={...base,workflowActivePhaseIds:[],workflowPhaseHistory:[{phaseId:'P3',phaseName:'P3',action:'completed' as const,actorId:'senior',createdAt:new Date().toISOString()}]};
+  assert.deepEqual(getWorkflowRoadmap(finished,settings,usersList).slice(0,3).map(p=>p.state),['Finished','Finished','Finished']);
+});
+
+test('pass-only merges never imply that both possible predecessor branches completed', () => {
+  const task = structuredClone(base);
+  task.workflowSnapshot!.phases=[{...phase('left',['a']),passToPhaseId:'merge'},{...phase('right',['b']),passToPhaseId:'merge'},phase('merge',['senior'],'sequential',[])];
+  task.workflowActivePhaseIds=['merge'];
+  assert.deepEqual(getWorkflowRoadmap(task,settings,usersList).map(p=>p.state),['Pending','Pending','Current']);
+});
+
+test('owners share one title label while distinct titles and employee identities remain visible', () => {
+  const roster={...users,c:{id:'c',name:'C',role:'team_member' as const,jobTitle:' content creator '}};
+  assert.equal(formatGroupedOwners(['a','c','a','b'],roster),'Content Creator · A, C | Brand Designer · B');
+  assert.equal(formatGroupedOwners([],roster),'No member assigned');
 });

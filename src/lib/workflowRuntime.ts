@@ -1,5 +1,5 @@
 import { AppSettings, Task, User, WorkflowDefinition, WorkflowPhaseDefinition, WorkflowPhaseHistoryEntry } from './types.js';
-import { getWorkflowParentIds as getPhaseParentIds, getWorkflowSuccessors as successors, getWorkflowEntryPhases as initialCandidates, isWorkflowStep as isStepPhase, getWorkflowDownstreamIds } from './workflowGraph.js';
+import { getWorkflowParentIds as getPhaseParentIds, getWorkflowSuccessors as successors, getWorkflowEntryPhases as initialCandidates, isWorkflowStep as isStepPhase, getWorkflowDownstreamIds, validateWorkflowGraph } from './workflowGraph.js';
 import {
   computePhaseAvailableAt,
   isWorkflowPhaseSkippedForTask,
@@ -183,13 +183,15 @@ export function getInitialActivePhaseIds(workflow: WorkflowDefinition, task: Tas
   return computeWorkflowInitialization(workflow, task).nextActivePhaseIds;
 }
 
-/** A route cannot silently finish while its configured final approval is pending. */
 function isWorkflowFinished(workflow: WorkflowDefinition, activeIds: string[], history: WorkflowPhaseHistoryEntry[]): boolean {
   if (activeIds.length) return false;
   const latest = getLatestActionByPhase(history);
   const finalPhases = workflow.phases.filter(phase => isStepPhase(phase) && isMandatoryFinalReview(phase));
-  const lastCompleted = [...history].reverse().find(entry => entry.action === 'completed');
-  return finalPhases.length > 0 && finalPhases.some(phase => phase.id === lastCompleted?.phaseId)
+  // Old snapshots may have disabled/skip metadata on a mandatory review. The
+  // runtime still forces that review to run; those draft warnings must not
+  // prevent its real owner from completing it.
+  const routeIsValid = validateWorkflowGraph(workflow).issues.every(issue => ['disabled_final', 'invalid_final_count'].includes(issue.code));
+  return routeIsValid && finalPhases.length > 0
     && finalPhases.every(phase => latest.get(phase.id) === 'completed');
 }
 

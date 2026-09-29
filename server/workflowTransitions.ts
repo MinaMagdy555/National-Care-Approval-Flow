@@ -106,10 +106,15 @@ export function validateWorkflowTransition(prior: Task | undefined, task: Task, 
           error('Completing a Work step requires a new file submitted by its current owner.');
         }
         if (terminal(task)) {
-          const fixed = resolveTaskFinalArtDirector(source, prior, settings, users);
-          const completed = getCompletedPhaseIdsFromHistory(prior.workflowPhaseHistory || []);
-          const finalIsReachable = sourceWorkflow.phases.filter(phase => getWorkflowSuccessors(sourceWorkflow, phase.id).some(next => next.id === source.id)).every(phase => completed.has(phase.id));
-          if (!advanced.finished || !isMandatoryFinalReview(source) || !fixed.ok || actor.id !== fixed.ownerId || !finalIsReachable || active(task).length) error();
+          if (!advanced.finished || active(task).length) error();
+          for (const finalPhase of sourceWorkflow.phases.filter(isMandatoryFinalReview)) {
+            const fixed = resolveTaskFinalArtDirector(finalPhase, prior, settings, users);
+            const finalCompletion = [...advanced.history].reverse().find(entry => entry.phaseId === finalPhase.id);
+            const completedBeforeFinal = getCompletedPhaseIdsFromHistory(advanced.history.slice(0, advanced.history.indexOf(finalCompletion!)));
+            const finalIsReachable = sourceWorkflow.phases.filter(phase => getWorkflowSuccessors(sourceWorkflow, phase.id).some(next => next.id === finalPhase.id)).every(phase => completedBeforeFinal.has(phase.id));
+            if (!fixed.ok || finalCompletion?.action !== 'completed' || finalCompletion.actorId !== fixed.ownerId
+              || !(advanced.approvals[finalPhase.id] || []).includes(fixed.ownerId!) || !finalIsReachable) error();
+          }
         } else if (advanced.finished || !statusMatchesActive(task)) error();
         return;
       }

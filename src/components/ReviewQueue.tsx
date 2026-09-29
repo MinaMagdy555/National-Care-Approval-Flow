@@ -531,9 +531,9 @@ export function ReviewQueue({
       </div>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 p-2 shadow-sm">
         <div className="max-w-full overflow-x-auto">
-        <table className="min-w-[1050px] w-full table-fixed border-collapse text-left">
+        <table className="min-w-[1050px] w-full table-fixed border-separate border-spacing-x-0 border-spacing-y-3 text-left">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200 text-[10px] uppercase tracking-wider font-black text-slate-400">
               <th className="w-[190px] p-3">Details</th>
@@ -546,7 +546,7 @@ export function ReviewQueue({
               <th className="sticky right-0 z-10 w-[150px] bg-slate-50 p-3 text-right shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.45)]">Action</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody>
             {filteredTasks.length === 0 && (
               <tr>
                 <td colSpan={8} className="p-8 text-center text-slate-500 font-medium">No tasks match your filters.</td>
@@ -565,7 +565,7 @@ export function ReviewQueue({
               const canToggleActiveWork = canMutateTask && (isActiveWork || canStartTaskWork(task, currentUser.id, appSettings, userList));
 
               return (
-                <tr key={task.id} className="hover:bg-slate-50/50 transition-colors group cursor-pointer border-b border-slate-100 last:border-0" onClick={() => onOpenTask(task.id)}>
+                <tr key={task.id} className="bg-white hover:bg-indigo-50/40 transition-colors group cursor-pointer [&>td]:border-y [&>td]:border-slate-300 [&>td:first-child]:border-l [&>td:first-child]:rounded-l-xl [&>td:last-child]:border-r [&>td:last-child]:rounded-r-xl" onClick={() => onOpenTask(task.id)}>
                   <td className="w-[190px] p-3 align-top">
                     <div className="font-bold text-slate-900 mb-1 leading-tight">{task.name}</div>
                     <WorkflowRoadmap task={task} />
@@ -573,11 +573,8 @@ export function ReviewQueue({
                       <span>{task.code}</span>
                       <span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
                       <span>V{version}</span>
-                      <span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
-                      {isDemo ? (
+                      {isDemo && (
                         <span className="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded text-[10px] tracking-widest font-black uppercase">Demo</span>
-                      ) : (
-                        <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded text-[10px] tracking-widest font-black uppercase">Production</span>
                       )}
                     </div>
                     {task.scheduledPublishAt && (

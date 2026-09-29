@@ -134,17 +134,26 @@ export function validateWorkflowGraph(workflow: WorkflowDefinition): WorkflowGra
   }
   // Every forward terminal must follow Final Rev.; a separate dead-end branch
   // must not silently finish outside the approval route.
-  const afterFinal = new Set<string>();
-  const queue = [...finalIds];
-  while (queue.length) {
-    const id = queue.shift()!;
-    if (afterFinal.has(id)) continue;
-    afterFinal.add(id);
-    getWorkflowSuccessors(workflow, id).forEach(next => queue.push(next.id));
+  const afterFinal = new Set(finalIds);
+  let added = true;
+  while (added) {
+    added = false;
+    for (const phase of steps) {
+      if (afterFinal.has(phase.id)) continue;
+      const parents = getWorkflowParentIds(phase);
+      const incoming = steps.filter(candidate => getWorkflowSuccessors(workflow, candidate.id).some(next => next.id === phase.id));
+      // A join waits for each prerequisite. Otherwise every possible route
+      // into the phase must have passed a final review; a root is a bypass.
+      if (parents.some(id => afterFinal.has(id)) || (!entries.some(entry => entry.id === phase.id)
+        && incoming.length > 0 && incoming.every(candidate => afterFinal.has(candidate.id)))) {
+        afterFinal.add(phase.id);
+        added = true;
+      }
+    }
   }
   for (const phase of steps) {
-    if (completed.has(phase.id) && !getWorkflowSuccessors(workflow, phase.id).length && !finalIds.has(phase.id)) {
-      add(afterFinal.has(phase.id) ? 'work_after_final' : 'dead_end', `"${phase.name}" must continue to mandatory Final Rev. before the workflow can finish.`, phase.id);
+    if (completed.has(phase.id) && !getWorkflowSuccessors(workflow, phase.id).length && !finalIds.has(phase.id) && !afterFinal.has(phase.id)) {
+      add('dead_end', `"${phase.name}" must continue to mandatory Final Rev. before the workflow can finish.`, phase.id);
     }
   }
   return { valid: issues.length === 0, issues, entryPhaseIds: entries.map(phase => phase.id) };

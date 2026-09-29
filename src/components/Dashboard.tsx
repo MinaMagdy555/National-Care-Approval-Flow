@@ -1039,7 +1039,7 @@ export function Dashboard({
                           setPopupCreatorId(null);
                           setPopupState(null);
                         }}
-                        className="w-full text-left p-4 rounded-xl border border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/5 transition-all group"
+                        className="w-full text-left p-4 rounded-xl border-2 border-slate-300 bg-white shadow-md hover:border-indigo-400 hover:bg-indigo-50/5 transition-all group"
                       >
                         <div className="space-y-3">
                           <div className="flex min-w-0 items-start justify-between gap-4">
@@ -1163,7 +1163,7 @@ export function Dashboard({
                         setPopupCreatorId(null);
                         setPopupState(null);
                       }}
-                      className="w-full text-left p-4 rounded-xl border border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/5 transition-all group"
+                      className="w-full text-left p-4 rounded-xl border-2 border-slate-300 bg-white shadow-md hover:border-indigo-400 hover:bg-indigo-50/5 transition-all group"
                     >
                       <div className="space-y-3">
                         <div className="flex min-w-0 items-start justify-between gap-4">

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Task } from '../lib/types';
 import { useAppStore } from '../lib/store';
-import { canSeeWorkflowRoadmap, getWorkflowRoadmap, formatUserLabel } from '../lib/workflowRoadmap';
+import { canSeeWorkflowRoadmap, getWorkflowRoadmap, formatGroupedOwners } from '../lib/workflowRoadmap';
 import { CLOSED_STATUSES } from '../lib/workflowUtils';
 
 export function WorkflowRoadmap({ task }: { task: Task }) {
@@ -43,7 +43,7 @@ export function WorkflowRoadmap({ task }: { task: Task }) {
             <span
               key={`${step.id}-${index}`}
               className={`flex-1 rounded-full ${bgColor}`}
-              title={`Step ${index + 1}: ${step.name} (${step.state})${step.ownerIds.length ? ' · ' + step.ownerIds.map(id => formatUserLabel(users[id])).join(', ') : ''}`}
+              title={`Step ${index + 1}: ${step.name} (${step.state})${step.ownerIds.length ? ' · ' + formatGroupedOwners(step.ownerIds, users) : ''}`}
             />
           );
         })}
@@ -51,9 +51,7 @@ export function WorkflowRoadmap({ task }: { task: Task }) {
 
       <span className="mt-2 flex flex-col gap-1 text-[12px] leading-snug text-slate-700">
         {displaySteps.map(({ step, index }) => {
-          const ownersStr = step.ownerIds.length > 0
-            ? step.ownerIds.map(id => formatUserLabel(users[id])).join(', ')
-            : 'No member assigned';
+          const ownersStr = formatGroupedOwners(step.ownerIds, users);
 
           let stateLabel = '';
           if (step.state === 'On hold') stateLabel = ' (On hold)';

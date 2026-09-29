@@ -19,17 +19,19 @@ const workflow: WorkflowDefinition={id:'review-freeze',name:'Review Freeze',acti
 const settings=mergeAppSettings({workflows:[workflow],manualUsers:users,finalReviewerUserIds:[oldAD.id]});
 const task: Task={id:'review-task',code:'QA15',reviewMode:'final_review',environment:'production',deadlineText:null,thumbnailUrl:'',name:'Review assignment',taskType:workflow.taskTypeIds![0],createdBy:leader.id,handledBy:[member.id],status:'assigned_work',priority:'normal',versions:[],comments:[],assignmentLinks:[],workflowId:workflow.id,workflowSnapshot:workflow,workflowActivePhaseIds:['work'],workflowCurrentPhaseId:'work',workflowPhaseHistory:[],workflowPhaseApprovals:{},workflowNodeAssigneeIds:{work:[member.id],final:[oldAD.id]},workflowFinalApproverIdsByPhaseId:{final:oldAD.id},currentOwnerUserId:member.id,currentOwnerUserIds:[member.id],currentOwnerRole:'team_member',createdAt:'2026-09-14T08:00:00.000Z',updatedAt:'2026-09-14T08:00:00.000Z'} as Task;
 const check = test;
-check('new routes must end with AD and old post-approval work cannot silently complete',()=>{
+check('post-review work may finish after final approval but invalidated review cannot finish',()=>{
  const legacy=structuredClone(workflow);
  legacy.phases.push({...legacy.phases[0],id:'tail',name:'Post-review work',parentPhaseIds:['final']});
  const before=JSON.stringify(legacy);
- assert.equal(validateWorkflowGraph(legacy).valid,false);
+ assert.equal(validateWorkflowGraph(legacy).valid,true);
  const prior={...structuredClone(task),workflowSnapshot:legacy,workflowActivePhaseIds:['tail'],workflowCurrentPhaseId:'tail',workflowNodeAssigneeIds:{...task.workflowNodeAssigneeIds,tail:[member.id]},workflowPhaseHistory:[
   {phaseId:'work',phaseName:'Work',action:'completed' as const,actorId:member.id,createdAt:task.createdAt},
   {phaseId:'final',phaseName:'Final Rev.',action:'completed' as const,actorId:oldAD.id,createdAt:task.createdAt},
  ]};
  const advanced=computeWorkflowAdvance(legacy,prior,member.id,'tail',settings,users);
- assert.equal(advanced?.finished,false);assert.match(advanced?.blockedReason||'',/Final Rev/);
+ assert.equal(advanced?.finished,true);assert.equal(advanced?.blockedReason,undefined);
+ const reopened={...prior,workflowPhaseHistory:[...prior.workflowPhaseHistory,{phaseId:'final',phaseName:'Final Rev.',action:'invalidated' as const,actorId:oldAD.id,createdAt:task.createdAt}]};
+ assert.equal(computeWorkflowAdvance(legacy,reopened,member.id,'tail',settings,users)?.finished,false);
  assert.equal(JSON.stringify(legacy),before,'saved graph remains intact');
 });
 check('legitimate new frozen assignment accepted',()=>assert.equal(mergeAuthorizedTasks([], [structuredClone(task)], leader,settings,users).tasks.length,1));

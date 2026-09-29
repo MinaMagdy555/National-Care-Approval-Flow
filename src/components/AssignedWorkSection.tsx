@@ -1446,7 +1446,7 @@ export function AssignedWorkSection({
                 key={`${group.userId}-${task.id}`}
                 onClick={() => handleCardClick(task, canUpload, isUploaded)}
                 className={cn(
-                  'rounded-2xl border bg-white p-4 shadow-sm transition-all cursor-pointer hover:border-indigo-300 hover:shadow-md hover:-translate-y-0.5',
+                  'rounded-2xl border-2 bg-white p-4 shadow-md transition-all cursor-pointer hover:border-indigo-400 hover:shadow-lg hover:-translate-y-0.5',
                   isUploaded ? 'border-emerald-100 bg-emerald-50/30' : 'border-slate-200'
                 )}
               >

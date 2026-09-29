@@ -22,6 +22,7 @@ import { initialUsers, initialTasks, userRoleLabels } from './mockData';
 import { supabase } from './supabaseClient';
 import { clearAppState, filterLocallyResetNotifications, loadAppState, saveAppState, type PersistedAppState } from './localDb';
 import { fetchNeonAppSettings, fetchNeonAppStateMeta, fetchNeonAppStateResponse, saveNeonAppState, NeonAppStateError, setNeonAccessToken, loginNeonWorkspace, fetchNeonSession, logoutNeonWorkspace, USE_NEON_DATA } from './neonDb';
+import { getWorkflowSuccessors } from './workflowGraph';
 import { isTaskArchived, shouldAutoArchiveTask } from './archiveUtils';
 import { sanitizeHandledBy } from './handlerUtils';
 import {
@@ -2089,7 +2090,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const finishWorkflowTask = (task: Task, approvals: Record<string, string[]>, history: WorkflowPhaseHistoryEntry[]): Task => ({
     ...task,
-    status: 'approved_by_art_director',
+    status: task.workflowSnapshot?.phases.some(phase => isMandatoryFinalReview(phase) && getWorkflowSuccessors(task.workflowSnapshot!, phase.id).length)
+      ? 'completed' : 'approved_by_art_director',
     workflowPhaseApprovals: approvals,
     workflowPhaseHistory: history,
     workflowActivePhaseIds: [],
