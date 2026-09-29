@@ -169,6 +169,8 @@ test('skipped and disabled phases are distinct', () => {
 test('legacy progress fills proven predecessors but not unrelated branches or reopened work', () => {
   const legacy = {...base,workflowActivePhaseIds:['P3'],workflowCurrentPhaseId:'P3'};
   assert.deepEqual(getWorkflowRoadmap(legacy,settings,usersList).map(p=>p.state),['Finished','Finished','Current','Pending']);
+  const migrated = {...legacy,workflowPhaseHistory:[{phaseId:'P1',phaseName:'P1',action:'workflow_changed' as const,actorId:'lead',createdAt:new Date().toISOString()}]};
+  assert.deepEqual(getWorkflowRoadmap(migrated,settings,usersList).map(p=>p.state),['Finished','Finished','Current','Pending']);
   const branch = structuredClone(legacy);
   branch.workflowSnapshot!.phases.push(phase('Unrelated',['b']));
   assert.equal(getWorkflowRoadmap(branch,settings,usersList).find(p=>p.id==='Unrelated')?.state,'Pending');

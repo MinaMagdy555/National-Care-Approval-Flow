@@ -112,7 +112,8 @@ export function getWorkflowRoadmap(task: Task, settings: AppSettings, users: Use
     const approvals = (task.workflowPhaseApprovals?.[phase.id] || []).filter(id => owners.includes(id));
 
     let completed = explicitCompleted.has(phase.id);
-    if (!completed && provenExecuted.has(phase.id) && !latest.has(phase.id) && !phase.disabled && approvals.length === 0 && !isActive) {
+    const historyAllowsInference = !latest.has(phase.id) || latest.get(phase.id) === 'workflow_changed';
+    if (!completed && provenExecuted.has(phase.id) && historyAllowsInference && !phase.disabled && approvals.length === 0 && !isActive) {
       completed = true;
     }
 
