@@ -55,9 +55,11 @@ npm run dev
 These are application APIs, not a confirmed ERP integration contract. Create a controlled adapter rather than directly writing into production tables.
 
 ## Account access and handover
-The project README currently contains account setup information. Do not assume publicly committed credentials are secure or appropriate for ERP or production access. Preserve business account requirements for the integration engineer, but issue dedicated, least-privilege testing/integration accounts and distribute live credentials through a private company-approved channel.
 
-Never commit actual database connection credentials, email app passwords, privileged backend tokens, cron secrets, or local production environment files. The repository's .env.example contains illustrative values only.
+The public README no longer includes any workspace login credentials or account emails. The project's Git history may still expose older credentials; consider them compromised and rotate them before production use.
+
+For ERP integration, an approved administrator must provision a dedicated least-privilege development/test account, role mapping and any required private service access through the company's restricted credentials channel. Do not place production passwords or API secrets in this public repository or a pull request.
+
 
 ## Validation and go-live gates
 1. Review task and workflow identity, lifecycle and permissions.
