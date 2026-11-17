@@ -12,12 +12,19 @@ const hashPassword = password =>
     .update(`national-care-tool-login:${password.trim()}`)
     .digest('hex');
 
+// Credentials must be supplied privately at execution time, never committed to Git.
+const requiredSeedSecrets = ["NC_SEED_PASSWORD_SAMAR","NC_SEED_PASSWORD_RAHMA","NC_SEED_PASSWORD_SHAHED"];
+const missingSeedSecrets = requiredSeedSecrets.filter(name => !process.env[name]);
+if (missingSeedSecrets.length) {
+  throw new Error(`Missing required seed environment variables: ${missingSeedSecrets.join(', ')}`);
+}
+
 const members = [
   {
     id: 'manual_samar_ramadan',
     name: 'Samar Ramadan',
     email: 'samarradnann@gmail.com',
-    password: 'Samar.Ramadan',
+    password: process.env.NC_SEED_PASSWORD_SAMAR,,
     role: 'team_member',
     jobTitle: 'Content Creator',
   },
@@ -25,7 +32,7 @@ const members = [
     id: 'manual_rahma_mohamed',
     name: 'Rahma Mohamed',
     email: 'rahmamoohaamed132@gmail.com',
-    password: 'Rahma.Mohamed',
+    password: process.env.NC_SEED_PASSWORD_RAHMA,,
     role: 'team_member',
     jobTitle: 'Content Creator',
   },
@@ -33,7 +40,7 @@ const members = [
     id: 'manual_shahed_hazem',
     name: 'Shahed Hazem',
     email: 'shahdmuhammed51@gmail.com',
-    password: 'Shahed.Hazem',
+    password: process.env.NC_SEED_PASSWORD_SHAHED,,
     role: 'team_member',
     jobTitle: 'Video Editor',
   },
