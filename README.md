@@ -20,24 +20,9 @@ View your app in AI Studio: https://ai.studio/apps/fdc3e636-b24a-47be-8852-c3677
 
 ## Demo Accounts
 
-The app uses fake local accounts. No email confirmation, external provider, or admin approval is required.
+Workspace account emails, passwords, and other sign-in details are deliberately omitted from this **public** repository. The authorized ERP engineer should receive a dedicated, least-privilege integration/test account and the required identity mapping through the company administrator over a private channel.
 
-| Account | Email | Password |
-| --- | --- | --- |
-| Mina M. Bashir | `Minamagdy5555@gmail.com` | `Mina.Bashir` (or `015594`) |
-| Dina El-Alfy | `dina.mohamed.elalfy@gmail.com` | `Dina.Elalfy` |
-| Marwa El-Kady | `marwa.elkady93@gmail.com` | `Marwa.Elkady` |
-| Mariam Ezzat | `mariamezzat1755@gmail.com` | `Mariam.Ezaat` |
-| Noreen Kamal | `noreen.kamel2031@gmail.com` | `Noreen.Kamal` |
-| Yomna F. Amin | `yf.amin2@gmail.com` | `Yomna.F.Amin` |
-| Reem Nabil | `reemnabil2002@gmail.com` | `Reem.Nabil` |
-| Sama Moh. | `samamoh.SM@gmail.com` | `Sama.Moh.SM` |
-| Haneen Haitham | `haneenhaitham757@gmail.com` | `Haneen. Haitham` |
-| Omar Mansoour | `Omarmansoour96@gmail.com` | `Omar.Mansoour` |
-| Ahmed Fawzy | `ahmed.mostafa.fawzy@gmail.com` | `Ahmed.Fawzy` |
-| Ahmed Sobeeh | `ahmadsobeeh011129@gmail.com` | `Ahmed.Sobeeh` |
-
-Fawzy and Omar can also use the invitation email flow to create their own passwords with their Gmail addresses. Once either one creates a password, that person's demo shortcut and demo password stop working in that browser.
+**Security notice:** Previously published credentials can remain accessible in Git history, copies, and caches. Treat them as exposed and rotate or revoke them before production use. Do not commit replacement credentials to this repository.
 
 ### Sending Invitation Emails
 
